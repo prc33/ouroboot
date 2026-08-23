@@ -140,6 +140,22 @@ static void sys_mmap(struct regs *r) {
 	unsigned long prot = r->a2;
 	unsigned long flags = r->a3;
 
+	/* Real Linux returns EINVAL for a zero-length mmap; musl's static
+	 * TLS setup relies on exactly that (a program needing no TLS
+	 * block, like this test binary, computes a genuinely zero-sized
+	 * request and expects it to fail so its fallback path can skip
+	 * the reservation). Returning a fake "success" here instead --
+	 * which the pre-this-fix code did, falling through to the general
+	 * path below where the length-0 mapping loop below correctly maps
+	 * *nothing* but still reports success -- handed musl an address
+	 * it believed was safely backed and wasn't, which page-faulted on
+	 * the first real write. Found by tracing exactly which mmap call
+	 * returned the address that later faulted. */
+	if (length == 0) {
+		r->a0 = (unsigned long)-EINVAL;
+		return;
+	}
+
 	unsigned long len = page_round_up(length);
 
 	if ((flags & MAP_FIXED) && prot == PROT_NONE) {

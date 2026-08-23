@@ -3,8 +3,10 @@
 #include "arch/riscv64_memmap.h"
 #include "mm/pmm.h"
 #include "mm/paging.h"
+#include "mm/elf.h"
 #include "sched/task.h"
 #include "user_test_riscv64_payload.h"
+#include "hello_elf_riscv64_payload.h"
 
 static volatile int g_breakpoint_hit = 0;
 
@@ -114,15 +116,73 @@ static void run_ring3_test(void) {
 	 * the payload's exit syscall is what concludes the whole test run */
 }
 
-/* TODO(next checkpoint): real ELF loader, mirroring kmain.c's
- * run_elf_test -- riscv64's mm/elf.c ELF64 support doesn't exist yet.
- * arch/riscv64_syscall.c's sys_exit already calls this (matching
- * i386's checkpoint-chaining shape), so it needs *a* definition now;
- * replaced with the real thing in the next commit. */
+/* --- P5 checkpoint 2: real ELF loader + real musl binary --------------
+ * user_test/hello_riscv64.elf is a real static musl+TCC riscv64
+ * binary (same role as i386's user_test/hello.elf -- see
+ * docs/riscv-port-findings.md for the musl+TCC pipeline it's built
+ * with). Stack layout matches the Linux riscv64 ABI (verified against
+ * musl's own crt_arch.h/crt1.c: _start_c reads argc at s0[0], argv at
+ * s0[1], where s0 == the incoming sp, captured via TCC's own frame-
+ * pointer prologue convention rather than any assembly):
+ *   [sp+0]  argc
+ *   [sp+8]  argv[0] (pointer)
+ *   [sp+16] argv[1] = NULL
+ *   [sp+24] envp[0] = NULL  (empty environment)
+ *   [sp+32] auxv[0] = {AT_NULL, 0}
+ * placed near the top of a 2-page stack, same proportions as i386's
+ * version, just 8-byte slots instead of 4-byte ones. */
 void run_elf_test(void) {
-	kprintf("P5 checkpoint 2 OK (placeholder -- ELF loader not wired up yet)\n");
-	kprintf("halting.\n");
-	for (;;) __builtin_riscv_wfi();
+	unsigned long entry = elf_load(hello_elf_riscv64_payload, HELLO_ELF_RISCV64_SIZE);
+	if (!entry) {
+		kprintf("FATAL: elf_load failed\n");
+		for (;;) __builtin_riscv_wfi();
+	}
+
+	unsigned long stack_va = 0xB0000000UL;
+	unsigned long stack_pages = 2;
+	for (unsigned long i = 0; i < stack_pages; i++) {
+		unsigned long phys = pmm_alloc_page();
+		paging_map_page(stack_va + i * PAGE_SIZE, phys, PTE_PRESENT | PTE_WRITABLE | PTE_USER);
+	}
+	unsigned long stack_top = stack_va + stack_pages * PAGE_SIZE;
+
+	unsigned char *page = (unsigned char *)stack_top;
+	/* string data, 64 bytes below the very top of the mapped region */
+	char *argv0 = (char *)(page - 64);
+	const char *name = "hello";
+	for (int i = 0; name[i]; i++)
+		argv0[i] = name[i];
+	argv0[5] = 0;
+
+	/* argc/argv/envp/auxv block, 128 bytes below the top -- comfortably
+	 * clear of the string data, leaves ~8000 bytes below for real
+	 * stack use, and lands 16-byte aligned (RISC-V ABI requirement at
+	 * process entry) since 128 is a multiple of 16.
+	 *
+	 * AT_PAGESZ is not optional the way i386's kmain.c's single
+	 * AT_NULL entry might suggest: musl's __libc_start_main does
+	 * `libc.page_size = aux[AT_PAGESZ]` with no fallback if it's
+	 * absent, so omitting it left page_size silently 0, corrupting
+	 * mallocng's internal size math -- malloc() returned NULL, used
+	 * unchecked by the test program, which then wrote through it.
+	 * Found by comparing against a real `qemu-riscv64-static -strace`
+	 * of this exact binary: entirely different (and far more
+	 * plausible) syscall arguments than what actually ran under our
+	 * kernel, pointing straight at the environment we hand it being
+	 * the thing that diverged, not the syscalls' implementations. */
+	unsigned long *sp = (unsigned long *)(page - 128);
+	sp[0] = 1;                       /* argc */
+	sp[1] = (unsigned long)argv0;    /* argv[0] */
+	sp[2] = 0;                       /* argv[1] = NULL */
+	sp[3] = 0;                       /* envp[0] = NULL */
+	sp[4] = 6;                       /* auxv[0].a_type = AT_PAGESZ */
+	sp[5] = PAGE_SIZE;               /* auxv[0].a_val */
+	sp[6] = 0;                       /* auxv[1].a_type = AT_NULL */
+	sp[7] = 0;                       /* auxv[1].a_val */
+
+	kprintf("elf: entering userspace at %p, sp=%p...\n", (void *)entry, (void *)sp);
+	enter_usermode(entry, (unsigned long)sp);
+	/* never reached */
 }
 
 static void conclude_scheduler_test(void) {
