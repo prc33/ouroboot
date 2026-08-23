@@ -59,6 +59,7 @@ LDFLAGS := -B$(TCCDIR) -nostdlib -static -Wl,-Ttext=0x80200000
 OBJS := boot/riscv64_boot.o riscv64_entry.o riscv64_kmain.o \
         drivers/riscv64_serial.o drivers/kprintf.o \
         arch/riscv64_trap_entry.o arch/riscv64_trap.o arch/riscv64_timer.o \
+        arch/riscv64_usermode.o arch/riscv64_syscall.o \
         mm/pmm.o mm/riscv64_paging.o \
         sched/riscv64_task.o sched/riscv64_switch_context.o \
         arch/riscv64_kend.o
@@ -157,6 +158,12 @@ test: kernel.elf
 		--must-contain "TASK A" \
 		--must-contain "TASK B" \
 		--must-contain "scheduler: 6 switches across 2 tasks OK" \
+		--must-contain "syscall: dispatch installed" \
+		--must-contain "ring3: entering userspace" \
+		--must-contain "hello from ring3 via ecall" \
+		--must-contain "process exited with code 0" \
+		--must-contain "ring3 test OK" \
+		--must-contain "P5 checkpoint 1 OK" \
 		--must-not-contain "FATAL" \
 		--must-not-contain "UNHANDLED EXCEPTION" \
 		--must-not-contain "UNHANDLED INTERRUPT" \

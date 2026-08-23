@@ -15,6 +15,8 @@
 #include "riscv64_memmap.h"
 
 #define CSR_STVEC    0x105
+#define CSR_SSTATUS  0x100
+#define SSTATUS_SUM  (1UL << 18)
 #define SCAUSE_INTERRUPT_BIT (1UL << 63)
 
 extern void riscv64_trap_entry(void); /* arch/riscv64_trap_entry.S */
@@ -92,5 +94,21 @@ void syscall_set_handler(void (*handler)(struct regs *)) {
 void trap_init(void) {
 	*(void (**)(struct regs *))RV64_TRAP_DISPATCH_PTR = trap_dispatch;
 	__builtin_riscv_csrw(CSR_STVEC, (unsigned long)riscv64_trap_entry);
+
+	/* sstatus.SUM ("permit Supervisor User Memory access"): without
+	 * it, S-mode is architecturally forbidden from touching any page
+	 * whose PTE has the U bit set -- a real security feature (stops
+	 * the kernel from accidentally trusting a raw user pointer), but
+	 * one this kernel's syscall handlers need disabled, since e.g.
+	 * arch/riscv64_syscall.c's sys_write_impl reads straight out of a
+	 * user-supplied buffer through the very same page table (there's
+	 * only one -- no separate per-process address spaces yet). Found
+	 * by booting the ring3 test: the first syscall (write) page-
+	 * faulted *in the kernel's own sys_write_impl*, not in the U-mode
+	 * payload, reading the U-only-accessible string it was asked to
+	 * print. i386 has no equivalent bit; PTE_USER there simply always
+	 * permits ring0 access too, no separate opt-in. */
+	unsigned long sstatus = __builtin_riscv_csrr(CSR_SSTATUS);
+	__builtin_riscv_csrw(CSR_SSTATUS, sstatus | SSTATUS_SUM);
 	kprintf("trap: stvec installed (direct mode, one vector for exceptions+interrupts+ecall)\n");
 }

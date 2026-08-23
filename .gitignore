@@ -11,3 +11,5 @@ demo/busybox/
 demo/*/busybox_unstripped
 user_test/user_test.elf
 user_test/user_test.bin
+user_test_riscv64.elf
+user_test_riscv64.bin

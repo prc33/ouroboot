@@ -4,6 +4,7 @@
 #include "mm/pmm.h"
 #include "mm/paging.h"
 #include "sched/task.h"
+#include "user_test_riscv64_payload.h"
 
 static volatile int g_breakpoint_hit = 0;
 
@@ -78,6 +79,58 @@ static void timer_tick(void) {
 	g_ticks++;
 }
 
+/* --- P5 checkpoint 1: ring3 + ecall -------------------------------
+ * See kmain.c's run_ring3_test for the full rationale. No tss_set_
+ * kernel_stack equivalent needed here: unlike i386 (which needs the
+ * TSS to tell the CPU where the kernel stack is on a privilege-level
+ * change), arch/riscv64_trap_entry.S already unconditionally switches
+ * to the same dedicated trap stack on *every* trap regardless of
+ * origin -- one less thing this transition needs to set up. */
+static unsigned char kernel_stack[4096] __attribute__((aligned(16)));
+
+static void run_ring3_test(void) {
+	(void)kernel_stack; /* no per-task kernel stack needed -- see comment above; kept for shape parity with kmain.c */
+	syscall_init();
+
+	unsigned int npages = (USER_TEST_RISCV64_SIZE + PAGE_SIZE - 1) / PAGE_SIZE;
+	for (unsigned int i = 0; i < npages; i++) {
+		unsigned long phys = pmm_alloc_page();
+		paging_map_page(USER_TEST_RISCV64_LOAD_ADDR + i * PAGE_SIZE, phys,
+			PTE_PRESENT | PTE_WRITABLE | PTE_USER);
+		unsigned char *dst = (unsigned char *)phys;
+		for (unsigned int j = 0; j < PAGE_SIZE; j++) {
+			unsigned int off = i * PAGE_SIZE + j;
+			dst[j] = off < USER_TEST_RISCV64_SIZE ? user_test_riscv64_payload[off] : 0;
+		}
+	}
+
+	unsigned long stack_phys = pmm_alloc_page();
+	unsigned long user_stack_va = 0x900000UL;
+	paging_map_page(user_stack_va, stack_phys, PTE_PRESENT | PTE_WRITABLE | PTE_USER);
+
+	kprintf("ring3: entering userspace at %p...\n", (void *)USER_TEST_RISCV64_ENTRY);
+	enter_usermode(USER_TEST_RISCV64_ENTRY, user_stack_va + PAGE_SIZE);
+	/* never reached: enter_usermode transitions permanently to U-mode;
+	 * the payload's exit syscall is what concludes the whole test run */
+}
+
+/* TODO(next checkpoint): real ELF loader, mirroring kmain.c's
+ * run_elf_test -- riscv64's mm/elf.c ELF64 support doesn't exist yet.
+ * arch/riscv64_syscall.c's sys_exit already calls this (matching
+ * i386's checkpoint-chaining shape), so it needs *a* definition now;
+ * replaced with the real thing in the next commit. */
+void run_elf_test(void) {
+	kprintf("P5 checkpoint 2 OK (placeholder -- ELF loader not wired up yet)\n");
+	kprintf("halting.\n");
+	for (;;) __builtin_riscv_wfi();
+}
+
+static void conclude_scheduler_test(void) {
+	kprintf("scheduler: %u switches across 2 tasks OK\n", g_switches);
+	kprintf("P4 checkpoint 2 OK\n");
+	run_ring3_test();
+}
+
 static void task_body(char letter) {
 	unsigned int last_tick = g_ticks;
 	unsigned int my_loops = 0;
@@ -88,11 +141,8 @@ static void task_body(char letter) {
 		my_loops++;
 		g_switches++;
 		kprintf("TASK %c: loop %u (switch %u/%u)\n", letter, my_loops, g_switches, TOTAL_SWITCHES);
-		if (g_switches >= TOTAL_SWITCHES) {
-			kprintf("scheduler: %u switches across 2 tasks OK\n", g_switches);
-			kprintf("halting.\n");
-			for (;;) __builtin_riscv_wfi();
-		}
+		if (g_switches >= TOTAL_SWITCHES)
+			conclude_scheduler_test();
 		task_yield();
 	}
 }
