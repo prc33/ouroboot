@@ -1228,12 +1228,12 @@ index 0000000..5e00b03
 +# used to produce the verified binary in docs/busybox-findings.md.
 +#
 +# Expects to be run from this directory, with sibling checkouts at
-+# ../tcc and ../musl (both already built -- ../tcc/tcc and
++# ../tcc and ../musl (both already built -- ../compiler/tcc and
 +# ../musl/lib/libc.a must exist).
 +set -e
 +
 +HERE="$(cd "$(dirname "$0")" && pwd)"
-+TCC="${TCC:-$HERE/../tcc/tcc}"
++TCC="${TCC:-$HERE/../compiler/tcc}"
 +MUSL="${MUSL:-$HERE/../musl}"
 +
 +if [ ! -x "$TCC" ]; then
@@ -1247,7 +1247,7 @@ index 0000000..5e00b03
 +
 +cat > /tmp/busybox-tcc-wrapper.sh << WRAPEOF
 +#!/bin/sh
-+exec "$TCC" -B"$HERE/../tcc" -I"$HERE/../tcc/include" \\
++exec "$TCC" -B"$HERE/../compiler" -I"$HERE/../compiler/include" \\
 +  -I"$MUSL/obj/include" -I"$MUSL/include" -I"$MUSL/arch/i386" -I"$MUSL/arch/generic" \\
 +  -L"$MUSL/lib" \\
 +  -nostdinc \\

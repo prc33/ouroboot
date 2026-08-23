@@ -2,8 +2,8 @@
 # not host gcc -- per the plan's hard constraint that kernel/ and
 # emulator/ must self-host. See ../tcc/.
 
-TCC     := ../tcc/tcc
-TCCDIR  := ../tcc
+TCC     := ../compiler/tcc
+TCCDIR  := ../compiler
 TCCINC  := $(TCCDIR)/include
 
 CFLAGS  := -B$(TCCDIR) -I$(TCCINC) -I. -Wall -nostdinc -fno-stack-protector -ffreestanding
