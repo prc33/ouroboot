@@ -1,0 +1,11 @@
+/* Hand-written config.h for the riscv64-only TCC fork. */
+#define TCC_VERSION "0.9.27-rv64min"
+#define CONFIG_TCCDIR "/usr/local/lib/tcc"
+#define CONFIG_TCC_SYSINCLUDEPATHS "/usr/local/lib/tcc/include"
+#define CONFIG_TCC_LIBPATHS "/usr/local/lib"
+#define CONFIG_TCC_CRTPREFIX "/usr/local/lib"
+#define CONFIG_TCC_ELFINTERP "/lib/ld-linux-riscv64-lp64d.so.1"
+#define CONFIG_SYSROOT ""
+#define CONFIG_LDDIR "lib"
+#define CONFIG_USR_INCLUDE "/usr/include"
+#define CONFIG_TRIPLET "riscv64-linux-musl"

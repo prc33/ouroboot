@@ -1,0 +1,56 @@
+/* Minimal freestanding printf: %d %u %x %p %s %c %%. No libc. */
+#include "kernel.h"
+#include <stdarg.h>
+
+static void print_uint(unsigned int v, unsigned int base, int upper) {
+	char buf[32];
+	const char *digits = upper ? "0123456789ABCDEF" : "0123456789abcdef";
+	int i = 0;
+	if (v == 0) {
+		serial_putc('0');
+		return;
+	}
+	while (v) {
+		buf[i++] = digits[v % base];
+		v /= base;
+	}
+	while (i > 0)
+		serial_putc(buf[--i]);
+}
+
+static void print_int(int v) {
+	if (v < 0) {
+		serial_putc('-');
+		print_uint((unsigned int)(-(v + 1)) + 1, 10, 0);
+	} else {
+		print_uint((unsigned int)v, 10, 0);
+	}
+}
+
+void kprintf(const char *fmt, ...) {
+	va_list ap;
+	va_start(ap, fmt);
+	for (const char *p = fmt; *p; p++) {
+		if (*p != '%') {
+			serial_putc(*p);
+			continue;
+		}
+		p++;
+		switch (*p) {
+		case 'd': print_int(va_arg(ap, int)); break;
+		case 'u': print_uint(va_arg(ap, unsigned int), 10, 0); break;
+		case 'x': print_uint(va_arg(ap, unsigned int), 16, 0); break;
+		case 'X': print_uint(va_arg(ap, unsigned int), 16, 1); break;
+		case 'p':
+			serial_puts("0x");
+			print_uint((unsigned int)(unsigned long)va_arg(ap, void *), 16, 0);
+			break;
+		case 's': serial_puts(va_arg(ap, const char *)); break;
+		case 'c': serial_putc((char)va_arg(ap, int)); break;
+		case '%': serial_putc('%'); break;
+		case '\0': va_end(ap); return;
+		default: serial_putc('%'); serial_putc(*p); break;
+		}
+	}
+	va_end(ap);
+}
