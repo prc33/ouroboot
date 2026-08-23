@@ -90,6 +90,21 @@ MUSLINC  = -I$(MUSL)/obj/include -I$(MUSL)/include -I$(MUSL)/arch/$(TARGET) -I$(
 MUSLLIBC = $(MUSL)/lib/libc.a
 QEMU_USER = qemu-$(TARGET)-static
 
+# Regression coverage for the riscv64-gen.c gfunc_epilog bug (fixed --
+# see docs/riscv-port-findings.md's closure section): it corrupted the
+# return address on every return from a variadic function. The
+# selfcheck test below this one is 'int main(){return 42;}', which
+# never calls one, so it couldn't have caught it.
+define SELFCHECK_VA_SRC
+#include <stdio.h>
+int main(void) {
+	char b[8];
+	snprintf(b, sizeof(b), "%d", 42);
+	return (b[0] == '4' && b[1] == '2' && b[2] == 0) ? 0 : 1;
+}
+endef
+export SELFCHECK_VA_SRC
+
 stage1: tcc libtcc1.a
 	mkdir -p stage1
 	./tcc -B. -I. -I./include $(MUSLINC) -nostdinc $(DEFS) \
@@ -111,6 +126,17 @@ selfcheck: stage1
 		$(MUSL)/lib/crt1.o $(MUSL)/lib/crti.o /tmp/selfcheck.c \
 		$(MUSLLIBC) libtcc1.a $(MUSL)/lib/crtn.o
 	$(QEMU_USER) /tmp/selfcheck; test $$? -eq 42 && echo "OK: stage1 output runs and returns 42"
+	@echo "--- regression: stage1 correctly compiles+runs a variadic call ---"
+	@echo "    (riscv64-gen.c's gfunc_epilog once corrupted the return"
+	@echo "    address on every return from a varargs function -- the"
+	@echo "    plain 'return 42' test above never calls one, so it never"
+	@echo "    caught it. This does.)"
+	echo "$$SELFCHECK_VA_SRC" > /tmp/selfcheck_va.c
+	$(QEMU_USER) ./stage1/tcc -B. -I. -I./include $(MUSLINC) -nostdinc \
+		-static -nostdlib -o /tmp/selfcheck_va \
+		$(MUSL)/lib/crt1.o $(MUSL)/lib/crti.o /tmp/selfcheck_va.c \
+		$(MUSLLIBC) libtcc1.a $(MUSL)/lib/crtn.o
+	$(QEMU_USER) /tmp/selfcheck_va; test $$? -eq 0 && echo "OK: stage1-compiled variadic call ran correctly"
 
 clean:
 	rm -f tcc lib/*.o libtcc1.a
