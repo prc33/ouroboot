@@ -168,6 +168,7 @@
      DEF(TOK_builtin_riscv_sfence_vma, "__builtin_riscv_sfence_vma")
      DEF(TOK_builtin_riscv_wfi, "__builtin_riscv_wfi")
      DEF(TOK_builtin_riscv_sret, "__builtin_riscv_sret")
+     DEF(TOK_builtin_riscv_ebreak, "__builtin_riscv_ebreak")
      DEF(TOK_builtin_riscv_fence_i, "__builtin_riscv_fence_i")
      DEF(TOK_builtin_riscv_read_tp, "__builtin_riscv_read_tp")
      DEF(TOK_builtin_riscv_write_tp, "__builtin_riscv_write_tp")

@@ -240,6 +240,27 @@ ST_FUNC void load(int r, SValue *sv)
             EI(0x03, 3, rr, br, fc); // ld RR, fc(BR)
             br = rr;
             fc = 0;
+        } else if (v == VT_CONST) {
+            /* Absolute-address constant (VT_CONST with no symbol),
+             * being loaded FROM rather than stored TO -- symmetric to
+             * store()'s "Absolute-address constant" handling further
+             * down (t0 is free to clobber here for the same reason).
+             * Upstream just errored out here too ("unimp"). Found via
+             * the kernel port (mmap'd a fixed high physical-style
+             * address, then read through a literal-constant pointer
+             * to it) -- see docs/riscv-port-findings.md. */
+            int64_t addr = sv->c.i;
+            int32_t hi2 = ((int32_t)addr + 0x800) >> 12;
+            int32_t lo2 = (int32_t)addr - (hi2 << 12);
+            o(0x37 | (5 << 7) | ((uint32_t)hi2 << 12));  // lui t0, hi
+            if (lo2)
+              EI(0x13, 0, 5, 5, lo2);                     // addi t0, t0, lo
+            /* lui always sign-extends -- see store()'s identical fix
+             * a few hundred lines down for the full explanation. */
+            EI(0x13, 1, 5, 5, 32); // slli t0, t0, 32
+            EI(0x13, 5, 5, 5, 32); // srli t0, t0, 32
+            br = 5;
+            fc = 0;
         } else {
             tcc_error("unimp: load(non-local lval)");
         }
@@ -273,8 +294,16 @@ ST_FUNC void load(int r, SValue *sv)
                 fc &= 0xff;
                 rb = rr;
                 do32bit = 0;
-            } else if (bt == VT_LLONG) {
-                /* A 32bit unsigned constant for a 64bit type.
+            } else if (bt == VT_LLONG || bt == VT_PTR || bt == VT_FUNC) {
+                /* A 32bit unsigned constant for a 64bit type (VT_PTR/
+                   VT_FUNC included -- pointers are 64-bit here too,
+                   and a constant address with bit 31 set, cast to a
+                   pointer, hits exactly the same hazard: any address
+                   >= 0x80000000, e.g. every physical address in
+                   QEMU riscv64 virt's RAM, previously got sign-
+                   extended to 0xffffffff8..... instead of staying
+                   0x00000000 8..... -- found via the kernel port,
+                   see docs/riscv-port-findings.md).
                    lui always sign extends, so we need to do an explicit zext.*/
                 zext = 1;
             }
@@ -391,6 +420,18 @@ ST_FUNC void store(int r, SValue *sv)
       o(0x37 | (5 << 7) | ((uint32_t)hi << 12));  // lui t0, hi
       if (lo)
         EI(0x13, 0, 5, 5, lo);                     // addi t0, t0, lo
+      /* lui always sign-extends its 32-bit result to 64 bits (based on
+       * bit 31, i.e. hi's own bit 19) -- any address with bit 31 set
+       * (every physical address in QEMU riscv64 virt's RAM, which
+       * starts at 0x80000000) came out as 0xffffffff8....... instead
+       * of 0x000000008......, an out-of-range address that faults.
+       * This mirrors load()'s VT_LLONG/VT_PTR zext fix a few hundred
+       * lines up -- same hazard, different code path (this one is
+       * store()'s, for the destination address rather than a loaded
+       * value), found via the kernel port. See
+       * docs/riscv-port-findings.md. */
+      EI(0x13, 1, 5, 5, 32); // slli t0, t0, 32
+      EI(0x13, 5, 5, 5, 32); // srli t0, t0, 32
       ptrreg = 5;
       fc = 0;
     }

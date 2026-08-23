@@ -5792,6 +5792,12 @@ ST_FUNC void unary(void)
         vpushi(0);
         break;
 
+    case TOK_builtin_riscv_ebreak:
+        next(); skip('('); skip(')');
+        riscv_emit_raw(0x00100073);   /* ebreak */
+        vpushi(0);
+        break;
+
     case TOK_builtin_riscv_read_fp:
         next(); skip('('); skip(')');
         vpushi(0);

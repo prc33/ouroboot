@@ -137,6 +137,26 @@ selfcheck: stage1
 		$(MUSL)/lib/crt1.o $(MUSL)/lib/crti.o /tmp/selfcheck_va.c \
 		$(MUSLLIBC) libtcc1.a $(MUSL)/lib/crtn.o
 	$(QEMU_USER) /tmp/selfcheck_va; test $$? -eq 0 && echo "OK: stage1-compiled variadic call ran correctly"
+	@echo "--- regression: stage1 correctly loads/stores through a"
+	@echo "    high absolute-address constant (bit 31 set) ---"
+	@echo "    (riscv64-gen.c's load()/store() both used bare 'lui',"
+	@echo "    which always sign-extends -- any constant address with"
+	@echo "    bit 31 set (every physical address in QEMU riscv64"
+	@echo "    virt's RAM, which starts at 0x80000000) came out as"
+	@echo "    0xffffffff8....... instead of 0x000000008......., an"
+	@echo "    out-of-range address (load() didn't even have a"
+	@echo "    fallback -- it just errored out). Found via the kernel"
+	@echo "    port, which is the first code in this project to use a"
+	@echo "    constant in that range as a pointer -- ordinary"
+	@echo "    userspace code on a normal 64-bit Linux essentially"
+	@echo "    never does; mmap'd here at a fixed address purely so"
+	@echo "    this test can safely dereference one.)"
+	printf '#include <sys/mman.h>\n#include <stdint.h>\nint main(void){\n\tvoid *p = mmap((void*)0x80305000UL, 4096, PROT_READ|PROT_WRITE, MAP_FIXED|MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);\n\tif (p == MAP_FAILED) return 2;\n\t*(volatile uint32_t*)0x80305000UL = 0x12345678;\n\tuint32_t v = *(volatile uint32_t*)0x80305000UL;\n\treturn v == 0x12345678 ? 0 : 1;\n}\n' > /tmp/selfcheck_hiaddr.c
+	$(QEMU_USER) ./stage1/tcc -B. -I. -I./include $(MUSLINC) -nostdinc \
+		-static -nostdlib -o /tmp/selfcheck_hiaddr \
+		$(MUSL)/lib/crt1.o $(MUSL)/lib/crti.o /tmp/selfcheck_hiaddr.c \
+		$(MUSLLIBC) libtcc1.a $(MUSL)/lib/crtn.o
+	$(QEMU_USER) /tmp/selfcheck_hiaddr; test $$? -eq 0 && echo "OK: stage1-compiled high-address load/store ran correctly"
 
 clean:
 	rm -f tcc lib/*.o libtcc1.a
