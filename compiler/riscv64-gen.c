@@ -508,18 +508,28 @@ ST_FUNC void riscv_gen_write_tp(void)
     vtop--;
 }
 
-/* csrr rd, csr  ->  csrrs rd, csr, x0   (funct3=2, rs1=x0) */
+/* csrr rd, csr  ->  csrrs rd, csr, x0   (funct3=2, rs1=x0)
+ * EIu, not EI: the imm field here is the raw 12-bit CSR *address*
+ * (system-instruction encoding, unsigned, 0-4095), not a sign-extended
+ * I-type immediate -- EI's assertion (imm fits in a *signed* 12-bit
+ * range, -2048..2047) is the wrong check for it and aborts the
+ * compiler outright for any CSR address >= 2048, e.g. the
+ * unprivileged `time` CSR at 0xC01 (3073) -- found via the kernel
+ * port's timer code, the first use of a CSR that high. Every other
+ * CSR this project uses so far (stvec, sepc, sstatus, scause, stval,
+ * satp, sscratch, sie, stimecmp) happens to sit below 0x800, which is
+ * exactly why this went unnoticed until now. */
 ST_FUNC void riscv_gen_csrr(int csr)
 {
     int r = ireg(gv(RC_INT));
-    EI(0x73, 2, r, 0, csr & 0xfff);
+    EIu(0x73, 2, r, 0, csr & 0xfff);
 }
 
-/* csrw csr, rs  ->  csrrw x0, csr, rs   (funct3=1, rd=x0) */
+/* csrw csr, rs  ->  csrrw x0, csr, rs   (funct3=1, rd=x0) -- same fix. */
 ST_FUNC void riscv_gen_csrw(int csr)
 {
     int r = ireg(gv(RC_INT));
-    EI(0x73, 1, 0, r, csr & 0xfff);
+    EIu(0x73, 1, 0, r, csr & 0xfff);
     vtop--;
 }
 

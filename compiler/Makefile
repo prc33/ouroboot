@@ -157,6 +157,19 @@ selfcheck: stage1
 		$(MUSL)/lib/crt1.o $(MUSL)/lib/crti.o /tmp/selfcheck_hiaddr.c \
 		$(MUSLLIBC) libtcc1.a $(MUSL)/lib/crtn.o
 	$(QEMU_USER) /tmp/selfcheck_hiaddr; test $$? -eq 0 && echo "OK: stage1-compiled high-address load/store ran correctly"
+ifeq ($(TARGET),riscv64)
+	@echo "--- regression: __builtin_riscv_csrr/csrw with a CSR address"
+	@echo "    >= 2048 (e.g. the unprivileged 'time' CSR at 0xC01) ---"
+	@echo "    (riscv_gen_csrr/csrw reused EI(), which asserts its"
+	@echo "    immediate fits a *signed* 12-bit range -- wrong check"
+	@echo "    for a CSR address, which is an unsigned 12-bit field."
+	@echo "    Every CSR this project used before this aborted the"
+	@echo "    compiler outright instead of just miscompiling, so it's"
+	@echo "    a build-time check here, not a run-time one: any CSR"
+	@echo "    address at or above 2048 used to crash tcc itself.)"
+	echo 'unsigned long f(void){ return __builtin_riscv_csrr(0xC01); }' > /tmp/selfcheck_csr.c
+	./tcc -c -o /tmp/selfcheck_csr.o /tmp/selfcheck_csr.c && echo "OK: csrr with a >=2048 CSR address compiles"
+endif
 
 clean:
 	rm -f tcc lib/*.o libtcc1.a
