@@ -72,7 +72,10 @@ reasoning). For RISC-V64:
   why (a few files changed against tens of thousands of lines of
   upstream).
 
-- **`emulator/`** — not started. See `emulator/README.md`.
+- **`emulator/`** — plan set, implementation starting: a browser RISC-V
+  emulator (plain JS, jor1k as reference not a fork base), first
+  milestone booting `kernel/kernel.elf` headlessly under Node. See
+  `emulator/README.md` and `docs/emulator-plan.md`.
 
 - **`cpu/`** — not started (FPGA implementation, future work). See
   `cpu/README.md`.
