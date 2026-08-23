@@ -59,6 +59,7 @@ LDFLAGS := -B$(TCCDIR) -nostdlib -static -Wl,-Ttext=0x80200000
 OBJS := boot/riscv64_boot.o riscv64_entry.o riscv64_kmain.o \
         drivers/riscv64_serial.o drivers/kprintf.o \
         arch/riscv64_trap_entry.o arch/riscv64_trap.o \
+        mm/pmm.o mm/riscv64_paging.o \
         arch/riscv64_kend.o
 else
 $(error unknown ARCH '$(ARCH)' -- expected i386 or riscv64)
@@ -148,9 +149,13 @@ test: kernel.elf
 		--must-contain "boot: entered kmain in S-mode" \
 		--must-contain "trap: stvec installed" \
 		--must-contain "breakpoint: ebreak handled and resumed OK" \
+		--must-contain "pmm:" \
+		--must-contain "paging: Sv39 identity-mapped" \
+		--must-contain "COW test: parent=1 child=2 OK" \
 		--must-not-contain "FATAL" \
 		--must-not-contain "UNHANDLED EXCEPTION" \
-		--must-not-contain "UNHANDLED INTERRUPT"
+		--must-not-contain "UNHANDLED INTERRUPT" \
+		--must-not-contain "PAGE FAULT"
 endif
 
 clean:

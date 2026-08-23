@@ -18,6 +18,15 @@
  */
 #define KERNEL_LINK_BASE       0x80200000UL
 
+/* QEMU's riscv64 virt machine RAM base, and the top of RAM this
+ * kernel is tested with -- kernel/Makefile's test target passes
+ * `-m 128M` to QEMU, so [RV64_RAM_BASE, RV64_MEM_TOP) is exactly what
+ * we're told is available; hardcoded rather than parsed from the
+ * devicetree, same "we fully control the QEMU invocation" reasoning
+ * as above. */
+#define RV64_RAM_BASE          0x80000000UL
+#define RV64_MEM_TOP           0x88000000UL /* RV64_RAM_BASE + 128MB */
+
 /* A generous 1MB of headroom between the kernel image (link base) and
  * this block is more than this ~2000-line kernel will ever need (the
  * i386 kernel.elf, doing equivalent work, is a few hundred KB at

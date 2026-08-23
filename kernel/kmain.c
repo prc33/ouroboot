@@ -246,7 +246,7 @@ void kmain(unsigned int magic, unsigned int mb_info_addr) {
 		goto halt;
 	}
 
-	pmm_init(mem_upper_kb);
+	pmm_init(0x100000u + mem_upper_kb * 1024u, 0); /* phys_base=0 -- i386 RAM starts at physical 0 */
 	paging_init(mem_upper_kb);
 
 	run_cow_test();
