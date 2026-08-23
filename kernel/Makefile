@@ -58,8 +58,9 @@ LDFLAGS := -B$(TCCDIR) -nostdlib -static -Wl,-Ttext=0x80200000
 # arch/riscv64_kend.o must be last, same reason as i386's arch/kend.o.
 OBJS := boot/riscv64_boot.o riscv64_entry.o riscv64_kmain.o \
         drivers/riscv64_serial.o drivers/kprintf.o \
-        arch/riscv64_trap_entry.o arch/riscv64_trap.o \
+        arch/riscv64_trap_entry.o arch/riscv64_trap.o arch/riscv64_timer.o \
         mm/pmm.o mm/riscv64_paging.o \
+        sched/riscv64_task.o sched/riscv64_switch_context.o \
         arch/riscv64_kend.o
 else
 $(error unknown ARCH '$(ARCH)' -- expected i386 or riscv64)
@@ -152,6 +153,10 @@ test: kernel.elf
 		--must-contain "pmm:" \
 		--must-contain "paging: Sv39 identity-mapped" \
 		--must-contain "COW test: parent=1 child=2 OK" \
+		--must-contain "timer: Sstc armed" \
+		--must-contain "TASK A" \
+		--must-contain "TASK B" \
+		--must-contain "scheduler: 6 switches across 2 tasks OK" \
 		--must-not-contain "FATAL" \
 		--must-not-contain "UNHANDLED EXCEPTION" \
 		--must-not-contain "UNHANDLED INTERRUPT" \

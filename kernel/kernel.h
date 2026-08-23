@@ -30,6 +30,7 @@ void pit_init(unsigned int hz);
 void kmain(unsigned long hartid, unsigned long dtb);
 void trap_init(void);
 void timer_init(unsigned int hz);
+void timer_set_tick_handler(void (*handler)(void)); /* arch/riscv64_timer.c */
 void syscall_init(void);
 void enter_usermode(unsigned long entry, unsigned long user_sp);
 void run_elf_test(void); /* riscv64_kmain.c -- see arch/riscv64_syscall.c's sys_exit */

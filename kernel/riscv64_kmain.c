@@ -3,6 +3,7 @@
 #include "arch/riscv64_memmap.h"
 #include "mm/pmm.h"
 #include "mm/paging.h"
+#include "sched/task.h"
 
 static volatile int g_breakpoint_hit = 0;
 
@@ -51,6 +52,54 @@ static void run_cow_test(void) {
 	kprintf("COW test: parent=%d child=%d OK\n", parent_val, child_val);
 }
 
+/* --- two-task scheduler test -- see kmain.c's equivalent for the
+ * full rationale (cooperative switches at a safe point, not forced
+ * mid-instruction from inside the timer IRQ itself, since kprintf/
+ * serial_putc isn't reentrant-safe). The cadence is still genuinely
+ * timer-driven (g_ticks comes from the Sstc tick handler).
+ *
+ * Unlike i386, task_a/task_b need no explicit "re-enable interrupts"
+ * step on first launch: sstatus.SIE is a single global CPU-wide flag
+ * here, enabled once by timer_init() below and never saved/restored
+ * per task (sched/riscv64_switch_context.S is plain register-only,
+ * sstatus-agnostic) -- i386 needs it because EFLAGS.IF is restored
+ * implicitly by `iret` on every *normal* resume, which a task's very
+ * first launch (a plain switch_context `ret`, not an iret) skips; on
+ * riscv64 there's no per-task interrupt-enable state to skip
+ * restoring in the first place. */
+#define TICKS_PER_SWITCH 10
+#define TOTAL_SWITCHES 6
+
+static struct task task_a_ctx, task_b_ctx;
+static volatile unsigned int g_ticks = 0;
+static volatile unsigned int g_switches = 0;
+
+static void timer_tick(void) {
+	g_ticks++;
+}
+
+static void task_body(char letter) {
+	unsigned int last_tick = g_ticks;
+	unsigned int my_loops = 0;
+	for (;;) {
+		while (g_ticks - last_tick < TICKS_PER_SWITCH)
+			__builtin_riscv_wfi();
+		last_tick = g_ticks;
+		my_loops++;
+		g_switches++;
+		kprintf("TASK %c: loop %u (switch %u/%u)\n", letter, my_loops, g_switches, TOTAL_SWITCHES);
+		if (g_switches >= TOTAL_SWITCHES) {
+			kprintf("scheduler: %u switches across 2 tasks OK\n", g_switches);
+			kprintf("halting.\n");
+			for (;;) __builtin_riscv_wfi();
+		}
+		task_yield();
+	}
+}
+
+static void task_a(void) { task_body('A'); }
+static void task_b(void) { task_body('B'); }
+
 void kmain(unsigned long hartid, unsigned long dtb) {
 	(void)hartid;
 	(void)dtb;
@@ -75,6 +124,18 @@ void kmain(unsigned long hartid, unsigned long dtb) {
 	paging_init(RV64_MEM_TOP);
 
 	run_cow_test();
+
+	timer_set_tick_handler(timer_tick);
+	timer_init(100);
+
+	task_init(&task_a_ctx, 0, task_a);
+	task_init(&task_b_ctx, 1, task_b);
+	task_register(0, &task_a_ctx);
+	task_register(1, &task_b_ctx);
+
+	kprintf("scheduler: starting two tasks...\n");
+	task_start_scheduler(&task_a_ctx);
+	/* never reached: task_start_scheduler does not return */
 
 halt:
 	kprintf("halting.\n");
