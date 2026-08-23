@@ -10,15 +10,14 @@
 #   make TARGET=i386
 #   make TARGET=riscv64      # default
 #
-# `make selfcheck` is verified working end-to-end for TARGET=i386.
-# For TARGET=riscv64 it currently HANGS at the first stage1 run --
-# TCC self-hosted as a riscv64 binary, actually executed, is a known
-# open issue (see docs/riscv-port-findings.md's final section). This
-# is distinct from and does not affect `make` (TARGET=riscv64) itself:
-# using this tcc as a HOST tool to compile riscv64 target code is
-# fully proven -- it's what built and ran the entire musl and busybox
-# test suites documented in docs/riscv-port-findings.md. Only running
-# a *self-compiled* riscv64 tcc binary is unverified.
+# `make selfcheck` is verified working end-to-end for BOTH targets --
+# stage1 (a self-compiled target-arch tcc binary, run under qemu-user)
+# compiles and correctly runs a test program for i386 and for riscv64.
+# The riscv64 stage1 run used to hang indefinitely; that was a real
+# codegen bug (gfunc_epilog mis-deriving sp from s0 for variadic
+# functions -- corrupted the saved return address on every return from
+# every varargs call), not a self-hosting-specific gap. Fixed; see
+# docs/riscv-port-findings.md's closure section for the story.
 #
 # riscv64 has NO integrated assembler for real instructions (see
 # docs/riscv-port-findings.md for why, and why that turned out fine) --
@@ -86,7 +85,7 @@ endif
 #     be run under an arch-appropriate environment (qemu-user here;
 #     our own kernel later for i386; riscv64 kernel port not yet
 #     started), not executed directly on this x86_64 host. ---
-MUSL     ?= ../demo/musl-$(TARGET)
+MUSL     ?= ../musl-$(TARGET)
 MUSLINC  = -I$(MUSL)/obj/include -I$(MUSL)/include -I$(MUSL)/arch/$(TARGET) -I$(MUSL)/arch/generic
 MUSLLIBC = $(MUSL)/lib/libc.a
 QEMU_USER = qemu-$(TARGET)-static

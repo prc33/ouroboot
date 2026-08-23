@@ -986,7 +986,7 @@ ST_FUNC void gfunc_epilog(void)
      * locals is not supported -- narrow, explicit, and safe beats
      * broad and unverified here. */
     if (v < (1 << 11))
-        EI(0x13, 0, 2, 8, -v);     // addi sp, s0, -v
+        EI(0x13, 0, 2, 8, -(v - num_va_regs * 8));     // addi sp, s0, -(v - num_va_regs*8)
 
     if (v >= (1 << 11)) {
         d = 16;

@@ -185,6 +185,12 @@ surprising and doesn't undermine what's already verified — it's
 scoped narrowly to "TCC running as a self-hosted riscv64 binary",
 nothing else.
 
+**Update: root-caused and fixed — see "Closure" below.** It turned out
+to be neither guess above: a frame-pointer/stack-offset mismatch in
+`gfunc_epilog` affecting any variadic function, triggerable with a
+two-line host-tool repro (no self-hosting required to hit it, just
+never exercised by the test programs used above).
+
 ## busybox: also done, one more real gap found
 
 Same targeted config as i386 (ash + core utilities), same `__GNUC__`
@@ -256,12 +262,51 @@ pipe chains, `sed`, `grep`, `find`, `expr`, `sort`) — all correct under
 `qemu-riscv64-static`.
 
 
+## Closure: the stage1-hangs issue, root-caused and fixed
+
+Isolated with a two-line repro (`snprintf(msg, sizeof(msg), "sum=%d\n",
+285)`, no malloc/setjmp needed at all — those were red herrings from
+the original combined smoke test) and `qemu-riscv64-static`'s gdbstub.
+`stage1/tcc -v` wasn't looping — `pc` was garbage (`0x800000064`) the
+instant `snprintf` tried to `ret`, meaning its own saved `ra` had been
+read from the wrong stack slot.
+
+Root cause, `gfunc_epilog()` in `riscv64-gen.c`: for a variadic
+function, the prologue positions the frame pointer `s0` at `sp +
+(frame_size - num_va_regs*8)` — offset down from the top of the frame
+by the size of the spilled `a0`-`a7` vararg register-save area, which
+lives *above* `s0` (positive offsets) while ordinary locals live below
+it (negative offsets). The epilogue's `addi sp, s0, -v` recomputed `sp`
+using the *full* frame size `v`, not accounting for that same
+`num_va_regs*8` offset — so for any function with at least one spilled
+vararg register, `sp` came out `num_va_regs*8` bytes too low after this
+instruction, and every subsequent `ld ra,...(sp)` / `ld s0,...(sp)`
+read the wrong slot. This corrupts the return address on return from
+*every* variadic function that doesn't exhaust all 8 integer argument
+registers with named parameters — not a self-hosting-specific bug, and
+not specific to `printf`-family functions, just first (and only) hit
+there because the host-tool testing above never happened to build a
+target-side variadic function and then run the result.
+
+Fix: derive the same offset the prologue used, `-(v - num_va_regs*8)`,
+instead of `-v`.
+
+Verified at every level this session had previously stopped short of:
+the original two-line repro, the full malloc/snprintf/setjmp smoke
+test, a rebuilt musl passing the same smoke test, riscv64 busybox
+rebuilding and running (`ash`, pipes, `expr`) — and, the actual
+closure bar, `make TARGET=riscv64 selfcheck`: stage1 (TCC compiled by
+itself into a riscv64 binary) runs under `qemu-riscv64-static`,
+self-identifies, and compiles+runs a test program correctly. i386
+reconfirmed unaffected (separate file, `i386-gen.c`, never touched).
+
 ## Still open
 
 Kernel port not yet started (no Multiboot equivalent on RISC-V — needs
 its own boot story, likely OpenSBI/SBI-based; CLINT/PLIC instead of
 PIC/PIT; no GDT/segmentation at all, a different privilege model
 entirely). Genuinely comparable in scope to the whole original i386
-P3-P5 kernel effort, not a small follow-on.
-
-TCC self-hosting for riscv64 (see above) — the stage1-hangs issue.
+P3-P5 kernel effort, not a small follow-on. This is now the *only*
+remaining gap between riscv64 and the full i386-style closure
+(compiler self-hosts, and a self-hosted binary actually runs under our
+own kernel rather than just under `qemu-user`).

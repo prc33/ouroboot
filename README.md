@@ -22,12 +22,14 @@ reasoning). For RISC-V64:
   target code as a **host tool** — fully proven, this is what built
   and ran the entire musl and busybox test suites below.
 - musl and busybox both build and run correctly under
-  `qemu-riscv64-static` — see `docs/riscv-port-findings.md` for four
+  `qemu-riscv64-static` — see `docs/riscv-port-findings.md` for the
   real bugs found and fixed along the way.
 - **TCC self-hosted for riscv64 (compiled by itself, then actually
-  run) is NOT yet working** — it hangs. This is a distinct, narrower
-  gap from the host-tool capability above; see the last section of
-  `docs/riscv-port-findings.md`.
+  run) now works** — `make TARGET=riscv64 selfcheck` passes
+  end-to-end, the same bar as i386. This closes the riscv64 closure
+  milestone; see `docs/riscv-port-findings.md`'s closure section for
+  the bug that was blocking it (a codegen bug in variadic-function
+  epilogues, unrelated to self-hosting specifically).
 - **`kernel/` is still the original i386 kernel.** A RISC-V64 kernel
   port has not been started — no Multiboot equivalent exists for
   RISC-V, the boot/privilege/interrupt model is entirely different
