@@ -36,6 +36,12 @@ DEFS    = -DTCC_TARGET_$(shell echo $(TARGET) | tr a-z A-Z) -DCONFIG_TCC_ASM \
 
 .PHONY: all clean selfcheck stage1
 
+# NOTE: both targets build to the same filename (./tcc) -- run
+# `make clean` before switching TARGET, or make will think the
+# stale binary from the other target is already up to date and skip
+# rebuilding it entirely (confirmed the hard way while verifying this
+# repo). A real gotcha, not a hypothetical one.
+
 all: tcc libtcc1.a
 
 # ONE_SOURCE mode (tcc.h defaults it to 1): tcc.c textually includes
