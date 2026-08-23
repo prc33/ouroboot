@@ -67,7 +67,7 @@ else
 $(error unknown ARCH '$(ARCH)' -- expected i386 or riscv64)
 endif
 
-.PHONY: all test clean
+.PHONY: all test test-js clean
 
 all: kernel.elf
 
@@ -142,36 +142,55 @@ test: kernel.elf
 		--must-not-contain "UNHANDLED EXCEPTION" \
 		--must-not-contain "PAGE FAULT"
 else
+# Shared between `test` (QEMU) and `test-js` (our own emulator/js/ --
+# see docs/emulator-plan.md's P2) so the two never silently drift
+# apart -- both are asserting the exact same checkpoints, just under
+# two different implementations of the same ISA.
+RISCV64_TEST_ASSERTIONS := \
+	--must-contain "boot: entered kmain in S-mode" \
+	--must-contain "trap: stvec installed" \
+	--must-contain "breakpoint: ebreak handled and resumed OK" \
+	--must-contain "pmm:" \
+	--must-contain "paging: Sv39 identity-mapped" \
+	--must-contain "COW test: parent=1 child=2 OK" \
+	--must-contain "timer: Sstc armed" \
+	--must-contain "TASK A" \
+	--must-contain "TASK B" \
+	--must-contain "scheduler: 6 switches across 2 tasks OK" \
+	--must-contain "syscall: dispatch installed" \
+	--must-contain "ring3: entering userspace" \
+	--must-contain "hello from ring3 via ecall" \
+	--must-contain "process exited with code 0" \
+	--must-contain "ring3 test OK" \
+	--must-contain "P5 checkpoint 1 OK" \
+	--must-contain "elf: loaded, entry=" \
+	--must-contain "elf: entering userspace" \
+	--must-contain "hello from musl+tcc, sum=285" \
+	--must-contain "P5 checkpoint 2 OK" \
+	--must-not-contain "FATAL" \
+	--must-not-contain "UNHANDLED EXCEPTION" \
+	--must-not-contain "UNHANDLED INTERRUPT" \
+	--must-not-contain "PAGE FAULT"
+
 test: kernel.elf
 	python3 test/boot_test.py kernel.elf \
 		--qemu-binary qemu-system-riscv64 \
 		--qemu-arg=-M --qemu-arg=virt \
 		--qemu-arg=-bios --qemu-arg=default \
 		--qemu-arg=-cpu --qemu-arg=rv64,sstc=true \
-		--must-contain "boot: entered kmain in S-mode" \
-		--must-contain "trap: stvec installed" \
-		--must-contain "breakpoint: ebreak handled and resumed OK" \
-		--must-contain "pmm:" \
-		--must-contain "paging: Sv39 identity-mapped" \
-		--must-contain "COW test: parent=1 child=2 OK" \
-		--must-contain "timer: Sstc armed" \
-		--must-contain "TASK A" \
-		--must-contain "TASK B" \
-		--must-contain "scheduler: 6 switches across 2 tasks OK" \
-		--must-contain "syscall: dispatch installed" \
-		--must-contain "ring3: entering userspace" \
-		--must-contain "hello from ring3 via ecall" \
-		--must-contain "process exited with code 0" \
-		--must-contain "ring3 test OK" \
-		--must-contain "P5 checkpoint 1 OK" \
-		--must-contain "elf: loaded, entry=" \
-		--must-contain "elf: entering userspace" \
-		--must-contain "hello from musl+tcc, sum=285" \
-		--must-contain "P5 checkpoint 2 OK" \
-		--must-not-contain "FATAL" \
-		--must-not-contain "UNHANDLED EXCEPTION" \
-		--must-not-contain "UNHANDLED INTERRUPT" \
-		--must-not-contain "PAGE FAULT"
+		$(RISCV64_TEST_ASSERTIONS)
+
+# Our own from-scratch emulator (emulator/js/) instead of QEMU -- see
+# docs/emulator-plan.md. --time-advance speeds up the virtual Sstc
+# clock relative to real instructions retired, so the scheduler test's
+# wfi-spin-wait doesn't need tens of millions of idle steps to see 10
+# ticks; --max-instructions is generous headroom for a first-pass
+# unoptimized interpreter (the full suite runs in ~10-20s as of P2).
+test-js: kernel.elf
+	node ../emulator/js/boot.js kernel.elf \
+		--max-instructions 200000000 \
+		--time-advance 100 \
+		$(RISCV64_TEST_ASSERTIONS)
 endif
 
 clean:

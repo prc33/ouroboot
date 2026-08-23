@@ -158,7 +158,17 @@ guess in advance.
 
 ## Verified so far
 
-Nothing yet -- this doc is the plan; `emulator/README.md` points here.
-Implementation work (P1) starts immediately after this plan is
-committed; findings go in a new `docs/emulator-p1-findings.md` etc.,
-same convention as every other phase in this repo.
+**P1 and P2 both done**, same session this plan was written in -- see
+`docs/emulator-p1-findings.md`. `make ARCH=riscv64 test-js`
+(`emulator/js/`) passes the exact same checkpoint assertions
+`make ARCH=riscv64 test` (QEMU) does, against the same `kernel.elf`
+(one shared assertion list in `kernel/Makefile`, so the two can't
+silently drift apart): boot, trap/`ebreak`, `pmm`/Sv39 paging + COW,
+Sstc timer + scheduler, `ecall` syscalls + U-mode, and the real ELF
+loader running a real musl+TCC binary -- correctly executed under an
+emulated MMU, with real `malloc`/`printf` output. One real bug found
+(a BigInt/Number equality mismatch at the MMIO device boundary,
+looked exactly like a hang), documented in the findings doc.
+
+P3 (browser/`xterm.js`) and P4 (F/D support for real userspace
+binaries beyond the kernel) are next; not started.

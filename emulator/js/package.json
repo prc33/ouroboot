@@ -1,0 +1,12 @@
+{
+  "name": "riscv64-emulator",
+  "version": "0.1.0",
+  "description": "From-scratch RV64 emulator for kernel/'s riscv64 port -- see ../../docs/emulator-plan.md",
+  "private": true,
+  "main": "boot.js",
+  "bin": { "boot": "./boot.js" },
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "test": "node boot.js ../../kernel/kernel.elf --max-instructions 200000000 --time-advance 100 --must-contain \"P5 checkpoint 2 OK\" --must-not-contain FATAL"
+  }
+}
