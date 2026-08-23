@@ -300,13 +300,74 @@ itself into a riscv64 binary) runs under `qemu-riscv64-static`,
 self-identifies, and compiles+runs a test program correctly. i386
 reconfirmed unaffected (separate file, `i386-gen.c`, never touched).
 
-## Still open
+## Kernel port: done, to the same bar as i386's
 
-Kernel port not yet started (no Multiboot equivalent on RISC-V — needs
-its own boot story, likely OpenSBI/SBI-based; CLINT/PLIC instead of
-PIC/PIT; no GDT/segmentation at all, a different privilege model
-entirely). Genuinely comparable in scope to the whole original i386
-P3-P5 kernel effort, not a small follow-on. This is now the *only*
-remaining gap between riscv64 and the full i386-style closure
-(compiler self-hosts, and a self-hosted binary actually runs under our
-own kernel rather than just under `qemu-user`).
+What this section originally said: "Kernel port not yet started... no
+Multiboot equivalent on RISC-V... genuinely comparable in scope to the
+whole original i386 P3-P5 kernel effort, not a small follow-on." That
+scope estimate held — it took five checkpoints, mirroring i386's own
+P3 (boot/traps) through P5 (real ELF loader + real musl binary in
+userspace) structure exactly, `make ARCH=riscv64 test` alongside the
+untouched `make test` (i386). Every i386 file is byte-for-byte
+unchanged; see `kernel/Makefile`'s `ARCH ?=` switch and the `riscv64_`
+prefix convention used throughout `kernel/` for how the two coexist.
+
+**One constraint shaped almost every design decision here, more than
+anything else in this doc**: riscv64 TCC's assembler has *no
+relocation support at all* for hand-written `.S` files (confirmed
+against `tccasm.c` — `.quad`/`.long` accept only numeric constants,
+never symbols; only real per-C-function codegen, i.e. compiling actual
+`.c` source, handles symbol references correctly). Every raw-machine-
+code file (`boot/riscv64_boot.S`, `arch/riscv64_trap_entry.S`) had to
+be built from hardcoded numeric addresses only — never a linker
+symbol — with the two places that genuinely need to call into compiled
+C (the boot entry calling into the first real C function; the trap
+vector calling `trap_dispatch`) solved two different ways: boot.S
+pads itself to exactly one page and jumps to a hardcoded
+`KERNEL_LINK_BASE + 0x1000`, relying on link order (same trick
+`arch/kend.S` already used); the trap vector reads a function pointer
+from a fixed address that C code writes there *at runtime*, before any
+trap can occur. `sched/riscv64_switch_context.S` and
+`arch/riscv64_usermode.S` needed none of this — pure register/CSR
+manipulation, no symbols involved at all, so they're ordinary
+instruction-by-instruction raw encoding.
+
+**Genuinely simpler than i386 in several places**, not just
+different — worth naming since it cuts against the "comparable scope"
+estimate holding for the *whole* effort: one unified trap vector
+instead of a 256-entry IDT (dispatch is pure software, keyed on
+`scause`); no GDT/segmentation/TSS at all; intermediate Sv39 page-
+table entries only need their V bit checked (no i386-style PDE-must-
+also-carry-the-USER-bit AND-ing); no per-task interrupt-enable state
+to restore on a task's first launch (`sstatus.SIE` is a single global
+flag here, never saved/restored by `switch_context`, unlike i386's
+EFLAGS.IF via `iret`); no `set_thread_area`-equivalent syscall at all
+(TLS is just the `tp` register, set directly by musl's own `_start`).
+
+**Real bugs found bringing each stage up** — every one confirmed by
+booting and tracing to the exact instruction, never guessed, matching
+this whole port's methodology: `lui`'s sign-extension corrupting
+addresses with bit 31 set (both in hand-written `boot.S` *and*,
+separately, in TCC's own `load()`/`store()` codegen — see the compiler
+commits this surfaced); forgetting to identity-map the UART's MMIO
+address once paging turned on (i386's port-I/O serial console is a
+separate address space paging can't touch at all; riscv64's is a real
+memory access); `sstatus.SUM` gating whether S-mode syscall handlers
+can even read a user-supplied buffer pointer, with no i386 equivalent;
+and, closing the loader out, `sys_mmap` accepting a zero-length
+request as fake success instead of the `EINVAL` a real kernel returns,
+and musl's `libc.page_size = aux[AT_PAGESZ]` having no fallback at all
+when that auxv entry is missing — both found by comparing against a
+real `qemu-riscv64-static -strace` of the *exact* binary under test,
+which is what revealed the syscall sequence itself had diverged from
+real Linux, not any one syscall's implementation.
+
+**What "done" means precisely, and what it doesn't**: this matches
+i386's kernel at its current bar — a real static musl+TCC binary,
+loaded by a real ELF loader, running correctly in userspace via real
+syscalls (i386: `docs/kernel-p5-checkpoint2-findings.md`; riscv64: the
+`kernel: riscv64 port` commits). Neither target's kernel has reached
+the *original plan's* P9 closure (TCC recompiling itself while running
+*inside the kernel*, not just under `qemu-user`) — that needs process
+spawning, a filesystem, and more than this scope has built for either
+architecture yet. Not a riscv64-specific gap.

@@ -30,12 +30,16 @@ reasoning). For RISC-V64:
   milestone; see `docs/riscv-port-findings.md`'s closure section for
   the bug that was blocking it (a codegen bug in variadic-function
   epilogues, unrelated to self-hosting specifically).
-- **`kernel/` is still the original i386 kernel.** A RISC-V64 kernel
-  port has not been started — no Multiboot equivalent exists for
-  RISC-V, the boot/privilege/interrupt model is entirely different
-  (OpenSBI/SBI, CLINT/PLIC, no segmentation at all), and this is
-  genuinely comparable in scope to the whole original i386 kernel
-  effort, not a small follow-on.
+- **`kernel/` now has a full RISC-V64 port, alongside the untouched
+  i386 kernel** (`make ARCH=riscv64 test`, mirroring `make TARGET=`'s
+  shape) — boot under OpenSBI, trap/exception handling, Sv39 paging
+  with copy-on-write, an Sstc-timer-driven scheduler, S-mode→U-mode
+  transitions with real `ecall` syscalls, and a real ELF loader
+  running an actual static musl+TCC riscv64 binary in userspace, same
+  closure-adjacent bar as i386's own P5 checkpoint 2. Every i386 file
+  is untouched; see `docs/riscv-port-findings.md`'s kernel-port
+  section for the design (raw machine code where TCC's assembler has
+  no relocation support at all, real bugs found booting each stage).
 
 ## Layout
 
@@ -47,12 +51,17 @@ reasoning). For RISC-V64:
   intrinsics; see `docs/riscv-port-findings.md` for why that turned
   out to be sufficient (and why it wasn't as simple as first assumed).
 
-- **`kernel/`** — the i386 kernel, from scratch: Multiboot boot,
-  serial console, GDT/IDT/PIC/PIT, physical memory allocator, paging
-  with copy-on-write, a two-task cooperative scheduler, ring0→ring3
-  transition, a real ELF loader. `make test` boots it under QEMU and
-  asserts on the serial transcript — see `docs/kernel-p3-findings.md`
-  onward for the testing philosophy and every bug found along the way.
+- **`kernel/`** — from scratch, both targets: i386 (Multiboot boot,
+  serial console, GDT/IDT/PIC/PIT) and riscv64 (OpenSBI boot, MMIO
+  serial console, a single unified trap vector instead of an IDT, Sstc
+  timer instead of PIC/PIT). Both get: physical memory allocator,
+  paging with copy-on-write (2-level i386 / Sv39 riscv64), a two-task
+  cooperative scheduler, ring0→ring3 (i386) / S-mode→U-mode (riscv64)
+  transition, a real ELF loader. `make test` (i386) / `make
+  ARCH=riscv64 test` boots each under QEMU and asserts on the serial
+  transcript — see `docs/kernel-p3-findings.md` onward for i386's
+  testing philosophy and every bug found along the way, and
+  `docs/riscv-port-findings.md`'s kernel-port section for riscv64's.
 
 - **`demo/`** — proof that the compiler produces correct, runnable
   binaries against real-world software, for *both* targets. Each
@@ -79,5 +88,5 @@ reasoning). For RISC-V64:
 cd compiler && make TARGET=i386      # or TARGET=riscv64
 cd ../demo && ./build-musl-i386.sh   # or -riscv64
              ./build-busybox-i386.sh # or -riscv64
-cd ../kernel && make test            # i386 only, for now
+cd ../kernel && make test            # or make ARCH=riscv64 test
 ```
