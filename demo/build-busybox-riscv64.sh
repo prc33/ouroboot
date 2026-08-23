@@ -33,6 +33,11 @@ echo "=== applying patches/busybox-riscv64-tcc-compat.patch ==="
 git apply "$HERE/patches/busybox-riscv64-tcc-compat.patch"
 
 TCCDIR="$(dirname "$TCC")"
+# Consumed by patches/busybox-riscv64-tcc-compat.patch's scripts/trylink
+# hunk, which needs musl's/libtcc1.a's startfiles but has no other way
+# to learn where they live -- see that patch for why.
+export MUSL_LIBDIR="$MUSL/lib"
+export TCC_LIBDIR="$TCCDIR"
 cat > /tmp/bb-wrapper-riscv64.sh << WRAPEOF
 #!/bin/sh
 exec "$TCC" -B"$TCCDIR" -I"$TCCDIR/include" \\

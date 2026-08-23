@@ -2,7 +2,7 @@
 # Clones the real upstream musl (not a vendored copy) at the exact
 # version this project tested against, tries building it under our
 # TCC completely unpatched first -- which fails, demonstrating a real
-# TCC gap -- then applies patches/musl-tcc-compat.patch and rebuilds
+# TCC gap -- then applies patches/musl-i386-tcc-compat.patch and rebuilds
 # successfully. See docs/tcc-spike-findings.md for the full narrative
 # behind each fix; this script is the reproducible, minimal proof.
 set -e
@@ -45,7 +45,7 @@ echo ""
 echo "=== attempt 1: unpatched upstream musl, straight from git ==="
 echo "    (this is expected to fail -- see below for what breaks)"
 if configure_and_try > /tmp/musl-unpatched-build.log 2>&1; then
-	echo "    unexpectedly succeeded?! (upstream musl may have changed -- check patches/musl-tcc-compat.patch is still needed)"
+	echo "    unexpectedly succeeded?! (upstream musl may have changed -- check patches/musl-i386-tcc-compat.patch is still needed)"
 else
 	echo "    FAILED, as expected. First real error:"
 	grep -m1 "error:" /tmp/musl-unpatched-build.log | sed 's/^/    /'
@@ -53,8 +53,8 @@ else
 fi
 
 echo ""
-echo "=== applying patches/musl-tcc-compat.patch ==="
-git apply "$HERE/patches/musl-tcc-compat.patch"
+echo "=== applying patches/musl-i386-tcc-compat.patch ==="
+git apply "$HERE/patches/musl-i386-tcc-compat.patch"
 echo "    applied: 3 file modifications (weak_alias, sigsetjmp.s jecxz,"
 echo "    sqrtl.c constant-folding), 2 directory removals"
 echo "    (src/complex -- no _Complex support in TCC, out of scope anyway;"

@@ -1302,19 +1302,22 @@ index ac1ac97..be4ac4c 100644
  # Seems to be a wrong thing to do. LDFLAGS contains gcc's flags,
  # yet ld_flags is fed to ld.
 diff --git a/scripts/trylink b/scripts/trylink
-index 2255dee..b13093a 100755
+index 2255dee..758cda5 100755
 --- a/scripts/trylink
 +++ b/scripts/trylink
-@@ -78,6 +78,27 @@ CFLAGS="$3"
+@@ -78,6 +78,30 @@ CFLAGS="$3"
  LDFLAGS="$4"
  O_FILES="$5"
  A_FILES="$6"
-+# See MUSL_TCC_STARTFILES comment below -- crt1.o/crti.o must come
-+# first (they contain _start), libc.a/libtcc1.a/crtn.o must come
-+# after everything that references them. Every "try $CC ... $O_FILES
-+# $A_FILES ..." call site in this script picks this up automatically.
-+O_FILES="/home/claude/project/musl/lib/crt1.o /home/claude/project/musl/lib/crti.o $O_FILES"
-+A_FILES="$A_FILES /home/claude/project/musl/lib/libc.a /home/claude/project/tcc/libtcc1.a /home/claude/project/musl/lib/crtn.o"
++# crt1.o/crti.o must come first (they contain _start), libc.a/
++# libtcc1.a/crtn.o must come after everything that references them.
++# $MUSL_LIBDIR/$TCC_LIBDIR come from the environment (set by
++# build-busybox-i386.sh) rather than being hardcoded here, so this
++# patch applies the same way regardless of where musl/tcc were built.
++# Every "try $CC ... $O_FILES $A_FILES ..." call site in this script
++# picks this up automatically.
++O_FILES="${MUSL_LIBDIR:?MUSL_LIBDIR not set}/crt1.o $MUSL_LIBDIR/crti.o $O_FILES"
++A_FILES="$A_FILES $MUSL_LIBDIR/libc.a ${TCC_LIBDIR:?TCC_LIBDIR not set}/libtcc1.a $MUSL_LIBDIR/crtn.o"
 +# TCC's linker is single-pass with no archive-group rescan (confirmed:
 +# no -Wl,--start-group support at all). Relisting busybox's own
 +# archives a second time is a poor-man's version of what --start-group
@@ -1329,11 +1332,11 @@ index 2255dee..b13093a 100755
 +# THEY were only reachable via inter-busybox deps) can still need
 +# libc functions, but by then libc.a is already behind us in the
 +# single left-to-right scan and won't be revisited otherwise.
-+A_FILES="$A_FILES /home/claude/project/musl/lib/libc.a"
++A_FILES="$A_FILES $MUSL_LIBDIR/libc.a"
  # We try to drop libraries from LDLIBS if build works without them,
  # but ones from CONFIG_EXTRA_LDLIBS are always linked in.
  # (For example, musl has stub utmp implementation, and if you link with
-@@ -93,10 +114,23 @@ if ! check_cc "-Wl,--sort-section,alignment"; then
+@@ -93,10 +117,23 @@ if ! check_cc "-Wl,--sort-section,alignment"; then
      SORT_SECTION=""
  fi
  
@@ -1360,7 +1363,7 @@ index 2255dee..b13093a 100755
  }
  
  # gold may not support --sort-common (yet)
-@@ -320,7 +354,6 @@ int main(int argc, char **argv)
+@@ -320,7 +357,6 @@ int main(int argc, char **argv)
  		$SORT_SECTION \
  		$GC_SECTIONS \
  		-L"$sharedlib_dir" -lbusybox \

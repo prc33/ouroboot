@@ -1256,17 +1256,17 @@ index ac1ac97..be4ac4c 100644
  # Seems to be a wrong thing to do. LDFLAGS contains gcc's flags,
  # yet ld_flags is fed to ld.
 diff --git a/scripts/trylink b/scripts/trylink
-index 2255dee..f0d2cb8 100755
+index 2255dee..14f4c42 100755
 --- a/scripts/trylink
 +++ b/scripts/trylink
 @@ -83,6 +83,11 @@ A_FILES="$6"
  # (For example, musl has stub utmp implementation, and if you link with
  # a real utmp library in LDLIBS, dropping it "works" but resulting binary
  # does not work properly).
-+O_FILES="/home/claude/project/musl-rv64/lib/crt1.o /home/claude/project/musl-rv64/lib/crti.o $O_FILES"
-+A_FILES="$A_FILES /home/claude/project/musl-rv64/lib/libc.a /home/claude/project/tcc-rv64/libtcc1.a /home/claude/project/musl-rv64/lib/crtn.o"
++O_FILES="${MUSL_LIBDIR:?MUSL_LIBDIR not set}/crt1.o $MUSL_LIBDIR/crti.o $O_FILES"
++A_FILES="$A_FILES $MUSL_LIBDIR/libc.a ${TCC_LIBDIR:?TCC_LIBDIR not set}/libtcc1.a $MUSL_LIBDIR/crtn.o"
 +A_FILES="$A_FILES $6"
-+A_FILES="$A_FILES /home/claude/project/musl-rv64/lib/libc.a"
++A_FILES="$A_FILES $MUSL_LIBDIR/libc.a"
 +
  LDLIBS="$7"
  CONFIG_EXTRA_LDLIBS="$8"
