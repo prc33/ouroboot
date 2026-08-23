@@ -53,13 +53,28 @@ else
 fi
 
 echo ""
+echo "=== removing src/complex, src/math/i386, src/fenv/i386 ==="
+echo "    Not a source patch -- these are whole-directory removals (every"
+echo "    file in each), so a plain rm is clearer than a diff full of"
+echo "    'delete this whole file' hunks. src/complex: no _Complex support"
+echo "    in TCC, out of scope anyway (this is also what the 'unexpectedly"
+echo "    succeeded' complex.h error above is from -- once these .c files"
+echo "    are gone, complex.h is never included by anything else in a"
+echo "    normal musl build). src/math/i386 + src/fenv/i386: x87 asm using"
+echo "    constraints TCC doesn't implement; musl's portable C fallbacks"
+echo "    (elsewhere in src/math, src/fenv) take over automatically once"
+echo "    these arch-specific overrides are gone."
+rm -rf src/complex src/math/i386 src/fenv/i386
+
+echo ""
 echo "=== applying patches/musl-i386-tcc-compat.patch ==="
 git apply "$HERE/patches/musl-i386-tcc-compat.patch"
-echo "    applied: 3 file modifications (weak_alias, sigsetjmp.s jecxz,"
-echo "    sqrtl.c constant-folding), 2 directory removals"
-echo "    (src/complex -- no _Complex support in TCC, out of scope anyway;"
-echo "     src/math/i386 + src/fenv/i386 -- x87 asm using constraints TCC"
-echo "     doesn't implement; portable C fallbacks take over automatically)"
+echo "    applied: 4 file modifications -- weak_alias (TCC's __alias__"
+echo "    doesn't emit a second ELF symbol; drop to raw .weak/.set asm"
+echo "    directives instead), sigsetjmp.s (jecxz has no TCC assembler"
+echo "    support; test+jz instead), sqrtl.c (a non-constant static"
+echo "    initializer TCC can't fold), musl-gcc.specs.sh (static-pie"
+echo "    startfile selection)."
 
 echo ""
 echo "=== attempt 2: patched musl ==="

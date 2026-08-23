@@ -29,6 +29,15 @@ cd "$MUSL_DIR"
 echo "HEAD: $(git rev-parse HEAD)"
 
 echo ""
+echo "=== removing src/complex ==="
+echo "    Not a source patch -- this is a whole-directory removal (every"
+echo "    file in it), so a plain rm is clearer than a diff full of"
+echo "    'delete this whole file' hunks. No _Complex support in TCC,"
+echo "    out of scope anyway; nothing else in a normal musl build"
+echo "    includes complex.h once these .c files are gone."
+rm -rf src/complex
+
+echo ""
 echo "=== applying patches/musl-riscv64-tcc-compat.patch ==="
 git apply "$HERE/patches/musl-riscv64-tcc-compat.patch"
 
