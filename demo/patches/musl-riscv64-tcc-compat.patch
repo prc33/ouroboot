@@ -323,11 +323,10 @@ diff --git a/src/internal/stdio_impl.h b/src/internal/stdio_impl.h
 index 0b2438d..9310f12 100644
 --- a/src/internal/stdio_impl.h
 +++ b/src/internal/stdio_impl.h
-@@ -64,7 +64,17 @@ hidden int __toread(FILE *);
+@@ -64,7 +64,16 @@ hidden int __toread(FILE *);
  hidden int __towrite(FILE *);
  
  hidden void __stdio_exit(void);
-+hidden void __stdio_exit(void);
 +#ifdef __TINYC__
 +/* weak_alias(__stdio_exit, __stdio_exit_needed) does not produce a
 + * symbol under TCC when the target has hidden visibility, so alias it
@@ -967,11 +966,10 @@ index db90824..0000000
 -	li a7, 93 # SYS_exit
 -	ecall
 diff --git a/src/thread/riscv64/syscall_cp.s b/src/thread/riscv64/syscall_cp.s
-deleted file mode 100644
-index eeef639..0000000
+index eeef639..1c2d3e4 100644
 --- a/src/thread/riscv64/syscall_cp.s
-+++ /dev/null
-@@ -1,29 +0,0 @@
++++ b/src/thread/riscv64/syscall_cp.s
+@@ -1,29 +1,23 @@
 -.global __cp_begin
 -.hidden __cp_begin
 -.global __cp_end
@@ -1001,6 +999,48 @@ index eeef639..0000000
 -	ret
 -__cp_cancel:
 -	tail __cancel
++/* GENERATED from a hand-written source by tools/gen_asm_words.sh --
++ * do not hand-edit. Real upstream's version of this file (preserved
++ * above, in this same patch, before this hunk) has one instruction
++ * gen_asm_words.sh categorically can't emit: __cp_cancel's "tail
++ * __cancel", a call to a symbol defined in a different .o. TCC's
++ * riscv64 assembler has no relocation support for hand-written .s
++ * files at all (see docs/riscv-port-findings.md), and this tool's
++ * .long-encoding trick only works for branches/calls it can resolve
++ * itself at generation time -- i.e. targets in the *same* file. A
++ * cross-object call's real target address isn't known until final
++ * link, same reason boot/trap code in kernel/ avoids symbol
++ * references in its own hand-written .S. __cp_cancel here is an
++ * ebreak trap instead: it's only ever reached if a SIGCANCEL handler
++ * rewrites a signal frame's PC into the __cp_begin..__cp_end range,
++ * which requires something to have called pthread_cancel() on a
++ * thread blocked in a cancellable syscall -- nothing in this project
++ * does (no real POSIX signal delivery to userspace yet, no real
++ * multi-threading either), so this is provably unreachable given
++ * everything this kernel actually does today. Loud trap over a
++ * silently-wrong jump if that assumption ever stops holding. */
++.globl __cp_begin
++__cp_begin:
++.globl __syscall_cp_asm
++__syscall_cp_asm:
++	.long 0x00052283	/* lw t0,0(a0) */
++	.long 0x02029863	/* bnez t0,34 <__cp_cancel> */
++	.long 0x00058293	/* mv t0,a1 */
++	.long 0x00060513	/* mv a0,a2 */
++	.long 0x00068593	/* mv a1,a3 */
++	.long 0x00070613	/* mv a2,a4 */
++	.long 0x00078693	/* mv a3,a5 */
++	.long 0x00080713	/* mv a4,a6 */
++	.long 0x00088793	/* mv a5,a7 */
++	.long 0x00013803	/* ld a6,0(sp) */
++	.long 0x00028893	/* mv a7,t0 */
++	.long 0x00000073	/* ecall */
++.globl __cp_end
++__cp_end:
++	.long 0x00008067	/* ret */
++.globl __cp_cancel
++__cp_cancel:
++	.long 0x00100073	/* ebreak */
 diff --git a/tools/gen_asm_words.sh b/tools/gen_asm_words.sh
 new file mode 100755
 index 0000000..4abca66

@@ -97,3 +97,28 @@ cd ../demo && ./build-musl-i386.sh   # or -riscv64
              ./build-busybox-i386.sh # or -riscv64
 cd ../kernel && make test            # or make ARCH=riscv64 test
 ```
+
+## Current all-in demo: kernel.elf booting in a real browser tab
+
+The riscv64 kernel, running under the from-scratch JS emulator
+(`emulator/`), in an actual browser tab -- not just Node or QEMU:
+
+```
+cd kernel && make ARCH=riscv64           # build kernel.elf
+cd ../emulator/js && python3 -m http.server 8000
+# open http://localhost:8000/index.html
+```
+(Any static HTTP server works -- `fetch()` and Worker script loading
+both need a real origin, not `file://`.)
+
+You'll see the kernel boot, run its pmm/paging/COW/scheduler/syscall
+checkpoints, and drop a real static musl+TCC riscv64 binary into
+userspace via a real ELF loader -- all inside `xterm.js`, with the CPU
+running in a Web Worker so it never blocks the UI.
+
+Headless equivalent (same checkpoints, asserted against QEMU's own
+output so the two can't silently drift apart): `cd kernel && make
+ARCH=riscv64 test-js`. See `emulator/README.md` for both in more
+detail, and `docs/emulator-plan.md` for what's next (P4: real
+userspace binaries beyond the kernel itself, e.g. busybox, which needs
+F/D instruction support -- in progress).

@@ -2966,12 +2966,31 @@ static int read_ar_header(int fd, int offset, ArchiveHeader *hdr)
 static int tcc_load_alacarte(TCCState *s1, int fd, int size, int entrysize)
 {
     int i, bound, nsyms, sym_index, len, ret = -1;
-    unsigned long long off;
+    unsigned long long off, hdr_off;
     uint8_t *data;
     const char *ar_names, *p;
     const uint8_t *ar_index;
     ElfW(Sym) *sym;
     ArchiveHeader hdr;
+    /* Archive-member offsets already pulled in by this function, so a
+     * member is never loaded twice. Needed since the weak-vs-strong
+     * check below (see its comment) can no longer rely on "any def
+     * means done": a member's *other* exported symbols can stay
+     * legitimately weak forever (no stronger definition exists
+     * anywhere), which would otherwise keep re-matching "still weak,
+     * pull it" on every pass of the do/while below -- reloading the
+     * same member over and over, each load allocating fresh sections
+     * that are never freed, until memory is exhausted. Found the hard
+     * way: a real riscv64 stage1 build hit "tcc: error: memory full
+     * (realloc)" after the same handful of musl symbols ("fflush",
+     * "strtoul", ...) got reported "defined twice" in a repeating
+     * cycle -- confirms this is what actually OOM'd the host earlier,
+     * not just a hypothetical. Deduping by the member's own file
+     * offset (identity of the member, independent of which symbol
+     * name in the archive index pointed to it) fixes that while
+     * keeping the weak-override behavior the check below exists for. */
+    unsigned long long *loaded_offs = NULL;
+    int n_loaded = 0, cap_loaded = 0;
 
     data = tcc_malloc(size);
     if (full_read(fd, data, size) != size)
@@ -2988,24 +3007,61 @@ static int tcc_load_alacarte(TCCState *s1, int fd, int size, int entrysize)
             if (!sym_index)
                 continue;
             sym = &((ElfW(Sym) *)s->data)[sym_index];
-            if(sym->st_shndx != SHN_UNDEF)
+            /* Pull in this archive member if the symbol is still
+             * undefined, OR if the only definition seen so far is weak.
+             * musl relies throughout on exactly this pattern: a directly-
+             * linked .o (e.g. exit.o) provides a weak no-op stub for a
+             * symbol (e.g. __stdio_exit), and an *archive* member (e.g.
+             * __stdio_exit.o) provides the real, strong definition that's
+             * only linked in when something actually needs it -- musl's
+             * own comment for this is "atexit.c and __stdio_exit.c
+             * override these. the latter is linked as a consequence of
+             * linking either __toread.c or __towrite.c" (src/exit/exit.c).
+             * Skipping every symbol that already has *any* definition
+             * (the original check here) means that override never
+             * happens: __stdio_exit.o never gets pulled from libc.a, so
+             * exit()'s weak dummy silently wins and buffered stdio output
+             * with no immediate flush trigger (no trailing '\n' on a
+             * line-buffered stream) is dropped on the floor at program
+             * exit -- found via a real musl+TCC riscv64 binary that
+             * called fputs()/printf() more than once without a trailing
+             * newline and produced no output at all despite correctly
+             * accumulating bytes in its own buffer (confirmed by tracing
+             * FILE.wpos/wbase; see docs/riscv-port-findings.md). set_elf_sym()
+             * already has correct weak-vs-strong merge logic ("global
+             * overrides weak, so patch") -- the bug was purely here, in
+             * ever giving it the chance to run. */
+            if (sym->st_shndx != SHN_UNDEF && ELFW(ST_BIND)(sym->st_info) != STB_WEAK)
                 continue;
-            off = get_be(ar_index + i * entrysize, entrysize);
-            len = read_ar_header(fd, off, &hdr);
+            hdr_off = get_be(ar_index + i * entrysize, entrysize);
+            {
+                int j, already = 0;
+                for (j = 0; j < n_loaded; j++)
+                    if (loaded_offs[j] == hdr_off) { already = 1; break; }
+                if (already)
+                    continue;
+            }
+            len = read_ar_header(fd, hdr_off, &hdr);
             if (len <= 0 || memcmp(hdr.ar_fmag, ARFMAG, 2)) {
                 tcc_error_noabort("invalid archive");
                 goto the_end;
             }
-            off += len;
+            off = hdr_off + len;
             if (s1->verbose == 2)
                 printf("   -> %s\n", hdr.ar_name);
             if (tcc_load_object_file(s1, fd, off) < 0)
                 goto the_end;
+            if (n_loaded == cap_loaded) {
+                cap_loaded = cap_loaded ? cap_loaded * 2 : 16;
+                loaded_offs = tcc_realloc(loaded_offs, cap_loaded * sizeof(*loaded_offs));
+            }
+            loaded_offs[n_loaded++] = hdr_off;
             ++bound;
         }
     } while(bound);
     ret = 0;
  the_end:
+    tcc_free(loaded_offs);
     tcc_free(data);
     return ret;
 }
