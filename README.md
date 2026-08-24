@@ -73,12 +73,13 @@ reasoning). For RISC-V64:
   upstream).
 
 - **`emulator/`** — a from-scratch RISC-V emulator (plain JS, jor1k as
-  reference not a fork base). `emulator/js/` already boots
-  `kernel/kernel.elf` and passes every checkpoint `make ARCH=riscv64
-  test` (QEMU) does — `make ARCH=riscv64 test-js` runs the same
-  assertions against our own emulator instead. Browser (`xterm.js`)
-  and real userspace binaries (needs float/double support) are next.
-  See `emulator/README.md` and `docs/emulator-plan.md`.
+  reference not a fork base). `emulator/js/` boots `kernel/kernel.elf`
+  both headlessly (`make ARCH=riscv64 test-js`, passing every
+  checkpoint `make ARCH=riscv64 test`/QEMU does) and in an actual
+  browser tab (`xterm.js` + a Web Worker, verified against real
+  headless Chromium). Real userspace binaries (needs float/double
+  support) are next. See `emulator/README.md` and
+  `docs/emulator-plan.md`.
 
 - **`cpu/`** — not started (FPGA implementation, future work). See
   `cpu/README.md`.

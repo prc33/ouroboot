@@ -170,5 +170,14 @@ emulated MMU, with real `malloc`/`printf` output. One real bug found
 (a BigInt/Number equality mismatch at the MMIO device boundary,
 looked exactly like a hang), documented in the findings doc.
 
-P3 (browser/`xterm.js`) and P4 (F/D support for real userspace
-binaries beyond the kernel) are next; not started.
+**P3 also done**, same session -- see `docs/emulator-p3-findings.md`.
+`emulator/js/index.html` boots `kernel.elf` in a real browser tab
+(`xterm.js` terminal, CPU running in a Web Worker so it never blocks
+the UI), verified against a real headless Chromium via Puppeteer, not
+just eyeballed. Two real bugs found, both specific to how a browser
+actually scopes/loads script files (Node's own `require()` can't
+surface either one by construction) -- worth reading the findings doc
+before touching `emulator/js/browser-shim.js` or `worker.js` again.
+
+P4 (F/D support for real userspace binaries beyond the kernel) is
+next; not started.

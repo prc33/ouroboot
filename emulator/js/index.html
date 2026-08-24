@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<!--
+  P3 (docs/emulator-plan.md): kernel/kernel.elf running in an actual
+  browser tab, via xterm.js over the same UART byte interface the
+  kernel's own serial console uses. All CPU emulation runs in
+  worker.js (a Web Worker), off the main thread -- this page is only
+  xterm.js setup + the fetch()/postMessage plumbing in app.js.
+
+  Serve this directory over HTTP (file:// won't do -- fetch() and
+  Worker module loading both need a real origin), e.g.:
+    cd emulator/js && python3 -m http.server 8000
+  then open http://localhost:8000/index.html (kernel/kernel.elf must
+  already be built: cd ../../kernel && make ARCH=riscv64).
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>riscv64 self-hosting-system -- browser emulator</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5/css/xterm.css">
+<style>
+	body { background: #1e1e1e; margin: 0; padding: 16px; font-family: sans-serif; color: #ccc; }
+	h1 { font-size: 1rem; font-weight: normal; color: #888; }
+	#terminal { padding: 8px; background: #000; }
+</style>
+</head>
+<body>
+<h1>self-hosting-system / riscv64 -- from-scratch JS emulator (docs/emulator-plan.md, P3)</h1>
+<div id="terminal"></div>
+<script src="https://cdn.jsdelivr.net/npm/xterm@5/lib/xterm.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
