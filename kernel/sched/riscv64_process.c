@@ -185,6 +185,7 @@ struct process *process_create_from_elf(const unsigned char *elf_data, unsigned 
 
 	p->root_table = new_root;
 	p->pid = next_pid++;
+	p->ppid = 0; /* no real parent -- created directly by kmain, not fork() */
 	p->exit_code = 0;
 
 	/* Hand-built initial kernel-stack frame -- identical technique to
@@ -243,10 +244,34 @@ void process_schedule(void) {
 	activate_and_restore(old);
 }
 
+/* What to do once the process table completely drains (no RUNNABLE
+ * process left) -- riscv64_kmain.c sets this to chain into the next
+ * checkpoint's own test (e.g. checkpoint 6's sched_yield test handing
+ * off to checkpoint 7's fork test) the same way arch/riscv64_syscall.c's
+ * sys_exit_group/sys_exit already chain P4->P5 checkpoint 1->P5
+ * checkpoint 2. A hook is expected to create new processes and call
+ * process_run() again (or not return at all, if it halts on its own);
+ * it's cleared before being called so a *second* drain (this new
+ * batch of processes finishing) falls through to the real halt below
+ * rather than re-invoking the same hook. */
+static void (*drain_hook)(void) = 0;
+
+void process_set_drain_hook(void (*hook)(void)) {
+	drain_hook = hook;
+}
+
 static void halt_process_test(void) __attribute__((noreturn));
 static void halt_process_test(void) {
+	/* Reached only once the process table has drained *and* no drain
+	 * hook chained in another test -- currently that means every
+	 * checkpoint 6/7 test has finished (riscv64_kmain.c's
+	 * run_process_test/run_fork_test), so this is genuinely the last
+	 * checkpoint in the chain right now. Will need the "P7" bumped
+	 * (or replaced with a hook-supplied string) if a checkpoint 8 ever
+	 * chains in after this one, same as every earlier "next checkpoint
+	 * appends here" point in this kernel's own history. */
 	kprintf("process: all processes exited\n");
-	kprintf("P6 checkpoint OK\n");
+	kprintf("P7 checkpoint OK\n");
 	kprintf("halting.\n");
 	for (;;) __builtin_riscv_wfi();
 }
@@ -262,8 +287,14 @@ void process_exit_current(int exit_code) {
 			break;
 		}
 
-	if (!next)
+	if (!next) {
+		if (drain_hook) {
+			void (*hook)(void) = drain_hook;
+			drain_hook = 0;
+			hook();
+		}
 		halt_process_test();
+	}
 
 	/* `old` (the zombie we're leaving) is never resumed again, so its
 	 * kernel_sp is dead from here on -- still passed to switch_context
@@ -286,4 +317,104 @@ void process_run(struct process *first) {
 
 int process_mode_active(void) {
 	return process_mode;
+}
+
+int process_current_pid(void) {
+	return current_process ? current_process->pid : 0;
+}
+
+/* checkpoint 7: real fork(), via SYS_clone -- see process.h's own
+ * comment for why clone() rather than a dedicated fork syscall, and
+ * arch/riscv64_syscall.c for the narrow flags check that gates
+ * getting here at all.
+ *
+ * The [lo,hi) ranges cloned below are a real, deliberate
+ * simplification, not the general case: this checkpoint has no
+ * per-process VMA list recording what a process has actually mapped
+ * (process_create_from_elf hardcodes its own ELF-load and stack
+ * ranges the same way), so fork() just clones the same two fixed
+ * windows every process is known to actually use -- 16MB from 0,
+ * comfortably covering any of this kernel's real ELF payloads' code/
+ * data/BSS, plus the 2-page stack at 0xB0000000
+ * (process_create_from_elf's own STACK_VA). A process that mapped
+ * anything outside those (a real brk()/mmap() user, or a stack that
+ * grew past 2 pages) wouldn't have it survive a fork -- true of this
+ * checkpoint's own test but not the general case, same spirit as
+ * mm/elf.c's own "no filesystem yet" caveat elsewhere in this
+ * kernel. */
+#define FORK_CLONE_LO 0x0UL
+#define FORK_CLONE_HI 0x1000000UL   /* 16MB */
+#define FORK_STACK_LO 0xB0000000UL
+#define FORK_STACK_HI 0xB0002000UL  /* 2 pages, matches process_create_from_elf's own stack_pages */
+
+int process_fork(struct regs *r) {
+	struct process *parent = current_process;
+	struct process *child = alloc_slot();
+	if (!child)
+		return -1;
+
+	unsigned long *child_root = paging_new_addrspace();
+	paging_fork_cow(child_root, parent->root_table, FORK_CLONE_LO, FORK_CLONE_HI);
+	paging_fork_cow(child_root, parent->root_table, FORK_STACK_LO, FORK_STACK_HI);
+
+	child->root_table = child_root;
+	child->pid = next_pid++;
+	child->ppid = parent->pid;
+	child->exit_code = 0;
+
+	/* Child's saved trapframe: an exact snapshot of the parent's live
+	 * regs at this ecall (same registers, same sepc -- both processes
+	 * resume right after the same `ecall` instruction), except a0,
+	 * fork()'s return value, forced to 0 -- "you are the child" is
+	 * the *only* thing that needs to differ between the two copies
+	 * for this to be a correct fork(). The parent's own a0 (this
+	 * child's pid) is set by arch/riscv64_syscall.c's sys_clone
+	 * itself, on its live `r`, same as any other syscall's return
+	 * value -- untouched by this copy. */
+	copy_regs(&child->user_regs, r);
+	child->user_regs.a0 = 0;
+
+	/* Hand-built initial kernel-stack frame -- identical technique to
+	 * process_create_from_elf: when this child is first scheduled, it
+	 * resumes via process_trampoline using the trapframe snapshot
+	 * just taken above, i.e. picks up exactly at the return-from-
+	 * fork() point, in its own address space, with a0=0. */
+	unsigned long *top = &child->kernel_stack[PROC_KSTACK_WORDS];
+	unsigned long *frame = top - 14;
+	frame[0] = (unsigned long)process_trampoline;
+	for (int j = 1; j < 13; j++)
+		frame[j] = 0;
+	child->kernel_sp = (unsigned long)frame;
+
+	child->state = PROC_RUNNABLE;
+	return child->pid;
+}
+
+/* checkpoint 7: real wait4(), restricted to what's actually exercised
+ * (see process.h's comment). Blocking here means the same thing
+ * SYS_sched_yield's process_schedule() already does: spin, cooperatively
+ * yielding to every other RUNNABLE process each time round, until the
+ * condition holds. A real kernel would move the caller to a distinct
+ * BLOCKED state and only reconsider it once the specific child it's
+ * waiting on actually exits (avoiding the wasted table scans), but
+ * "spin-yield until true" is the same real simplification this
+ * kernel's P4 task scheduler already uses for its own timer-driven
+ * wait (`while (g_ticks - last_tick < TICKS_PER_SWITCH) wfi();`) --
+ * consistent with the rest of this codebase, not a new shortcut. */
+long process_wait4(int pid, int *status_out) {
+	struct process *me = current_process;
+	for (;;) {
+		for (int i = 0; i < MAX_PROCESSES; i++) {
+			struct process *p = &processes[i];
+			if (p->state == PROC_ZOMBIE && p->ppid == me->pid &&
+			    (pid == -1 || p->pid == pid)) {
+				int reaped_pid = p->pid;
+				if (status_out)
+					*status_out = (p->exit_code & 0xff) << 8; /* WIFEXITED/WEXITSTATUS-decodable, real Linux encoding */
+				p->state = PROC_UNUSED; /* reaped -- slot free for reuse */
+				return reaped_pid;
+			}
+		}
+		process_schedule();
+	}
 }

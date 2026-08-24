@@ -242,7 +242,19 @@ static void page_fault_handler(struct regs *r) {
 		for (unsigned int i = 0; i < PAGE_SIZE; i++)
 			dst[i] = src[i];
 
-		*pte = ((new_phys >> 12) << PPN_SHIFT) | PTE_PRESENT | PTE_WRITABLE;
+		/* Preserve PTE_USER from the pre-copy PTE (in *pte still, not
+		 * yet overwritten) rather than hardcoding just PRESENT|WRITABLE
+		 * -- real bug, found via checkpoint 7's fork() test: every COW
+		 * page before that was kmain.c's own run_cow_test(), entirely
+		 * kernel-only pages (no PTE_USER to begin with, so losing it
+		 * here was invisible). A *process* fork's COW pages are
+		 * U-mode stack/code -- dropping PTE_USER on the first write
+		 * made the retry fault *again* on the very next instruction,
+		 * this time for a completely different reason (U-mode access
+		 * to a now-kernel-only page) that this handler's COW check
+		 * doesn't recognize (PTE_COW is correctly cleared by then),
+		 * so it fell through to "unhandled". */
+		*pte = ((new_phys >> 12) << PPN_SHIFT) | PTE_PRESENT | PTE_WRITABLE | (*pte & PTE_USER);
 		__builtin_riscv_sfence_vma();
 		return; /* sret retries the faulting instruction, which now succeeds */
 	}

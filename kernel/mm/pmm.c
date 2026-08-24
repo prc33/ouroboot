@@ -91,3 +91,16 @@ void pmm_free_page(unsigned int addr) {
 unsigned int pmm_free_pages(void) {
 	return free_pages;
 }
+
+void pmm_reserve_range(unsigned int lo, unsigned int hi) {
+	unsigned int first = (lo - phys_base) / PAGE_SIZE;
+	unsigned int last = (hi - phys_base + PAGE_SIZE - 1) / PAGE_SIZE;
+	if (last > total_pages)
+		last = total_pages;
+	for (unsigned int p = first; p < last; p++) {
+		if (!bitmap_test(p)) {
+			bitmap_set(p);
+			free_pages--;
+		}
+	}
+}

@@ -4,7 +4,10 @@
  * `qemu-riscv64-static -strace` showed our own musl-linked riscv64
  * hello binary (from the compiler-port work) actually calling on its
  * way to main() and back: set_tid_address, brk, mmap, munmap, ioctl,
- * writev, exit_group. See docs/riscv-port-findings.md.
+ * writev, exit_group. See docs/riscv-port-findings.md. sched_yield
+ * (checkpoint 6), clone/wait4/rt_sigprocmask (checkpoint 7) were added
+ * the same way, later -- each syscall's own comment below says which
+ * real binary and real strace it came from.
  *
  * Notably shorter than i386's list: riscv64 needs no
  * set_thread_area -- TLS is just the `tp` register, set directly by
@@ -12,9 +15,16 @@
  * mmap (222) replaces i386's separate mmap2 -- riscv64 only has the
  * one, offset in bytes not pages (irrelevant here, anonymous-only).
  *
- * Same "single set of file-static globals, not yet a real per-process
- * struct" simplification as i386 -- still only ever one ring3 context
- * at a time. */
+ * brk_current/next_mmap_addr below are still the single "one ring3
+ * context at a time" file-static globals i386's own arch/syscall.c
+ * uses -- checkpoint 6/7's sched/riscv64_process.c gives every
+ * process its own address space and kernel stack, but *not* yet its
+ * own brk/mmap state, so two real processes both calling malloc()
+ * would corrupt each other's heap bookkeeping. Not yet a problem in
+ * practice: every checkpoint 6/7 test payload (sched/riscv64_process.c's
+ * own comments explain why) deliberately avoids malloc/printf for
+ * exactly this reason. Needs fixing before any real multi-process
+ * binary that mallocs runs concurrently with another. */
 #include "kernel.h"
 #include "riscv64_trap.h"
 #include "mm/pmm.h"
@@ -31,6 +41,10 @@
 #define SYS_brk                         214
 #define SYS_munmap                        215
 #define SYS_mmap                            222
+#define SYS_clone                            220
+#define SYS_wait4                              260
+#define SYS_rt_sigprocmask                        135
+#define SYS_gettid                                    178
 
 #define MAP_FIXED  0x10
 #define MAP_ANON   0x20
@@ -119,6 +133,45 @@ static void sys_exit_group(struct regs *r) {
 
 static void sys_sched_yield(struct regs *r) {
 	process_schedule();
+	r->a0 = 0;
+}
+
+/* checkpoint 7: real fork(), via clone() -- riscv64 has no separate
+ * SYS_fork; confirmed via a real `qemu-riscv64-static -strace` of our
+ * own musl-linked fork()+wait4() test binary that musl's fork() itself
+ * calls exactly `clone(SIGCHLD, NULL, NULL, NULL, NULL)` (musl's own
+ * src/process/fork.c, for any arch with no dedicated fork syscall).
+ * Only that one specific call shape is implemented -- see
+ * sched/process.h's process_fork() comment for what it actually does.
+ * Real clone() (CLONE_VM/CLONE_THREAD real threading, a caller-
+ * supplied child stack) isn't -- ENOSYS is the honest answer for
+ * anything else, not a silently wrong one. */
+#define CLONE_FORK_FLAGS 0x11UL /* SIGCHLD (17), no other flags */
+
+static void sys_clone(struct regs *r) {
+	unsigned long flags = r->a0;
+	unsigned long child_stack = r->a1;
+	if (flags != CLONE_FORK_FLAGS || child_stack != 0) {
+		r->a0 = (unsigned long)-ENOSYS;
+		return;
+	}
+	int pid = process_fork(r);
+	r->a0 = pid < 0 ? (unsigned long)-ENOMEM : (unsigned long)pid;
+}
+
+static void sys_wait4(struct regs *r) {
+	int pid = (int)(long)r->a0;
+	int *status = (int *)r->a1;
+	r->a0 = (unsigned long)process_wait4(pid, status);
+}
+
+/* honest stub: no real signal delivery/masking exists yet -- just
+ * needs to succeed. musl's fork() unconditionally has the child reset
+ * its signal mask (confirmed in the same strace as sys_clone's own
+ * comment); real semantics don't matter until this kernel has real
+ * signal delivery at all. */
+static void sys_rt_sigprocmask(struct regs *r) {
+	(void)r;
 	r->a0 = 0;
 }
 
@@ -230,13 +283,26 @@ static void sys_ioctl(struct regs *r) {
 	r->a0 = (unsigned long)-EINVAL;
 }
 
+/* checkpoint 6/7: real pid (process_current_pid()), not the hardcoded
+ * "tid 1" every process used to get back before there was more than
+ * one -- see process.h's own comment. Falls back to 1 if there's no
+ * process context at all (every P4/P5 one-shot test predates
+ * process_run() being called even once). */
+static unsigned long current_tid(void) {
+	int pid = process_current_pid();
+	return pid ? (unsigned long)pid : 1UL;
+}
+
 static void sys_set_tid_address(struct regs *r) {
 	/* Real semantics (clear this address + futex-wake on thread exit)
 	 * don't matter yet -- no threads, no futex. Just needs to succeed
-	 * and return a plausible tid; every syscall from this one process
-	 * is "tid 1" for now. */
+	 * and return a plausible tid. */
 	(void)r;
-	r->a0 = 1;
+	r->a0 = current_tid();
+}
+
+static void sys_gettid(struct regs *r) {
+	r->a0 = current_tid();
 }
 
 static void syscall_dispatch(struct regs *r) {
@@ -251,6 +317,10 @@ static void syscall_dispatch(struct regs *r) {
 	case SYS_ioctl:                    sys_ioctl(r); return;
 	case SYS_sched_yield:                 sys_sched_yield(r); return;
 	case SYS_set_tid_address:            sys_set_tid_address(r); return;
+	case SYS_clone:                         sys_clone(r); return;
+	case SYS_wait4:                            sys_wait4(r); return;
+	case SYS_rt_sigprocmask:                      sys_rt_sigprocmask(r); return;
+	case SYS_gettid:                                 sys_gettid(r); return;
 	default:
 		kprintf("FATAL: unimplemented syscall %lu\n", r->a7);
 		r->a0 = (unsigned long)-ENOSYS;
@@ -260,5 +330,6 @@ static void syscall_dispatch(struct regs *r) {
 void syscall_init(void) {
 	syscall_set_handler(syscall_dispatch);
 	kprintf("syscall: dispatch installed (write, writev, exit, exit_group, "
-		"brk, mmap, munmap, ioctl, sched_yield, set_tid_address)\n");
+		"brk, mmap, munmap, ioctl, sched_yield, set_tid_address, "
+		"clone, wait4, rt_sigprocmask, gettid)\n");
 }

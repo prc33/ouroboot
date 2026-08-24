@@ -170,6 +170,9 @@ RISCV64_TEST_ASSERTIONS := \
 	--must-contain "P5 checkpoint 2 OK" \
 	--must-contain "A1 B1 A2 B2 A3 B3" \
 	--must-contain "P6 checkpoint OK" \
+	--must-contain "child counter=42" \
+	--must-contain "parent counter=1 reaped_pid_ok=1 child_status=7" \
+	--must-contain "P7 checkpoint OK" \
 	--must-not-contain "FATAL" \
 	--must-not-contain "UNHANDLED EXCEPTION" \
 	--must-not-contain "UNHANDLED INTERRUPT" \

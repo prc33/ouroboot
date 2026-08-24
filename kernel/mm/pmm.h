@@ -10,4 +10,23 @@ unsigned int pmm_alloc_page(void); /* returns physical addr, 0 on failure */
 void pmm_free_page(unsigned int addr);
 unsigned int pmm_free_pages(void); /* for test assertions */
 
+/* Marks every page in [lo, hi) used, without anyone having to
+ * pmm_alloc_page() them first -- for memory this allocator doesn't
+ * itself know is spoken for. riscv64_kmain.c uses this right after
+ * pmm_init() to reserve arch/riscv64_memmap.h's hardcoded scratch
+ * region (boot stack, trap dispatch pointer, trapframe, trap stack):
+ * pmm_init() only ever reserved [phys_base, kernel_end) -- the
+ * scratch region lives *above* kernel_end (deliberately, so it survives
+ * kernel image growth -- see riscv64_memmap.h), so without this,
+ * pmm_alloc_page() eventually hands it out like any other free page.
+ * Found the hard way: harmless for every checkpoint through P5 (never
+ * enough allocations happened to reach that far up), until checkpoint
+ * 6/7's real ELF loads finally did -- one of them got handed the page
+ * *underneath the kernel's own currently-running boot stack*, and
+ * zeroing it (mm/elf.c's own BSS-zeroing loop) corrupted the C call
+ * chain actually in progress, silently, with no fault or error
+ * message at all (nothing had *mis-executed* yet, just had its own
+ * memory overwritten out from under it). */
+void pmm_reserve_range(unsigned int lo, unsigned int hi);
+
 #endif

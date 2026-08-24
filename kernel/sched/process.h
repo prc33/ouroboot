@@ -21,6 +21,7 @@ enum process_state {
 
 struct process {
 	int pid;
+	int ppid;                          /* checkpoint 7: real parent, for process_wait4()'s "is this my child" check */
 	enum process_state state;
 	unsigned long *root_table;         /* this process's own address space (mm/paging.h) */
 	unsigned long kernel_sp;           /* switch_context()-managed, see sched/riscv64_switch_context.S */
@@ -62,5 +63,42 @@ void process_run(struct process *first);
 
 /* Whether process_run() has been called yet -- see its own comment. */
 int process_mode_active(void);
+
+/* The real pid of whichever process is currently running -- 0 if
+ * process_mode_active() is false (no process context exists yet).
+ * arch/riscv64_syscall.c uses this for getpid()/gettid() (this kernel
+ * has no real threads, so they're the same value -- correct, not a
+ * simplification: that's true on real Linux too for a single-threaded
+ * process) instead of the pre-checkpoint-6 hardcoded "tid 1" every
+ * process used to get regardless of which one it actually was. */
+int process_current_pid(void);
+
+/* Runs once, the next time the process table completely drains (no
+ * RUNNABLE process left) -- riscv64_kmain.c uses this to chain into
+ * the next checkpoint's own test in sequence, see
+ * sched/riscv64_process.c's own comment. */
+void process_set_drain_hook(void (*hook)(void));
+
+/* checkpoint 7: real fork(), via SYS_clone (arch/riscv64_syscall.c --
+ * riscv64 has no separate SYS_fork; musl's fork() itself calls
+ * SYS_clone(SIGCHLD, 0, ...), confirmed via a real strace, same
+ * methodology as every other syscall in this kernel). Clones the
+ * *calling* process (current_process) -- COW address space
+ * (mm/paging.h's paging_fork_cow) plus a snapshot of `r`, the live
+ * trapframe of the ecall that got us here, with a0 forced to 0 (the
+ * child's fork() return value; the parent's own a0 -- the child's
+ * pid, or -1 -- is set by the syscall handler itself, same as every
+ * other syscall's return value). Returns the new child's pid, or -1
+ * on failure (process table full / out of memory). */
+int process_fork(struct regs *r);
+
+/* checkpoint 7: real wait4(pid, status, ...), restricted to what this
+ * checkpoint's test/init actually need: `pid` a specific child's real
+ * pid, or -1 for "any child". Blocks (cooperatively -- see this
+ * function's own comment in sched/riscv64_process.c) until a matching
+ * child becomes a zombie, then reaps it (frees its process-table
+ * slot) and returns its pid, with *status_out set to the same
+ * WIFEXITED/WEXITSTATUS-decodable encoding real Linux uses. */
+long process_wait4(int pid, int *status_out);
 
 #endif

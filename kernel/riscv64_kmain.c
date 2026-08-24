@@ -9,6 +9,7 @@
 #include "user_test_riscv64_payload.h"
 #include "hello_elf_riscv64_payload.h"
 #include "proc_test_elf_riscv64_payload.h"
+#include "proc_fork_test_elf_riscv64_payload.h"
 
 static volatile int g_breakpoint_hit = 0;
 
@@ -191,8 +192,29 @@ void run_elf_test(void) {
  * processes cooperatively scheduled across genuinely separate address
  * spaces -- see sched/riscv64_process.c and user_test/proc_test_riscv64.c
  * for the mechanism and the interleave signature this checks for. */
+/* --- checkpoint 7: real fork()+wait4() -- see
+ * user_test/proc_fork_test_riscv64.c and sched/riscv64_process.c's
+ * process_fork/process_wait4 for the mechanism. Chained in via
+ * process_set_drain_hook() below, run *after* checkpoint 6's two
+ * processes both finish -- see sched/riscv64_process.c's drain_hook
+ * comment for why that's the right place to hook a new test's setup
+ * in, same idea as arch/riscv64_syscall.c's sys_exit/sys_exit_group
+ * chaining P4->P5 checkpoint 1->P5 checkpoint 2. */
+static void run_fork_test(void) {
+	kprintf("P6 checkpoint OK\n");
+	struct process *p = process_create_from_elf(proc_fork_test_elf_riscv64_payload, PROC_FORK_TEST_ELF_RISCV64_SIZE, "fork_test");
+	if (!p) {
+		kprintf("FATAL: process_create_from_elf failed\n");
+		for (;;) __builtin_riscv_wfi();
+	}
+	kprintf("process: fork test process created (pid %d)\n", p->pid);
+	process_run(p);
+	/* not expected to return */
+}
+
 void run_process_test(void) {
 	process_init();
+	process_set_drain_hook(run_fork_test);
 	struct process *a = process_create_from_elf(proc_test_elf_riscv64_payload, PROC_TEST_ELF_RISCV64_SIZE, "A");
 	struct process *b = process_create_from_elf(proc_test_elf_riscv64_payload, PROC_TEST_ELF_RISCV64_SIZE, "B");
 	if (!a || !b) {
@@ -201,8 +223,9 @@ void run_process_test(void) {
 	}
 	kprintf("process: two independent processes created (pid %d, pid %d)\n", a->pid, b->pid);
 	process_run(a);
-	/* not expected to return: process_exit_current() halts once both
-	 * processes have exited */
+	/* not expected to return: process_exit_current() chains into
+	 * run_fork_test() once both processes above have exited, then
+	 * halts for real once *that* test's process exits too */
 }
 
 static void conclude_scheduler_test(void) {
@@ -251,6 +274,12 @@ void kmain(unsigned long hartid, unsigned long dtb) {
 	}
 
 	pmm_init((unsigned int)RV64_MEM_TOP, (unsigned int)RV64_RAM_BASE);
+	/* arch/riscv64_memmap.h's hardcoded scratch region (boot stack,
+	 * trap dispatch pointer, trapframe, trap stack) isn't part of the
+	 * kernel image pmm_init() already excludes -- see
+	 * mm/pmm.h's pmm_reserve_range() comment for why this is required,
+	 * not defensive. */
+	pmm_reserve_range((unsigned int)RV64_SCRATCH_BASE, (unsigned int)RV64_TRAP_STACK_TOP);
 	paging_init(RV64_MEM_TOP);
 
 	run_cow_test();
