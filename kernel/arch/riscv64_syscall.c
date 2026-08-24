@@ -50,6 +50,21 @@
 #define SYS_close                                            57
 #define SYS_read                                                63
 #define SYS_execve                                                221
+#define SYS_getcwd                                                    17
+#define SYS_chdir                                                        49
+#define SYS_newfstatat                                                       79
+#define SYS_rt_sigaction                                                        134
+#define SYS_getppid                                                                 173
+#define SYS_geteuid                                                                    175
+#define SYS_fcntl                                                                         25
+#define SYS_getpid                                                                           172
+
+#define F_DUPFD 0
+#define F_GETFD 1
+#define F_SETFD 2
+#define F_GETFL 3
+#define F_SETFL 4
+#define F_DUPFD_CLOEXEC 1030
 
 #define AT_FDCWD (-100)
 
@@ -170,7 +185,8 @@ static void sys_clone(struct regs *r) {
 static void sys_wait4(struct regs *r) {
 	int pid = (int)(long)r->a0;
 	int *status = (int *)r->a1;
-	r->a0 = (unsigned long)process_wait4(pid, status);
+	int options = (int)r->a2;
+	r->a0 = (unsigned long)process_wait4(pid, status, options);
 }
 
 /* honest stub: no real signal delivery/masking exists yet -- just
@@ -447,6 +463,181 @@ static void sys_execve(struct regs *r) {
 	 * call site at all) */
 }
 
+/* checkpoint 9: busybox ash's own startup needs all of these -- see
+ * arch/riscv64_syscall.c's git history for the real strace this was
+ * derived from (a real ash -c/script run under qemu-riscv64-static,
+ * same methodology as everything else in this file).
+ *
+ * struct stat layout confirmed by compiling a small offsetof() probe
+ * with our own riscv64 toolchain and running it under
+ * qemu-riscv64-static, rather than hand-deriving field offsets from
+ * musl's typedefs (nlink_t/blksize_t/etc.'s actual sizes depend on
+ * ifdef branches easy to misread): dev_t/ino_t/rdev at byte offsets
+ * 0/8/32 (8 bytes each), mode_t/nlink_t/uid_t/gid_t at 16/20/24/28 (4
+ * bytes each), an 8-byte pad, then off_t/blksize_t/blkcnt_t at
+ * 48/56/64 (8 bytes each), three 16-byte timespecs from byte 72 --
+ * 128 bytes total. Only st_mode and st_size are ever read by anything
+ * this kernel runs (mm/ramfs.h's ash-facing PATH search checks
+ * S_ISREG(st_mode) and nothing else -- confirmed in ash.c's own
+ * source, not guessed), so everything else here is just zeroed
+ * rather than computed to match. */
+#define ST_MODE_OFF 16
+#define ST_SIZE_OFF 48
+#define S_IFDIR 0040000
+#define S_IFREG 0100000
+
+static void fill_stat(unsigned char *sb, unsigned int mode, unsigned long size) {
+	for (int i = 0; i < 128; i++)
+		sb[i] = 0;
+	*(unsigned long *)(sb + 0) = 1;  /* st_dev */
+	*(unsigned long *)(sb + 8) = 1;  /* st_ino */
+	*(unsigned int *)(sb + ST_MODE_OFF) = mode;
+	*(unsigned int *)(sb + 20) = 1;  /* st_nlink */
+	*(long *)(sb + ST_SIZE_OFF) = (long)size;
+	*(long *)(sb + 56) = 512;        /* st_blksize */
+}
+
+static void sys_newfstatat(struct regs *r) {
+	/* a0=dirfd, a1=path, a2=statbuf, a3=flags -- dirfd/flags ignored,
+	 * same "no real cwd/directory concept" reasoning as sys_openat. */
+	char path[PATH_MAX_LOCAL];
+	copy_path_from_user(path, (const char *)r->a1);
+	unsigned char *sb = (unsigned char *)r->a2;
+
+	/* "." and "/" both mean the same thing here (mm/ramfs.h has no
+	 * real subdirectories) -- ash's own getpwd() logic stats both its
+	 * cached cwd string and "." to cross-check they're the same
+	 * place; a directory entry satisfies that unconditionally since
+	 * there's only ever the one directory. */
+	if ((path[0] == '.' && path[1] == 0) || (path[0] == '/' && path[1] == 0)) {
+		fill_stat(sb, S_IFDIR | 0755, 0);
+		r->a0 = 0;
+		return;
+	}
+
+	const struct ramfs_file *file = ramfs_lookup(path);
+	if (!file) {
+		r->a0 = (unsigned long)-ENOENT;
+		return;
+	}
+	fill_stat(sb, S_IFREG | 0755, file->size);
+	r->a0 = 0;
+}
+
+static void sys_getcwd(struct regs *r) {
+	/* Always "/" -- mm/ramfs.h has no real subdirectories, so it's
+	 * also the only correct answer here, not just a placeholder (same
+	 * reasoning as sys_chdir below). */
+	char *buf = (char *)r->a0;
+	unsigned long size = r->a1;
+	if (size < 2) {
+		r->a0 = (unsigned long)-EINVAL; /* ERANGE would be more precise; not worth a new errno for this */
+		return;
+	}
+	buf[0] = '/';
+	buf[1] = 0;
+	r->a0 = 2; /* real getcwd(2) returns the length written, including the NUL */
+}
+
+static void sys_chdir(struct regs *r) {
+	/* No-op success: mm/ramfs.h is flat, so "changing directory" has
+	 * nothing to actually change -- every lookup already matches by
+	 * basename regardless of any notion of cwd. Rejecting a chdir
+	 * into somewhere that isn't "/" would be more correct but nothing
+	 * in this checkpoint's tests needs that distinction yet. */
+	(void)r;
+	r->a0 = 0;
+}
+
+/* Honest stub, same spirit as sys_rt_sigprocmask -- no real signal
+ * delivery exists yet, so there's nothing to actually install; ash's
+ * own startup installs handlers for SIGINT/SIGQUIT/SIGTERM/SIGCHLD
+ * unconditionally and needs this to merely succeed, not actually
+ * work (real signal delivery -- e.g. Ctrl-C interrupting a running
+ * command -- is future scope: this kernel has no interrupt-driven
+ * UART RX to even notice a Ctrl-C arrived independent of whatever's
+ * currently blocked in read()). */
+static void sys_rt_sigaction(struct regs *r) {
+	(void)r;
+	r->a0 = 0;
+}
+
+static void sys_getppid(struct regs *r) {
+	r->a0 = (unsigned long)process_current_ppid();
+}
+
+static void sys_geteuid(struct regs *r) {
+	/* Always root (0) -- this kernel has exactly one trust domain,
+	 * same as every other "no real permissions model yet" corner
+	 * (e.g. mm/elf.c maps every segment writable regardless of
+	 * p_flags). */
+	(void)r;
+	r->a0 = 0;
+}
+
+static void sys_getpid(struct regs *r) {
+	r->a0 = (unsigned long)process_current_pid();
+}
+
+/* checkpoint 9: ash dup()s its script fd to a fresh slot right after
+ * opening it (shell/ash.c: `fd = fcntl(fd, F_DUPFD_CLOEXEC, 10)`),
+ * standard shell practice to keep the script's own fd out of the way
+ * of whatever low fd numbers the script's commands might use.
+ * F_DUPFD/F_DUPFD_CLOEXEC here allocate a fresh mm/ramfs.h fd table
+ * slot and copy the entry (data/size/pos) into it -- a real dup()
+ * shares the underlying file description (so both fds' positions
+ * stay in sync), this makes an independent copy instead; nothing in
+ * this checkpoint's tests reads through both the old and new fd
+ * concurrently, so the difference doesn't show. The `arg` minimum-fd-
+ * number argument (real dup() promises the new fd is >= arg) is
+ * ignored -- this fd table is tiny (MAX_FDS) and dense from 3, always
+ * comfortably below whatever avoidance threshold a caller asks for.
+ * close-on-exec itself is a no-op for the same reason
+ * F_GETFD/F_SETFD are: nothing in this kernel enforces it (fork()/
+ * execve() already just keep every fd open, see sched/process.h's
+ * own comment on process_fork()'s fd copy), so there's no flag to
+ * actually store. */
+static void sys_fcntl(struct regs *r) {
+	unsigned long fd = r->a0;
+	unsigned long cmd = r->a1;
+
+	if (cmd == F_DUPFD || cmd == F_DUPFD_CLOEXEC) {
+		if (fd < 3) {
+			/* dup'ing the console: no real second console fd to hand
+			 * back (fd 0/1/2 aren't reference-counted objects here at
+			 * all) -- reporting success as the same fd is honest
+			 * enough for what this checkpoint exercises. */
+			r->a0 = fd;
+			return;
+		}
+		struct fd_entry *old = process_fd_get((int)fd - 3);
+		if (!old) {
+			r->a0 = (unsigned long)-EBADF;
+			return;
+		}
+		int idx = process_fd_alloc();
+		if (idx < 0) {
+			r->a0 = (unsigned long)-ENOMEM;
+			return;
+		}
+		struct fd_entry *nf = process_fd_get(idx);
+		nf->data = old->data;
+		nf->size = old->size;
+		nf->pos = old->pos;
+		r->a0 = (unsigned long)(idx + 3);
+		return;
+	}
+	if (cmd == F_GETFD || cmd == F_SETFD || cmd == F_SETFL) {
+		r->a0 = 0;
+		return;
+	}
+	if (cmd == F_GETFL) {
+		r->a0 = 0; /* O_RDONLY -- every fd this kernel hands out is read-only (mm/ramfs.h) */
+		return;
+	}
+	r->a0 = (unsigned long)-ENOSYS;
+}
+
 static void syscall_dispatch(struct regs *r) {
 	switch (r->a7) {
 	case SYS_write:            sys_write(r); return;
@@ -467,6 +658,14 @@ static void syscall_dispatch(struct regs *r) {
 	case SYS_close:                                        sys_close(r); return;
 	case SYS_read:                                            sys_read(r); return;
 	case SYS_execve:                                              sys_execve(r); return;
+	case SYS_getcwd:                                                 sys_getcwd(r); return;
+	case SYS_chdir:                                                     sys_chdir(r); return;
+	case SYS_newfstatat:                                                    sys_newfstatat(r); return;
+	case SYS_rt_sigaction:                                                          sys_rt_sigaction(r); return;
+	case SYS_getppid:                                                                        sys_getppid(r); return;
+	case SYS_geteuid:                                                                             sys_geteuid(r); return;
+	case SYS_getpid:                                                                                 sys_getpid(r); return;
+	case SYS_fcntl:                                                                                     sys_fcntl(r); return;
 	default:
 		kprintf("FATAL: unimplemented syscall %lu\n", r->a7);
 		r->a0 = (unsigned long)-ENOSYS;
@@ -477,5 +676,7 @@ void syscall_init(void) {
 	syscall_set_handler(syscall_dispatch);
 	kprintf("syscall: dispatch installed (write, writev, exit, exit_group, "
 		"brk, mmap, munmap, ioctl, sched_yield, set_tid_address, "
-		"clone, wait4, rt_sigprocmask, gettid, openat, close, read, execve)\n");
+		"clone, wait4, rt_sigprocmask, gettid, openat, close, read, execve, "
+		"getcwd, chdir, newfstatat, rt_sigaction, getppid, geteuid, "
+		"getpid, fcntl)\n");
 }

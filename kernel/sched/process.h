@@ -90,6 +90,11 @@ int process_mode_active(void);
  * process used to get regardless of which one it actually was. */
 int process_current_pid(void);
 
+/* The real parent pid of whichever process is currently running -- 0
+ * if there isn't one (created directly by kmain, not fork()) or no
+ * process context exists yet. arch/riscv64_syscall.c's sys_getppid. */
+int process_current_ppid(void);
+
 /* Runs once, the next time the process table completely drains (no
  * RUNNABLE process left) -- riscv64_kmain.c uses this to chain into
  * the next checkpoint's own test in sequence, see
@@ -109,14 +114,25 @@ void process_set_drain_hook(void (*hook)(void));
  * on failure (process table full / out of memory). */
 int process_fork(struct regs *r);
 
-/* checkpoint 7: real wait4(pid, status, ...), restricted to what this
- * checkpoint's test/init actually need: `pid` a specific child's real
- * pid, or -1 for "any child". Blocks (cooperatively -- see this
- * function's own comment in sched/riscv64_process.c) until a matching
- * child becomes a zombie, then reaps it (frees its process-table
- * slot) and returns its pid, with *status_out set to the same
- * WIFEXITED/WEXITSTATUS-decodable encoding real Linux uses. */
-long process_wait4(int pid, int *status_out);
+/* checkpoint 7 (blocking)/9 (WNOHANG, -ECHILD) real wait4(pid, status,
+ * options, ...): `pid` a specific child's real pid, or -1 for "any
+ * child". If `options` has WNOHANG (0x1) set, checks once and returns
+ * 0 immediately if no matching child is a zombie *yet* (rather than
+ * blocking) -- real shells (confirmed via busybox ash's own source
+ * and behavior: it calls wait4() a second time with WNOHANG right
+ * after reaping a foreground child, sweeping for anything else
+ * already-exited) rely on this to mean "nothing new yet", not "block
+ * until something is". Either way, returns -ECHILD immediately if the
+ * caller has *no* matching child at all, zombie or not -- omitting
+ * this (checkpoint 7's original version didn't check at all) means a
+ * WNOHANG sweep with nothing left to reap spins forever indistinguishable
+ * from "waiting for a child that will never exist". Otherwise blocks
+ * (cooperatively -- see this function's own comment in
+ * sched/riscv64_process.c) until a matching child becomes a zombie,
+ * then reaps it (frees its process-table slot) and returns its pid,
+ * with *status_out set to the same WIFEXITED/WEXITSTATUS-decodable
+ * encoding real Linux uses. */
+long process_wait4(int pid, int *status_out, int options);
 
 /* checkpoint 8: fd-table access for arch/riscv64_syscall.c's
  * sys_openat/sys_read/sys_close, all against the *currently running*

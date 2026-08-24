@@ -28,6 +28,7 @@ static unsigned int bitmap[BITMAP_WORDS];
 static unsigned int total_pages;
 static unsigned int free_pages;
 static unsigned int phys_base;
+static unsigned int next_free_hint; /* see pmm_alloc_page()'s own comment */
 
 static inline void bitmap_set(unsigned int page) {
 	bitmap[page / 32] |= (1u << (page % 32));
@@ -69,11 +70,30 @@ void pmm_init(unsigned int mem_top, unsigned int base) {
 		(void *)(unsigned long)kend, free_pages, free_pages * 4);
 }
 
+/* Scans from next_free_hint (wrapping around, so this still finds any
+ * free page that exists) instead of always restarting at page 0 --
+ * real bug in the original always-from-0 version, found running
+ * checkpoint 9's much larger, more allocation-heavy kernel image
+ * under emulator/js/: every call re-scanned however many already-
+ * permanently-used low pages had accumulated so far, an O(total
+ * allocations so far) cost *per call* that made the whole boot
+ * sequence's cumulative cost effectively quadratic in how much had
+ * been allocated -- fine at P1-P8's scale (never enough allocations
+ * for the effect to be visible), bad enough by checkpoint 9's real
+ * busybox-sized workload that the JS emulator's own test genuinely
+ * didn't finish in 20 real minutes where QEMU took seconds (QEMU
+ * runs the *actual instructions* at native speed regardless of how
+ * many extra ones this loop executes; the JS interpreter pays for
+ * every one of them). Still worst-case O(total_pages) if the bitmap
+ * is nearly full, but the common case (monotonically allocating into
+ * still-free space) is now O(1) amortized. */
 unsigned int pmm_alloc_page(void) {
-	for (unsigned int p = 0; p < total_pages; p++) {
+	for (unsigned int i = 0; i < total_pages; i++) {
+		unsigned int p = (next_free_hint + i) % total_pages;
 		if (!bitmap_test(p)) {
 			bitmap_set(p);
 			free_pages--;
+			next_free_hint = p + 1;
 			return phys_base + p * PAGE_SIZE;
 		}
 	}

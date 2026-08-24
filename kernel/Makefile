@@ -179,6 +179,10 @@ RISCV64_TEST_ASSERTIONS := \
 	--must-contain "hello from ramfs" \
 	--must-contain "exec test: child_status=42" \
 	--must-contain "P8 checkpoint OK" \
+	--must-contain "hello from ash" \
+	--must-contain "builtin ok" \
+	--must-contain "init test: ash_status=5" \
+	--must-contain "P9 checkpoint OK" \
 	--must-not-contain "FATAL" \
 	--must-not-contain "UNHANDLED EXCEPTION" \
 	--must-not-contain "UNHANDLED INTERRUPT" \

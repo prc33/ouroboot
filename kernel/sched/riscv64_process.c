@@ -267,15 +267,15 @@ static void halt_process_test(void) __attribute__((noreturn));
 static void halt_process_test(void) {
 	/* Reached only once the process table has drained *and* no drain
 	 * hook chained in another test -- currently that means every
-	 * checkpoint 6/7/8 test has finished (riscv64_kmain.c's
-	 * run_process_test/run_fork_test/run_exec_test), so this is
-	 * genuinely the last checkpoint in the chain right now. Will need
-	 * the "P8" bumped (or replaced with a hook-supplied string) if a
-	 * checkpoint 9 ever chains in after this one, same as every
-	 * earlier "next checkpoint appends here" point in this kernel's
-	 * own history. */
+	 * checkpoint 6/7/8/9 test has finished (riscv64_kmain.c's
+	 * run_process_test/run_fork_test/run_exec_test/run_init_test), so
+	 * this is genuinely the last checkpoint in the chain right now.
+	 * Will need the "P9" bumped (or replaced with a hook-supplied
+	 * string) if a checkpoint 10 ever chains in after this one, same
+	 * as every earlier "next checkpoint appends here" point in this
+	 * kernel's own history. */
 	kprintf("process: all processes exited\n");
-	kprintf("P8 checkpoint OK\n");
+	kprintf("P9 checkpoint OK\n");
 	kprintf("halting.\n");
 	for (;;) __builtin_riscv_wfi();
 }
@@ -327,6 +327,10 @@ int process_current_pid(void) {
 	return current_process ? current_process->pid : 0;
 }
 
+int process_current_ppid(void) {
+	return current_process ? current_process->ppid : 0;
+}
+
 /* checkpoint 7: real fork(), via SYS_clone -- see process.h's own
  * comment for why clone() rather than a dedicated fork syscall, and
  * arch/riscv64_syscall.c for the narrow flags check that gates
@@ -336,20 +340,37 @@ int process_current_pid(void) {
  * simplification, not the general case: this checkpoint has no
  * per-process VMA list recording what a process has actually mapped
  * (process_create_from_elf hardcodes its own ELF-load and stack
- * ranges the same way), so fork() just clones the same two fixed
- * windows every process is known to actually use -- 16MB from 0,
- * comfortably covering any of this kernel's real ELF payloads' code/
- * data/BSS, plus the 2-page stack at 0xB0000000
- * (process_create_from_elf's own STACK_VA). A process that mapped
- * anything outside those (a real brk()/mmap() user, or a stack that
- * grew past 2 pages) wouldn't have it survive a fork -- true of this
- * checkpoint's own test but not the general case, same spirit as
- * mm/elf.c's own "no filesystem yet" caveat elsewhere in this
- * kernel. */
+ * ranges the same way), so fork() just clones the same fixed windows
+ * every process is known to actually use -- 16MB from 0, comfortably
+ * covering any of this kernel's real ELF payloads' code/data/BSS; the
+ * 2-page stack at 0xB0000000 (process_create_from_elf's own
+ * STACK_VA); and 1MB of arch/riscv64_syscall.c's own mmap arena
+ * (MMAP_BASE, same value duplicated here rather than shared via a
+ * header -- matches this function's existing "each fixed window
+ * hardcoded where it's used" style).
+ *
+ * That third range is checkpoint 9's own real bug, found running
+ * busybox ash for the first time: ash mmap()s a buffer for reading
+ * its script *before* fork()ing to run an external command (this
+ * function originally only cloned the first two ranges) -- the
+ * forked child's own post-fork/pre-execve code (still running ash's
+ * own binary, same as any real fork()) touched that buffer, which
+ * its own COW-cloned address space never had mapped at all (not
+ * missing a copy -- genuinely absent, unlike a stale-but-present COW
+ * page), producing an unhandled load page fault. Every earlier
+ * fork()-using test in this kernel used a program that never called
+ * mmap, so this was invisible until a real, more complex program
+ * exercised fork() and mmap() together. A process that mapped
+ * anything outside these three windows still wouldn't survive a fork
+ * -- true of every real program this checkpoint actually runs, but
+ * not the general case, same spirit as mm/elf.c's own "no filesystem
+ * yet" caveat elsewhere in this kernel. */
 #define FORK_CLONE_LO 0x0UL
 #define FORK_CLONE_HI 0x1000000UL   /* 16MB */
 #define FORK_STACK_LO 0xB0000000UL
 #define FORK_STACK_HI 0xB0002000UL  /* 2 pages, matches process_create_from_elf's own stack_pages */
+#define FORK_MMAP_LO 0x60000000UL  /* arch/riscv64_syscall.c's MMAP_BASE */
+#define FORK_MMAP_HI 0x60100000UL  /* 1MB -- comfortably past what any real fork()+mmap() test here actually uses */
 
 int process_fork(struct regs *r) {
 	struct process *parent = current_process;
@@ -360,6 +381,7 @@ int process_fork(struct regs *r) {
 	unsigned long *child_root = paging_new_addrspace();
 	paging_fork_cow(child_root, parent->root_table, FORK_CLONE_LO, FORK_CLONE_HI);
 	paging_fork_cow(child_root, parent->root_table, FORK_STACK_LO, FORK_STACK_HI);
+	paging_fork_cow(child_root, parent->root_table, FORK_MMAP_LO, FORK_MMAP_HI);
 
 	child->root_table = child_root;
 	child->pid = next_pid++;
@@ -423,13 +445,21 @@ int process_fork(struct regs *r) {
  * kernel's P4 task scheduler already uses for its own timer-driven
  * wait (`while (g_ticks - last_tick < TICKS_PER_SWITCH) wfi();`) --
  * consistent with the rest of this codebase, not a new shortcut. */
-long process_wait4(int pid, int *status_out) {
+#define WNOHANG 1
+#define ECHILD 10
+
+long process_wait4(int pid, int *status_out, int options) {
 	struct process *me = current_process;
 	for (;;) {
+		int have_matching_child = 0;
 		for (int i = 0; i < MAX_PROCESSES; i++) {
 			struct process *p = &processes[i];
-			if (p->state == PROC_ZOMBIE && p->ppid == me->pid &&
-			    (pid == -1 || p->pid == pid)) {
+			if (p->state == PROC_UNUSED || p->ppid != me->pid)
+				continue;
+			if (pid != -1 && p->pid != pid)
+				continue;
+			have_matching_child = 1;
+			if (p->state == PROC_ZOMBIE) {
 				int reaped_pid = p->pid;
 				if (status_out)
 					*status_out = (p->exit_code & 0xff) << 8; /* WIFEXITED/WEXITSTATUS-decodable, real Linux encoding */
@@ -437,6 +467,10 @@ long process_wait4(int pid, int *status_out) {
 				return reaped_pid;
 			}
 		}
+		if (!have_matching_child)
+			return -ECHILD;
+		if (options & WNOHANG)
+			return 0;
 		process_schedule();
 	}
 }

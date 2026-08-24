@@ -11,6 +11,7 @@
 #include "proc_test_elf_riscv64_payload.h"
 #include "proc_fork_test_elf_riscv64_payload.h"
 #include "proc_exec_test_elf_riscv64_payload.h"
+#include "init_test_elf_riscv64_payload.h"
 
 static volatile int g_breakpoint_hit = 0;
 
@@ -268,6 +269,7 @@ void run_elf_test(void) {
  * in, same idea as arch/riscv64_syscall.c's sys_exit/sys_exit_group
  * chaining P4->P5 checkpoint 1->P5 checkpoint 2. */
 static void run_exec_test(void);
+static void run_init_test(void);
 
 static void run_fork_test(void) {
 	kprintf("P6 checkpoint OK\n");
@@ -290,12 +292,31 @@ static void run_fork_test(void) {
  * mechanism. Chained the same way as checkpoint 7 above. */
 static void run_exec_test(void) {
 	kprintf("P7 checkpoint OK\n");
+	process_set_drain_hook(run_init_test);
 	struct process *p = process_create_from_elf(proc_exec_test_elf_riscv64_payload, PROC_EXEC_TEST_ELF_RISCV64_SIZE, "exec_test");
 	if (!p) {
 		kprintf("FATAL: process_create_from_elf failed\n");
 		for (;;) __builtin_riscv_wfi();
 	}
 	kprintf("process: exec test process created (pid %d)\n", p->pid);
+	process_run(p);
+	/* not expected to return */
+}
+
+/* --- checkpoint 9: the actual milestone -- real busybox ash, forked
+ * and exec'd via mm/ramfs.h's multi-call table, running a real script
+ * that exercises both an ash builtin and a real external command
+ * (echo) resolved and exec'd through busybox's own argv[0] dispatch.
+ * See user_test/init_test_riscv64.c and mm/ramfs.c's test.sh for the
+ * full mechanism. Chained the same way as every checkpoint above. */
+static void run_init_test(void) {
+	kprintf("P8 checkpoint OK\n");
+	struct process *p = process_create_from_elf(init_test_elf_riscv64_payload, INIT_TEST_ELF_RISCV64_SIZE, "init_test");
+	if (!p) {
+		kprintf("FATAL: process_create_from_elf failed\n");
+		for (;;) __builtin_riscv_wfi();
+	}
+	kprintf("process: init test process created (pid %d)\n", p->pid);
 	process_run(p);
 	/* not expected to return */
 }

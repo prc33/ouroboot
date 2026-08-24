@@ -1,7 +1,7 @@
 /* GENERATED from a real-mnemonic source by arch/gen_riscv64_asm.sh --
  * do not hand-edit (except the .rept-collapsed padding, added by hand
  * for readability; the 7 real instructions are exactly the
- * generator's raw output for `li sp, 0x80304000; li t0, 0x80201000;
+ * generator's raw output for `li sp, 0x80604000; li t0, 0x80201000;
  * jalr x0, 0(t0)` -- `li` expands to a 3-instruction lui+addiw+slli
  * sequence here rather than the more obvious lui+addi, because a
  * naive `lui rd, 0x80304` sign-extends: 0x80304's own bit 19 is set,
@@ -34,8 +34,8 @@
 .globl _start
 _start:
 	.long 0x00020137	/* lui sp,0x20 */
-	.long 0x0c11011b	/* addiw sp,sp,193 -- sp now 0x200c1 */
-	.long 0x00e11113	/* slli sp,sp,0xe -- sp = 0x80304000 (RV64_BOOT_STACK_TOP) */
+	.long 0x1811011b	/* addiw sp,sp,385 -- sp now 0x20181 */
+	.long 0x00e11113	/* slli sp,sp,0xe -- sp = 0x80604000 (RV64_BOOT_STACK_TOP) */
 	.long 0x000802b7	/* lui t0,0x80 */
 	.long 0x2012829b	/* addiw t0,t0,513 -- t0 now 0x80201 */
 	.long 0x00c29293	/* slli t0,t0,0xc -- t0 = 0x80201000 (KERNEL_LINK_BASE + 0x1000) */

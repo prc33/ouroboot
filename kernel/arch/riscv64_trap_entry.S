@@ -4,7 +4,7 @@
  * The one stvec target for every trap on this kernel: exceptions,
  * interrupts, and `ecall` (our syscall gate) alike -- RISC-V has a
  * single unified vector, unlike i386's 256-entry IDT (genuinely
- * simpler here). All addresses below (0x80306000 etc) are hardcoded
+ * simpler here). All addresses below (0x80606000 etc) are hardcoded
  * constants from arch/riscv64_memmap.h, not symbols -- this file is
  * raw .long-encoded machine code, and riscv64 TCC's assembler has no
  * relocation support for hand-written .S files at all (see
@@ -74,7 +74,7 @@
 riscv64_trap_entry:
 	.long 0x140f9ff3	/* csrrw t6,sscratch,t6 */
 	.long 0x00040fb7	/* lui t6,0x40 */
-	.long 0x183f8f9b	/* addiw t6,t6,387 # 40183 <riscv64_trap_return+0x4009f> */
+	.long 0x303f8f9b	/* addiw t6,t6,771 # 40303 <riscv64_trap_return+0x4021f> */
 	.long 0x00df9f93	/* slli t6,t6,0xd */
 	.long 0x001fb023	/* sd ra,0(t6) */
 	.long 0x002fb423	/* sd sp,8(t6) */
@@ -117,22 +117,22 @@ riscv64_trap_entry:
 	.long 0x14302f73	/* csrr t5,stval */
 	.long 0x11efb823	/* sd t5,272(t6) */
 	.long 0x00080f37	/* lui t5,0x80 */
-	.long 0x305f0f1b	/* addiw t5,t5,773 # 80305 <riscv64_trap_return+0x80221> */
+	.long 0x605f0f1b	/* addiw t5,t5,1541 # 80605 <riscv64_trap_return+0x80521> */
 	.long 0x00cf1f13	/* slli t5,t5,0xc */
 	.long 0x008f0f13	/* addi t5,t5,8 */
 	.long 0x000f3103	/* ld sp,0(t5) */
 	.long 0x00040537	/* lui a0,0x40 */
-	.long 0x1835051b	/* addiw a0,a0,387 # 40183 <riscv64_trap_return+0x4009f> */
+	.long 0x3035051b	/* addiw a0,a0,771 # 40303 <riscv64_trap_return+0x4021f> */
 	.long 0x00d51513	/* slli a0,a0,0xd */
 	.long 0x000802b7	/* lui t0,0x80 */
-	.long 0x3052829b	/* addiw t0,t0,773 # 80305 <riscv64_trap_return+0x80221> */
+	.long 0x6052829b	/* addiw t0,t0,1541 # 80605 <riscv64_trap_return+0x80521> */
 	.long 0x00c29293	/* slli t0,t0,0xc */
 	.long 0x0002b283	/* ld t0,0(t0) */
 	.long 0x000280e7	/* jalr t0 */
 .globl riscv64_trap_return
 riscv64_trap_return:
 	.long 0x00040fb7	/* lui t6,0x40 */
-	.long 0x183f8f9b	/* addiw t6,t6,387 # 40183 <riscv64_trap_return+0x4009f> */
+	.long 0x303f8f9b	/* addiw t6,t6,771 # 40303 <riscv64_trap_return+0x4021f> */
 	.long 0x00df9f93	/* slli t6,t6,0xd */
 	.long 0x0f8fbf03	/* ld t5,248(t6) */
 	.long 0x141f1073	/* csrw sepc,t5 */
