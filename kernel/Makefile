@@ -183,10 +183,34 @@ RISCV64_TEST_ASSERTIONS := \
 	--must-contain "builtin ok" \
 	--must-contain "init test: ash_status=5" \
 	--must-contain "P9 checkpoint OK" \
+	--must-contain "built-in shell (ash)" \
+	--must-contain "hello ash" \
+	--must-contain "process: all processes exited" \
+	--must-contain "P10 checkpoint OK" \
 	--must-not-contain "FATAL" \
 	--must-not-contain "UNHANDLED EXCEPTION" \
 	--must-not-contain "UNHANDLED INTERRUPT" \
 	--must-not-contain "PAGE FAULT"
+
+# checkpoint 10: real commands fed to real interactive ash via real
+# stdin (kernel/riscv64_kmain.c's run_interactive_test) -- exactly
+# what a person typing at the browser terminal would produce, just
+# delivered all at once instead of paced by real keystrokes (see
+# test/boot_test.py's and emulator/js/boot.js's own comments on their
+# respective --stdin-input/--input flags for why that's still a
+# faithful correctness check). `exit 7`'s specific code isn't asserted
+# here (no wait4() catches it -- run_interactive_test doesn't fork,
+# ash *is* the whole process, same as a real login shell) -- the real
+# proof is closer to home: if ash's interactive read loop didn't
+# correctly terminate on `exit`, the process tree would never drain
+# and "P10 checkpoint OK" would simply never print.
+#
+# Literal two-character "\n" here, not a real newline byte -- both
+# test/boot_test.py's --stdin-input and emulator/js/boot.js's --input
+# decode that escape themselves, deliberately sidestepping the
+# make-variable/shell-recipe/subprocess-argv quoting stack a real
+# embedded newline would have to survive unmangled through all three.
+RISCV64_INTERACTIVE_INPUT := echo hello ash\nexit 7\n
 
 test: kernel.elf
 	python3 test/boot_test.py kernel.elf \
@@ -194,6 +218,7 @@ test: kernel.elf
 		--qemu-arg=-M --qemu-arg=virt \
 		--qemu-arg=-bios --qemu-arg=default \
 		--qemu-arg=-cpu --qemu-arg=rv64,sstc=true \
+		--stdin-input "$(RISCV64_INTERACTIVE_INPUT)" \
 		$(RISCV64_TEST_ASSERTIONS)
 
 # Our own from-scratch emulator (emulator/js/) instead of QEMU -- see
@@ -206,6 +231,7 @@ test-js: kernel.elf
 	node ../emulator/js/boot.js kernel.elf \
 		--max-instructions 200000000 \
 		--time-advance 100 \
+		--input "$(RISCV64_INTERACTIVE_INPUT)" \
 		$(RISCV64_TEST_ASSERTIONS)
 endif
 

@@ -12,6 +12,7 @@
 #include "proc_fork_test_elf_riscv64_payload.h"
 #include "proc_exec_test_elf_riscv64_payload.h"
 #include "init_test_elf_riscv64_payload.h"
+#include "interactive_test_elf_riscv64_payload.h"
 
 static volatile int g_breakpoint_hit = 0;
 
@@ -270,6 +271,7 @@ void run_elf_test(void) {
  * chaining P4->P5 checkpoint 1->P5 checkpoint 2. */
 static void run_exec_test(void);
 static void run_init_test(void);
+static void run_interactive_test(void);
 
 static void run_fork_test(void) {
 	kprintf("P6 checkpoint OK\n");
@@ -311,12 +313,35 @@ static void run_exec_test(void) {
  * full mechanism. Chained the same way as every checkpoint above. */
 static void run_init_test(void) {
 	kprintf("P8 checkpoint OK\n");
+	process_set_drain_hook(run_interactive_test);
 	struct process *p = process_create_from_elf(init_test_elf_riscv64_payload, INIT_TEST_ELF_RISCV64_SIZE, "init_test");
 	if (!p) {
 		kprintf("FATAL: process_create_from_elf failed\n");
 		for (;;) __builtin_riscv_wfi();
 	}
 	kprintf("process: init test process created (pid %d)\n", p->pid);
+	process_run(p);
+	/* not expected to return */
+}
+
+/* --- checkpoint 10: the "interactively" half of docs/emulator-plan.md's
+ * P4 exit criterion -- real busybox ash (-i, forced interactive; see
+ * user_test/interactive_test_riscv64.c) reading real commands from
+ * real stdin (the UART) instead of a ramfs script file. What actually
+ * feeds those commands in lives outside the kernel entirely: real
+ * QEMU via kernel/test/boot_test.py's --stdin-input (-serial stdio
+ * maps straight onto the process's own stdin), and emulator/js/'s own
+ * --input (uart.js's pushInput(), there since P3, exercised for real
+ * for the first time here) -- see kernel/Makefile for exactly what
+ * gets typed. */
+static void run_interactive_test(void) {
+	kprintf("P9 checkpoint OK\n");
+	struct process *p = process_create_from_elf(interactive_test_elf_riscv64_payload, INTERACTIVE_TEST_ELF_RISCV64_SIZE, "interactive_test");
+	if (!p) {
+		kprintf("FATAL: process_create_from_elf failed\n");
+		for (;;) __builtin_riscv_wfi();
+	}
+	kprintf("process: interactive test process created (pid %d)\n", p->pid);
 	process_run(p);
 	/* not expected to return */
 }

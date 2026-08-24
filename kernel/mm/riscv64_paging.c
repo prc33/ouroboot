@@ -30,6 +30,7 @@
 #include "arch/riscv64_memmap.h"
 #include "pmm.h"
 #include "paging.h"
+#include "sched/process.h"
 
 #define ENTRIES 512
 #define VPN_MASK 0x1FFUL
@@ -236,6 +237,8 @@ static void page_fault_handler(struct regs *r) {
 	int is_write = (r->scause == 15); /* Store/AMO page fault */
 
 	unsigned long *pte = get_pte(page, 0);
+	kprintf("DBGPF: pid=%d active_root=%p page=%p pte=%p sepc=%p ra=%p sp=%p scause=%lu is_write=%d\n",
+		process_current_pid(), (void *)active_root, (void *)page, (void *)(pte?*pte:0), (void *)r->sepc, (void *)r->ra, (void *)r->sp, r->scause, is_write);
 
 	if (is_write && pte && (*pte & 1) && (*pte & PTE_COW)) {
 		unsigned long old_phys = (*pte >> PPN_SHIFT) << 12;

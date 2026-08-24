@@ -8,7 +8,17 @@
  *
  * Usage: node boot.js <kernel.elf> [--max-instructions N]
  *                      [--must-contain STR ...] [--must-not-contain STR ...]
- */
+ *                      [--input STR]
+ *
+ * --input: bytes queued into the UART's RX side (uart.js's own
+ * pushInput(), there since P3 but never exercised until checkpoint 10
+ * gave the kernel a real blocking stdin reader) before boot starts.
+ * All queued at once rather than paced against instruction count or
+ * wall time -- sys_read's own blocking loop (arch/riscv64_syscall.c)
+ * only ever consumes one byte per read() call regardless of how many
+ * are already queued, so this is equivalent to "the user typed
+ * everything instantly", not a timing simulation; correct for an
+ * automated correctness check, not a demo of realistic typing speed. */
 const fs = require('fs');
 const { Memory, RAM_BASE } = require('./memory');
 const { Uart16550, UART_BASE } = require('./uart');
@@ -16,7 +26,7 @@ const { Cpu } = require('./cpu');
 const { loadElf } = require('./elf');
 
 function parseArgs(argv) {
-	const args = { mustContain: [], mustNotContain: [], maxInstructions: 200_000_000, timeAdvance: 1n };
+	const args = { mustContain: [], mustNotContain: [], maxInstructions: 200_000_000, timeAdvance: 1n, input: '' };
 	let kernel = null;
 	for (let i = 0; i < argv.length; i++) {
 		const a = argv[i];
@@ -24,6 +34,7 @@ function parseArgs(argv) {
 		else if (a === '--must-not-contain') args.mustNotContain.push(argv[++i]);
 		else if (a === '--max-instructions') args.maxInstructions = Number(argv[++i]);
 		else if (a === '--time-advance') args.timeAdvance = BigInt(argv[++i]);
+		else if (a === '--input') args.input = argv[++i].replace(/\\n/g, '\n'); /* literal \n -> real newline, same convention as test/boot_test.py's --stdin-input */
 		else if (!kernel) kernel = a;
 		else throw new Error(`unexpected arg: ${a}`);
 	}
@@ -37,6 +48,8 @@ function boot(args) {
 	let output = '';
 	const uart = new Uart16550((byte) => { output += String.fromCharCode(byte); });
 	mem.addDevice(UART_BASE, 8n, uart);
+	for (let i = 0; i < args.input.length; i++)
+		uart.pushInput(args.input.charCodeAt(i));
 
 	const buf = fs.readFileSync(args.kernel);
 	const elf = loadElf(new Uint8Array(buf));

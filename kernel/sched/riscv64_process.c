@@ -267,15 +267,15 @@ static void halt_process_test(void) __attribute__((noreturn));
 static void halt_process_test(void) {
 	/* Reached only once the process table has drained *and* no drain
 	 * hook chained in another test -- currently that means every
-	 * checkpoint 6/7/8/9 test has finished (riscv64_kmain.c's
-	 * run_process_test/run_fork_test/run_exec_test/run_init_test), so
-	 * this is genuinely the last checkpoint in the chain right now.
-	 * Will need the "P9" bumped (or replaced with a hook-supplied
-	 * string) if a checkpoint 10 ever chains in after this one, same
-	 * as every earlier "next checkpoint appends here" point in this
-	 * kernel's own history. */
+	 * checkpoint 6-10 test has finished (riscv64_kmain.c's
+	 * run_process_test/run_fork_test/run_exec_test/run_init_test/
+	 * run_interactive_test), so this is genuinely the last checkpoint
+	 * in the chain right now. Will need the "P10" bumped (or replaced
+	 * with a hook-supplied string) if a checkpoint 11 ever chains in
+	 * after this one, same as every earlier "next checkpoint appends
+	 * here" point in this kernel's own history. */
 	kprintf("process: all processes exited\n");
-	kprintf("P9 checkpoint OK\n");
+	kprintf("P10 checkpoint OK\n");
 	kprintf("halting.\n");
 	for (;;) __builtin_riscv_wfi();
 }

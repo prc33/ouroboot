@@ -25,7 +25,7 @@ DEFAULT_TIMEOUT = 10
 DEFAULT_MEM_MB = 32
 
 
-def boot_and_capture(kernel_path, timeout, mem_mb, extra_qemu_args=None, qemu_binary="qemu-system-i386"):
+def boot_and_capture(kernel_path, timeout, mem_mb, extra_qemu_args=None, qemu_binary="qemu-system-i386", stdin_input=None):
 	cmd = [
 		"timeout", str(timeout),
 		qemu_binary,
@@ -37,7 +37,15 @@ def boot_and_capture(kernel_path, timeout, mem_mb, extra_qemu_args=None, qemu_bi
 	]
 	if extra_qemu_args:
 		cmd += extra_qemu_args
-	proc = subprocess.run(cmd, capture_output=True, text=True)
+	# `-serial stdio` maps the UART straight onto this process's own
+	# stdin/stdout -- checkpoint 10's real blocking stdin read
+	# (arch/riscv64_syscall.c's sys_read fd 0) means whatever we feed
+	# `input=` here is exactly what a real interactive session typed
+	# at a real terminal would produce, same UART byte protocol
+	# either way. Passed as one shot (not paced against wall time) --
+	# same "correctness over realistic typing speed" reasoning as
+	# emulator/js/boot.js's own --input.
+	proc = subprocess.run(cmd, capture_output=True, text=True, input=stdin_input)
 	# exit code 124 from `timeout` means we hit the wall clock, which is
 	# EXPECTED for any kernel that halts forever after printing (no
 	# graceful shutdown mechanism exists yet) -- so we treat "output
@@ -46,9 +54,9 @@ def boot_and_capture(kernel_path, timeout, mem_mb, extra_qemu_args=None, qemu_bi
 	return proc.stdout, proc.returncode
 
 
-def run(kernel_path, must_contain, must_not_contain, timeout, mem_mb, extra_qemu_args=None, qemu_binary="qemu-system-i386"):
+def run(kernel_path, must_contain, must_not_contain, timeout, mem_mb, extra_qemu_args=None, qemu_binary="qemu-system-i386", stdin_input=None):
 	print(f"--- booting {kernel_path} with {qemu_binary} (timeout={timeout}s, mem={mem_mb}MB) ---")
-	output, qemu_exit = boot_and_capture(kernel_path, timeout, mem_mb, extra_qemu_args, qemu_binary)
+	output, qemu_exit = boot_and_capture(kernel_path, timeout, mem_mb, extra_qemu_args, qemu_binary, stdin_input)
 
 	failures = []
 
@@ -95,10 +103,14 @@ def main():
 	                 help="extra raw arg to pass to the qemu binary (repeatable)")
 	ap.add_argument("--qemu-binary", default="qemu-system-i386",
 	                 help="qemu system binary to boot under (default: qemu-system-i386)")
+	ap.add_argument("--stdin-input", default=None,
+	                 help="bytes to feed the kernel's UART RX side (real stdin, via -serial stdio) -- see boot_and_capture()'s own comment. "
+	                      "Literal \\n (backslash-n, two characters) is decoded to a real newline; nothing else is.")
 	args = ap.parse_args()
 
+	stdin_input = args.stdin_input.replace("\\n", "\n") if args.stdin_input is not None else None
 	rc = run(args.kernel, args.must_contain, args.must_not_contain,
-	         args.timeout, args.mem_mb, args.extra_qemu_args, args.qemu_binary)
+	         args.timeout, args.mem_mb, args.extra_qemu_args, args.qemu_binary, stdin_input)
 	sys.exit(rc)
 
 

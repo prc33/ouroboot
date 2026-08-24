@@ -57,6 +57,9 @@
 #define SYS_getppid                                                                 173
 #define SYS_geteuid                                                                    175
 #define SYS_fcntl                                                                         25
+#define SYS_getuid                                                                            174
+#define SYS_getgid                                                                               176
+#define SYS_getegid                                                                                 177
 #define SYS_getpid                                                                           172
 
 #define F_DUPFD 0
@@ -575,6 +578,25 @@ static void sys_geteuid(struct regs *r) {
 	r->a0 = 0;
 }
 
+static void sys_getuid(struct regs *r) {
+	/* checkpoint 10: real ash's own interactive startup calls this
+	 * (real uid, not effective) to decide the default prompt ("# " for
+	 * root, "$ " otherwise) -- same "always root" answer as geteuid. */
+	(void)r;
+	r->a0 = 0;
+}
+
+static void sys_getgid(struct regs *r) {
+	/* Same "always root, one trust domain" reasoning as sys_getuid. */
+	(void)r;
+	r->a0 = 0;
+}
+
+static void sys_getegid(struct regs *r) {
+	(void)r;
+	r->a0 = 0;
+}
+
 static void sys_getpid(struct regs *r) {
 	r->a0 = (unsigned long)process_current_pid();
 }
@@ -664,6 +686,9 @@ static void syscall_dispatch(struct regs *r) {
 	case SYS_rt_sigaction:                                                          sys_rt_sigaction(r); return;
 	case SYS_getppid:                                                                        sys_getppid(r); return;
 	case SYS_geteuid:                                                                             sys_geteuid(r); return;
+	case SYS_getuid:                                                                                 sys_getuid(r); return;
+	case SYS_getgid:                                                                                    sys_getgid(r); return;
+	case SYS_getegid:                                                                                      sys_getegid(r); return;
 	case SYS_getpid:                                                                                 sys_getpid(r); return;
 	case SYS_fcntl:                                                                                     sys_fcntl(r); return;
 	default:
