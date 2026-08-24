@@ -29,9 +29,12 @@ class Uart16550 {
 	}
 
 	/* Feed input bytes in (e.g. from a browser terminal, or stdin in
-	 * Node) -- not exercised by kernel/'s own test suite (it never
-	 * reads), but implemented since a real terminal needs it, and it
-	 * costs nothing to have ready for P3. */
+	 * Node) -- exercised since checkpoint 10 by kernel/Makefile's own
+	 * test-js target (RISCV64_INTERACTIVE_INPUT, fed via boot.js's
+	 * --input) and by the browser demo's real keyboard input
+	 * (app.js's term.onData -> worker.js -> here), now that
+	 * kernel/arch/riscv64_syscall.c's sys_read has a real reader on
+	 * the other end. */
 	pushInput(byte) {
 		this.rxQueue.push(byte & 0xff);
 	}

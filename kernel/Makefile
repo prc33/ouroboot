@@ -205,13 +205,22 @@ RISCV64_TEST_ASSERTIONS := \
 # correctly terminate on `exit`, the process tree would never drain
 # and "P10 checkpoint OK" would simply never print.
 #
-# Literal two-character "\n" here, not a real newline byte -- both
-# test/boot_test.py's --stdin-input and emulator/js/boot.js's --input
-# decode that escape themselves, deliberately sidestepping the
-# make-variable/shell-recipe/subprocess-argv quoting stack a real
-# embedded newline would have to survive unmangled through all three.
+# Literal two-character "\n"/"\r" here, not real newline/CR bytes --
+# both test/boot_test.py's --stdin-input and emulator/js/boot.js's
+# --input decode those escapes themselves, deliberately sidestepping
+# the make-variable/shell-recipe/subprocess-argv quoting stack a real
+# embedded byte would have to survive unmangled through all three.
 #
-# Leading \n\n: real QEMU's `-serial stdio` loses exactly the first 2
+# \r, not \n, terminates each line here -- deliberately, and this is
+# the real regression test for a real bug: a real terminal always
+# sends '\r' (0x0D) for Enter, never '\n' (confirmed by instrumenting
+# xterm.js's term.onData in the browser demo -- see arch/riscv64_syscall.c's
+# sys_read for the ICRNL-by-hand translation this exercises). Using
+# \n here instead would silently stop testing the exact byte a real
+# human's Enter key -- or a real terminal attached to a real QEMU
+# `-serial stdio` in interactive mode -- actually produces.
+#
+# Leading \r\r: real QEMU's `-serial stdio` loses exactly the first 2
 # bytes fed in over a pipe, consistently -- confirmed real (traced
 # down to arch/riscv64_syscall.c's sys_read never even seeing them)
 # and confirmed harmless for real interactive use (a human can't type
@@ -224,7 +233,7 @@ RISCV64_TEST_ASSERTIONS := \
 # either way. A no-op for emulator/js/boot.js's own --input too (it
 # never loses anything -- see uart.js's own comment), just two extra
 # harmless empty prompts.
-RISCV64_INTERACTIVE_INPUT := \n\necho hello ash\nexit 7\n
+RISCV64_INTERACTIVE_INPUT := \r\recho hello ash\rexit 7\r
 
 test: kernel.elf
 	python3 test/boot_test.py kernel.elf \

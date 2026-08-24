@@ -105,10 +105,10 @@ def main():
 	                 help="qemu system binary to boot under (default: qemu-system-i386)")
 	ap.add_argument("--stdin-input", default=None,
 	                 help="bytes to feed the kernel's UART RX side (real stdin, via -serial stdio) -- see boot_and_capture()'s own comment. "
-	                      "Literal \\n (backslash-n, two characters) is decoded to a real newline; nothing else is.")
+	                      "Literal \\n and \\r (backslash-n/r, two characters each) are decoded to a real newline/carriage-return; nothing else is.")
 	args = ap.parse_args()
 
-	stdin_input = args.stdin_input.replace("\\n", "\n") if args.stdin_input is not None else None
+	stdin_input = args.stdin_input.replace("\\n", "\n").replace("\\r", "\r") if args.stdin_input is not None else None
 	rc = run(args.kernel, args.must_contain, args.must_not_contain,
 	         args.timeout, args.mem_mb, args.extra_qemu_args, args.qemu_binary, stdin_input)
 	sys.exit(rc)

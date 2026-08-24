@@ -414,7 +414,25 @@ static void sys_read(struct regs *r) {
 		while (!serial_rx_ready())
 			process_schedule();
 		paging_ensure_writable((unsigned long)buf, 1); /* see mm/riscv64_paging.c's own comment -- real bug found here first */
-		buf[0] = serial_getc();
+		unsigned char c = serial_getc();
+		/* ICRNL, by hand: every real tty driver translates an
+		 * incoming CR to LF before a line-buffered reader ever sees
+		 * it (that's what termios' ICRNL flag is), because a real
+		 * terminal always sends '\r' (0x0D) for Enter, never '\n' --
+		 * confirmed for this kernel's own case by instrumenting
+		 * xterm.js's term.onData in the browser demo: pressing Enter
+		 * produces byte 13, not 10. shell/ash.c's own lexer only ever
+		 * treats '\n' as end-of-line, so without this translation no
+		 * real terminal (this browser demo, or a real one attached to
+		 * a real QEMU `-serial stdio` in interactive mode, as opposed
+		 * to checkpoint 10's own piped-literal-\n test input) could
+		 * ever get a command line to execute at all. There's no tty
+		 * layer to put this in otherwise (sys_read's own header
+		 * comment), so it lives right here at the only place raw
+		 * bytes become a line a shell reads. */
+		if (c == '\r')
+			c = '\n';
+		buf[0] = c;
 		r->a0 = 1;
 		return;
 	}

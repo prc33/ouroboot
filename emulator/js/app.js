@@ -27,9 +27,13 @@ worker.onmessage = function (ev) {
 	}
 };
 
-/* Keyboard input -> UART RX. kernel/'s own test binaries never read
- * (see docs/emulator-p1-findings.md), so this is untested against
- * anything real yet, but costs nothing to wire up now for P4+. */
+/* Keyboard input -> UART RX. Wired up since P3 for a future that
+ * checkpoint 10 (kernel/arch/riscv64_syscall.c's sys_read) has now
+ * arrived at: a real interactive busybox ash reading real stdin.
+ * Verified end-to-end via Puppeteer -- typed keystrokes reaching this
+ * handler, going out over worker.postMessage, landing in the kernel's
+ * own UART RX FIFO (uart.js's pushInput()), and coming back out the
+ * other side as real shell output. */
 term.onData((data) => {
 	for (let i = 0; i < data.length; i++)
 		worker.postMessage({ type: 'input', byte: data.charCodeAt(i) });

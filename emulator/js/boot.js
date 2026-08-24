@@ -34,7 +34,7 @@ function parseArgs(argv) {
 		else if (a === '--must-not-contain') args.mustNotContain.push(argv[++i]);
 		else if (a === '--max-instructions') args.maxInstructions = Number(argv[++i]);
 		else if (a === '--time-advance') args.timeAdvance = BigInt(argv[++i]);
-		else if (a === '--input') args.input = argv[++i].replace(/\\n/g, '\n'); /* literal \n -> real newline, same convention as test/boot_test.py's --stdin-input */
+		else if (a === '--input') args.input = argv[++i].replace(/\\n/g, '\n').replace(/\\r/g, '\r'); /* literal \n/\r -> real newline/CR, same convention as test/boot_test.py's --stdin-input */
 		else if (!kernel) kernel = a;
 		else throw new Error(`unexpected arg: ${a}`);
 	}
@@ -63,10 +63,25 @@ function boot(args) {
 	 * We deliberately do NOT set x2 here, so a bug in that assumption
 	 * would surface the same way it would on real hardware. */
 
+	/* Checking every --must-contain string against the whole captured
+	 * output is real work (checkpoint 10's own test has ~40 of them,
+	 * against an output string that grows past 10KB by the time it's
+	 * done) -- doing it after literally every single instruction, as
+	 * this loop did through checkpoint 9, is O(instructions x
+	 * assertions x output length) for no benefit: the loop doesn't
+	 * need to notice the exact instruction everything showed up on,
+	 * just notice *soon enough*. Checkpoint 9's instruction counts
+	 * never made this matter; checkpoint 10's real interactive read()
+	 * loop (spin-polling the UART, arch/riscv64_syscall.c's sys_read)
+	 * runs tens of millions of extra instructions past what checkpoint
+	 * 9 needed, and checking this often made that alone take minutes
+	 * longer than the CPU emulation itself did -- found by timing
+	 * `make ARCH=riscv64 test-js` against this exact checkpoint. */
+	const CHECK_EVERY = 10000;
 	let n = 0;
 	for (; n < args.maxInstructions; n++) {
 		cpu.step(args.timeAdvance);
-		if (args.mustContain.every((s) => output.includes(s)))
+		if (n % CHECK_EVERY === 0 && args.mustContain.every((s) => output.includes(s)))
 			break; /* early exit once everything we're waiting for has shown up */
 	}
 
