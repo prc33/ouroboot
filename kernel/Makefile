@@ -210,7 +210,21 @@ RISCV64_TEST_ASSERTIONS := \
 # decode that escape themselves, deliberately sidestepping the
 # make-variable/shell-recipe/subprocess-argv quoting stack a real
 # embedded newline would have to survive unmangled through all three.
-RISCV64_INTERACTIVE_INPUT := echo hello ash\nexit 7\n
+#
+# Leading \n\n: real QEMU's `-serial stdio` loses exactly the first 2
+# bytes fed in over a pipe, consistently -- confirmed real (traced
+# down to arch/riscv64_syscall.c's sys_read never even seeing them)
+# and confirmed harmless for real interactive use (a human can't type
+# before this kernel's own boot sequence, which is what's actually
+# consuming those 2 byte-times, finishes -- see drivers/riscv64_serial.c's
+# serial_init() and this repo's own commit history for the full
+# mechanism). Two throwaway blank lines absorb it losslessly: ash
+# treats an empty line as a no-op, and losing exactly 2 of the 2 bytes
+# that make them up leaves the real commands after them untouched
+# either way. A no-op for emulator/js/boot.js's own --input too (it
+# never loses anything -- see uart.js's own comment), just two extra
+# harmless empty prompts.
+RISCV64_INTERACTIVE_INPUT := \n\necho hello ash\nexit 7\n
 
 test: kernel.elf
 	python3 test/boot_test.py kernel.elf \

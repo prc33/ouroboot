@@ -30,7 +30,6 @@
 #include "arch/riscv64_memmap.h"
 #include "pmm.h"
 #include "paging.h"
-#include "sched/process.h"
 
 #define ENTRIES 512
 #define VPN_MASK 0x1FFUL
@@ -231,41 +230,45 @@ void paging_fork_cow(unsigned long *dst_root, unsigned long *src_root, unsigned 
 		__builtin_riscv_sfence_vma();
 }
 
+/* The actual copy-and-remap: shared by page_fault_handler() (the
+ * hardware path, for a real U-mode write) and paging_ensure_writable()
+ * (the software path, see that function's own comment for why it has
+ * to exist at all). Returns 0 on success, -1 on OOM -- callers decide
+ * what "failed" means for their own context (page_fault_handler halts
+ * the kernel; paging_ensure_writable propagates it as ENOMEM). */
+static int fix_cow_page(unsigned long *pte) {
+	unsigned long old_phys = (*pte >> PPN_SHIFT) << 12;
+	unsigned long new_phys = pmm_alloc_page();
+	if (!new_phys)
+		return -1;
+	unsigned char *src = (unsigned char *)old_phys;
+	unsigned char *dst = (unsigned char *)new_phys;
+	for (unsigned int i = 0; i < PAGE_SIZE; i++)
+		dst[i] = src[i];
+
+	/* Preserve PTE_USER from the pre-copy PTE (in *pte still, not yet
+	 * overwritten) rather than hardcoding just PRESENT|WRITABLE -- see
+	 * this function's git history for the real bug that taught this
+	 * (checkpoint 7's fork() test: dropping PTE_USER here made a
+	 * retried U-mode access fault *again*, for a different reason the
+	 * caller's COW check doesn't recognize). */
+	*pte = ((new_phys >> 12) << PPN_SHIFT) | PTE_PRESENT | PTE_WRITABLE | (*pte & PTE_USER);
+	__builtin_riscv_sfence_vma();
+	return 0;
+}
+
 static void page_fault_handler(struct regs *r) {
 	unsigned long fault_addr = r->stval;
 	unsigned long page = fault_addr & ~0xFFFUL;
 	int is_write = (r->scause == 15); /* Store/AMO page fault */
 
 	unsigned long *pte = get_pte(page, 0);
-	kprintf("DBGPF: pid=%d active_root=%p page=%p pte=%p sepc=%p ra=%p sp=%p scause=%lu is_write=%d\n",
-		process_current_pid(), (void *)active_root, (void *)page, (void *)(pte?*pte:0), (void *)r->sepc, (void *)r->ra, (void *)r->sp, r->scause, is_write);
 
 	if (is_write && pte && (*pte & 1) && (*pte & PTE_COW)) {
-		unsigned long old_phys = (*pte >> PPN_SHIFT) << 12;
-		unsigned long new_phys = pmm_alloc_page();
-		if (!new_phys) {
+		if (fix_cow_page(pte) < 0) {
 			kprintf("FATAL: page fault COW handler out of memory\n");
 			goto fatal;
 		}
-		unsigned char *src = (unsigned char *)old_phys;
-		unsigned char *dst = (unsigned char *)new_phys;
-		for (unsigned int i = 0; i < PAGE_SIZE; i++)
-			dst[i] = src[i];
-
-		/* Preserve PTE_USER from the pre-copy PTE (in *pte still, not
-		 * yet overwritten) rather than hardcoding just PRESENT|WRITABLE
-		 * -- real bug, found via checkpoint 7's fork() test: every COW
-		 * page before that was kmain.c's own run_cow_test(), entirely
-		 * kernel-only pages (no PTE_USER to begin with, so losing it
-		 * here was invisible). A *process* fork's COW pages are
-		 * U-mode stack/code -- dropping PTE_USER on the first write
-		 * made the retry fault *again* on the very next instruction,
-		 * this time for a completely different reason (U-mode access
-		 * to a now-kernel-only page) that this handler's COW check
-		 * doesn't recognize (PTE_COW is correctly cleared by then),
-		 * so it fell through to "unhandled". */
-		*pte = ((new_phys >> 12) << PPN_SHIFT) | PTE_PRESENT | PTE_WRITABLE | (*pte & PTE_USER);
-		__builtin_riscv_sfence_vma();
 		return; /* sret retries the faulting instruction, which now succeeds */
 	}
 
@@ -274,6 +277,59 @@ fatal:
 		r->scause, (void *)fault_addr, is_write ? "write" : "read/exec");
 	kprintf("FATAL: unhandled page fault, sepc=%p\n", (void *)r->sepc);
 	for (;;) __builtin_riscv_wfi();
+}
+
+/* checkpoint 10: real bug, found running real interactive ash --
+ * sys_read (arch/riscv64_syscall.c) writing a byte straight into a
+ * user-supplied buffer is completely ordinary syscall behavior, done
+ * throughout this kernel, and *usually* safe since sstatus.SUM
+ * already lets S-mode touch U-mode pages directly. But if that
+ * buffer's page happens to still be COW-marked (routine after a real
+ * fork() -- exactly ash's own case: it mmap()s a read buffer, then
+ * forks to run an external command, which COW-shares that buffer;
+ * the *next* read() into it is the first write since the fork), the
+ * write faults -- and unlike every *other* COW fault in this kernel
+ * (always a real U-mode instruction faulting), this one happens
+ * *while the kernel is already servicing an ecall trap*. A page
+ * fault is itself a trap, routed through the exact same single
+ * global trapframe (arch/riscv64_memmap.h's RV64_TRAPFRAME_BASE) the
+ * outer ecall is still using -- this kernel's entire trap design
+ * assumes traps never nest (stated outright in
+ * arch/riscv64_trap_entry.S's own comment), and a fault
+ * mid-syscall is exactly the nested trap that assumption rules out.
+ * The inner fault's own trap entry clobbers the outer ecall's saved
+ * context before the outer trap ever gets to restore it, and the
+ * *outer* sret ends up resuming from garbage -- confirmed as the
+ * actual mechanism via a temporary register-level trace, not
+ * guessed.
+ *
+ * Real fix would be real trap nesting (a stack of trapframes instead
+ * of one fixed slot) -- correct, but a rewrite of the most delicate
+ * hand-assembled file in this kernel, for a case that has exactly one
+ * trigger: kernel code dereferencing a possibly-still-COW user
+ * pointer. Cheaper and just as correct: never let that dereference
+ * fault in the first place. Every syscall that writes into a
+ * caller-supplied buffer calls this first, once per page the write
+ * will touch, entirely in C, no trap involved -- if the page is
+ * COW-marked, fixes it right there (same fix_cow_page() the real
+ * hardware path uses); otherwise a no-op. A genuinely bad user
+ * pointer still faults for real and is still fatal, exactly as
+ * before -- this only forecloses the *false* faults a syscall's own
+ * writes would otherwise trigger. */
+void paging_ensure_writable(unsigned long addr, unsigned long len) {
+	if (len == 0)
+		return;
+	unsigned long start = addr & ~0xFFFUL;
+	unsigned long end = (addr + len - 1) & ~0xFFFUL;
+	for (unsigned long page = start; page <= end; page += PAGE_SIZE) {
+		unsigned long *pte = get_pte(page, 0);
+		if (pte && (*pte & 1) && (*pte & PTE_COW))
+			fix_cow_page(pte); /* OOM here just leaves it COW -- the
+			                     * caller's own write then faults for
+			                     * real and hits the ordinary (now
+			                     * correctly non-nested, since this
+			                     * isn't a trap) OOM path there. */
+	}
 }
 
 void paging_init(unsigned long mem_top) {

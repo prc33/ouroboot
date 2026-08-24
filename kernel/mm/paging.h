@@ -43,6 +43,15 @@ unsigned long *paging_active_root(void);
 void paging_map_page_in(unsigned long *root, unsigned long virt, unsigned long phys, unsigned long flags);
 unsigned long paging_get_phys_in(unsigned long *root, unsigned long virt);
 void paging_fork_cow(unsigned long *dst_root, unsigned long *src_root, unsigned long lo, unsigned long hi);
+
+/* checkpoint 10: resolves any COW page in [addr, addr+len) against the
+ * *active* address space, entirely in C, no trap involved -- call
+ * before any kernel write into a caller-supplied (user) buffer that
+ * might still be COW-marked. See mm/riscv64_paging.c's own comment
+ * for the real bug this exists to avoid (a page fault from *inside*
+ * a syscall handler is a nested trap this kernel's single global
+ * trapframe can't survive). */
+void paging_ensure_writable(unsigned long addr, unsigned long len);
 #endif
 
 #endif

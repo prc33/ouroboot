@@ -189,6 +189,8 @@ static void sys_wait4(struct regs *r) {
 	int pid = (int)(long)r->a0;
 	int *status = (int *)r->a1;
 	int options = (int)r->a2;
+	if (status)
+		paging_ensure_writable((unsigned long)status, sizeof(int));
 	r->a0 = (unsigned long)process_wait4(pid, status, options);
 }
 
@@ -411,6 +413,7 @@ static void sys_read(struct regs *r) {
 		}
 		while (!serial_rx_ready())
 			process_schedule();
+		paging_ensure_writable((unsigned long)buf, 1); /* see mm/riscv64_paging.c's own comment -- real bug found here first */
 		buf[0] = serial_getc();
 		r->a0 = 1;
 		return;
@@ -427,6 +430,7 @@ static void sys_read(struct regs *r) {
 	}
 	unsigned long remaining = entry->size - entry->pos;
 	unsigned long n = count < remaining ? count : remaining;
+	paging_ensure_writable((unsigned long)buf, n);
 	for (unsigned long i = 0; i < n; i++)
 		buf[i] = entry->data[entry->pos + i];
 	entry->pos += n;
@@ -506,6 +510,7 @@ static void sys_newfstatat(struct regs *r) {
 	char path[PATH_MAX_LOCAL];
 	copy_path_from_user(path, (const char *)r->a1);
 	unsigned char *sb = (unsigned char *)r->a2;
+	paging_ensure_writable((unsigned long)sb, 128); /* sizeof(struct stat) -- see fill_stat()'s own comment for the layout */
 
 	/* "." and "/" both mean the same thing here (mm/ramfs.h has no
 	 * real subdirectories) -- ash's own getpwd() logic stats both its
@@ -537,6 +542,7 @@ static void sys_getcwd(struct regs *r) {
 		r->a0 = (unsigned long)-EINVAL; /* ERANGE would be more precise; not worth a new errno for this */
 		return;
 	}
+	paging_ensure_writable((unsigned long)buf, 2);
 	buf[0] = '/';
 	buf[1] = 0;
 	r->a0 = 2; /* real getcwd(2) returns the length written, including the NUL */
