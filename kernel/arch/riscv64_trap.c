@@ -93,6 +93,16 @@ void syscall_set_handler(void (*handler)(struct regs *)) {
 
 void trap_init(void) {
 	*(void (**)(struct regs *))RV64_TRAP_DISPATCH_PTR = trap_dispatch;
+	/* Default: the same single dedicated trap stack every checkpoint
+	 * before sched/riscv64_process.c used, until that subsystem starts
+	 * (right before it dispatches its first process) and repoints this
+	 * at whichever process is about to run -- see
+	 * arch/riscv64_trap_entry.S's own comment for why this indirection
+	 * exists at all. Every trap before that point (the COW/ring3/ELF-
+	 * loader checkpoints) behaves exactly as it always did: this never
+	 * changes, so it's still effectively one fixed trap stack for
+	 * them. */
+	*(unsigned long *)RV64_CURRENT_KSTACK_PTR = RV64_TRAP_STACK_TOP;
 	__builtin_riscv_csrw(CSR_STVEC, (unsigned long)riscv64_trap_entry);
 
 	/* sstatus.SUM ("permit Supervisor User Memory access"): without

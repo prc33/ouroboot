@@ -19,8 +19,10 @@
 #include "riscv64_trap.h"
 #include "mm/pmm.h"
 #include "mm/paging.h"
+#include "sched/process.h"
 
 #define SYS_ioctl             29
+#define SYS_sched_yield      124
 #define SYS_write              64
 #define SYS_writev              66
 #define SYS_exit                  93
@@ -99,10 +101,25 @@ static void sys_exit(struct regs *r) {
 	run_elf_test();
 }
 
+/* checkpoint 6: once sched/riscv64_process.c's process_run() has
+ * started (process_mode_active()), exit_group means "this one process
+ * is done", not "halt everything" -- process_exit_current() reschedules
+ * to whatever else is still runnable, or halts only once nothing is
+ * left. Before that point (every P4/P5 checkpoint), exit_group keeps
+ * its original one-shot meaning unchanged: conclude P5 checkpoint 2
+ * and hand off to run_process_test() (riscv64_kmain.c) instead of
+ * halting outright -- this is the one call site that used to be the
+ * kernel's final halt and is now where checkpoint 6 actually starts. */
 static void sys_exit_group(struct regs *r) {
+	if (process_mode_active())
+		process_exit_current((int)r->a0); /* noreturn */
 	sys_exit_impl(r, "P5 checkpoint 2 OK");
-	kprintf("halting.\n");
-	for (;;) __builtin_riscv_wfi();
+	run_process_test();
+}
+
+static void sys_sched_yield(struct regs *r) {
+	process_schedule();
+	r->a0 = 0;
 }
 
 static void sys_brk(struct regs *r) {
@@ -232,6 +249,7 @@ static void syscall_dispatch(struct regs *r) {
 	case SYS_mmap:                 sys_mmap(r); return;
 	case SYS_munmap:                 sys_munmap(r); return;
 	case SYS_ioctl:                    sys_ioctl(r); return;
+	case SYS_sched_yield:                 sys_sched_yield(r); return;
 	case SYS_set_tid_address:            sys_set_tid_address(r); return;
 	default:
 		kprintf("FATAL: unimplemented syscall %lu\n", r->a7);
@@ -242,5 +260,5 @@ static void syscall_dispatch(struct regs *r) {
 void syscall_init(void) {
 	syscall_set_handler(syscall_dispatch);
 	kprintf("syscall: dispatch installed (write, writev, exit, exit_group, "
-		"brk, mmap, munmap, ioctl, set_tid_address)\n");
+		"brk, mmap, munmap, ioctl, sched_yield, set_tid_address)\n");
 }

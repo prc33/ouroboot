@@ -62,6 +62,7 @@ OBJS := boot/riscv64_boot.o riscv64_entry.o riscv64_kmain.o \
         arch/riscv64_usermode.o arch/riscv64_syscall.o \
         mm/pmm.o mm/riscv64_paging.o mm/elf.o \
         sched/riscv64_task.o sched/riscv64_switch_context.o \
+        sched/riscv64_process.o \
         arch/riscv64_kend.o
 else
 $(error unknown ARCH '$(ARCH)' -- expected i386 or riscv64)
@@ -167,6 +168,8 @@ RISCV64_TEST_ASSERTIONS := \
 	--must-contain "elf: entering userspace" \
 	--must-contain "hello from musl+tcc, sum=285" \
 	--must-contain "P5 checkpoint 2 OK" \
+	--must-contain "A1 B1 A2 B2 A3 B3" \
+	--must-contain "P6 checkpoint OK" \
 	--must-not-contain "FATAL" \
 	--must-not-contain "UNHANDLED EXCEPTION" \
 	--must-not-contain "UNHANDLED INTERRUPT" \

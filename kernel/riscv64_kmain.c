@@ -5,8 +5,10 @@
 #include "mm/paging.h"
 #include "mm/elf.h"
 #include "sched/task.h"
+#include "sched/process.h"
 #include "user_test_riscv64_payload.h"
 #include "hello_elf_riscv64_payload.h"
+#include "proc_test_elf_riscv64_payload.h"
 
 static volatile int g_breakpoint_hit = 0;
 
@@ -183,6 +185,24 @@ void run_elf_test(void) {
 	kprintf("elf: entering userspace at %p, sp=%p...\n", (void *)entry, (void *)sp);
 	enter_usermode(entry, (unsigned long)sp);
 	/* never reached */
+}
+
+/* --- checkpoint 6: general process table, two real independent
+ * processes cooperatively scheduled across genuinely separate address
+ * spaces -- see sched/riscv64_process.c and user_test/proc_test_riscv64.c
+ * for the mechanism and the interleave signature this checks for. */
+void run_process_test(void) {
+	process_init();
+	struct process *a = process_create_from_elf(proc_test_elf_riscv64_payload, PROC_TEST_ELF_RISCV64_SIZE, "A");
+	struct process *b = process_create_from_elf(proc_test_elf_riscv64_payload, PROC_TEST_ELF_RISCV64_SIZE, "B");
+	if (!a || !b) {
+		kprintf("FATAL: process_create_from_elf failed\n");
+		for (;;) __builtin_riscv_wfi();
+	}
+	kprintf("process: two independent processes created (pid %d, pid %d)\n", a->pid, b->pid);
+	process_run(a);
+	/* not expected to return: process_exit_current() halts once both
+	 * processes have exited */
 }
 
 static void conclude_scheduler_test(void) {

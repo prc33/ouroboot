@@ -27,6 +27,15 @@ unsigned int paging_get_phys(unsigned int virt); /* 0 if unmapped */
 void paging_init(unsigned long mem_top);
 void paging_map_page(unsigned long virt, unsigned long phys, unsigned long flags);
 unsigned long paging_get_phys(unsigned long virt); /* 0 if unmapped */
+
+/* Per-address-space variants, for sched/riscv64_process.c -- see
+ * mm/riscv64_paging.c's file comment. */
+unsigned long *paging_new_addrspace(void);
+void paging_activate(unsigned long *root);
+unsigned long *paging_active_root(void);
+void paging_map_page_in(unsigned long *root, unsigned long virt, unsigned long phys, unsigned long flags);
+unsigned long paging_get_phys_in(unsigned long *root, unsigned long virt);
+void paging_fork_cow(unsigned long *dst_root, unsigned long *src_root, unsigned long lo, unsigned long hi);
 #endif
 
 #endif

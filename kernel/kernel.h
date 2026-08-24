@@ -34,6 +34,7 @@ void timer_set_tick_handler(void (*handler)(void)); /* arch/riscv64_timer.c */
 void syscall_init(void);
 void enter_usermode(unsigned long entry, unsigned long user_sp);
 void run_elf_test(void); /* riscv64_kmain.c -- see arch/riscv64_syscall.c's sys_exit */
+void run_process_test(void); /* riscv64_kmain.c -- see arch/riscv64_syscall.c's sys_exit_group */
 #endif
 
 #endif

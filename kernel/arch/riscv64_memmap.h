@@ -53,6 +53,23 @@
  * relocatable) C code, not baked in at generation time. */
 #define RV64_TRAP_DISPATCH_PTR 0x80305000UL
 
+/* One 8-byte slot at 0x80305008, right after RV64_TRAP_DISPATCH_PTR:
+ * the *top* of whichever process's kernel stack is current, read by
+ * arch/riscv64_trap_entry.S on every trap instead of the single fixed
+ * RV64_TRAP_STACK_TOP earlier checkpoints used. sched/riscv64_process.c
+ * writes it every time a different process is about to run in
+ * U-mode -- see that file's comment for why a single shared trap
+ * stack stopped being safe once more than one process can genuinely
+ * block mid-syscall (sched_yield, and later wait4/read): trap
+ * handling for whichever process traps next now needs to happen ON
+ * that same process's own kernel stack, so a block-and-resume deep in
+ * one process's syscall handler can't be clobbered by a second
+ * process trapping while the first is still suspended there. Same
+ * "runtime-populated pointer slot, not a baked-in immediate" trick as
+ * RV64_TRAP_DISPATCH_PTR, for the same reason (no relocation support
+ * for hand-written .S files). */
+#define RV64_CURRENT_KSTACK_PTR 0x80305008UL
+
 /* struct regs (arch/riscv64_trap.h): 35 8-byte fields = 280 bytes, at
  * 0x80306000. One global instance -- safe because this kernel never
  * nests traps (matches i386's own cli-until-iret non-reentrancy). */
