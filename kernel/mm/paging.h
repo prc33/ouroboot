@@ -28,6 +28,13 @@ void paging_init(unsigned long mem_top);
 void paging_map_page(unsigned long virt, unsigned long phys, unsigned long flags);
 unsigned long paging_get_phys(unsigned long virt); /* 0 if unmapped */
 
+/* The leaf PTE's low 10 flag bits (V/R/W/X/U/G/A/D + 2 software bits)
+ * covering `virt`, or 0 if unmapped -- test/debug accessor, not used
+ * by any real code path. riscv64_kmain.c's run_cow_user_test() uses
+ * this to directly confirm PTE_USER survives a COW copy (see that
+ * test's own comment for the real bug it's a regression test for). */
+unsigned long paging_get_flags(unsigned long virt);
+
 /* Per-address-space variants, for sched/riscv64_process.c -- see
  * mm/riscv64_paging.c's file comment. */
 unsigned long *paging_new_addrspace(void);

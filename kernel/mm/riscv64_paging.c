@@ -118,6 +118,13 @@ unsigned long paging_get_phys(unsigned long virt) {
 	return paging_get_phys_in(active_root, virt);
 }
 
+unsigned long paging_get_flags(unsigned long virt) {
+	unsigned long *pte = get_pte(virt, 0);
+	if (!pte || !(*pte & 1))
+		return 0;
+	return *pte & 0x3FFUL;
+}
+
 /* Switches to address space `root`: writes satp and updates
  * active_root together so the two can never disagree about which
  * space is "current" (get_pte()/the page fault handler both go

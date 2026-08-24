@@ -152,8 +152,10 @@ RISCV64_TEST_ASSERTIONS := \
 	--must-contain "trap: stvec installed" \
 	--must-contain "breakpoint: ebreak handled and resumed OK" \
 	--must-contain "pmm:" \
+	--must-contain "pmm: reserve test OK" \
 	--must-contain "paging: Sv39 identity-mapped" \
 	--must-contain "COW test: parent=1 child=2 OK" \
+	--must-contain "COW test: PTE_USER preserved after copy OK" \
 	--must-contain "timer: Sstc armed" \
 	--must-contain "TASK A" \
 	--must-contain "TASK B" \

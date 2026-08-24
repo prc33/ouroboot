@@ -122,7 +122,19 @@ static void page_fault_handler(struct regs *r) {
 		for (unsigned int i = 0; i < PAGE_SIZE; i++)
 			dst[i] = src[i];
 
-		table[pt_idx] = (new_phys & ~0xFFFu) | PTE_PRESENT | PTE_WRITABLE;
+		/* Preserve PTE_USER from the pre-copy PTE (still in
+		 * table[pt_idx], not yet overwritten) rather than hardcoding
+		 * just PRESENT|WRITABLE -- mirrors a real bug found and fixed
+		 * on the riscv64 side (mm/riscv64_paging.c's page_fault_handler,
+		 * see its comment) via a real fork()+wait4() test: the only
+		 * COW exercised on i386 so far is kmain.c's own run_cow_test,
+		 * entirely kernel-only pages with no PTE_USER to begin with,
+		 * so this never actually manifested here -- but the bug is
+		 * the same latent one, not a different one, so fixed the same
+		 * way rather than left for whenever i386 gets its own real
+		 * multi-process fork(). */
+		table[pt_idx] = (new_phys & ~0xFFFu) | PTE_PRESENT | PTE_WRITABLE |
+			(table[pt_idx] & PTE_USER);
 		invlpg(page);
 		return; /* isr epilogue does iret; faulting instruction retries and succeeds */
 	}

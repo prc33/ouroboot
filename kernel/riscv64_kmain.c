@@ -58,6 +58,72 @@ static void run_cow_test(void) {
 	kprintf("COW test: parent=%d child=%d OK\n", parent_val, child_val);
 }
 
+/* Regression test for a real bug (mm/riscv64_paging.c's
+ * page_fault_handler, see its own comment): the COW-copy remap used
+ * to hardcode PTE_PRESENT|PTE_WRITABLE, dropping PTE_USER entirely.
+ * Invisible in run_cow_test() above -- it never sets PTE_USER on its
+ * own pages to begin with (a purely kernel-side demo), so there was
+ * nothing to lose. This test deliberately does map with PTE_USER, so
+ * a regression here (the flag silently dropping again) is caught
+ * directly by inspecting the post-copy PTE, not just indirectly by
+ * checkpoint 7's fork() test eventually hanging/faulting on it. */
+#define VA_USER_COW 0x402000UL
+
+static void run_cow_user_test(void) {
+	unsigned long shared_phys = pmm_alloc_page();
+	*(volatile int *)shared_phys = 0x5555;
+
+	paging_map_page(VA_USER_COW, shared_phys, PTE_PRESENT | PTE_USER | PTE_COW);
+
+	*(volatile int *)VA_USER_COW = 99; /* faults: copies, remaps VA_USER_COW private */
+
+	unsigned long flags = paging_get_flags(VA_USER_COW);
+	int val = *(volatile int *)VA_USER_COW;
+
+	if (!(flags & PTE_USER) || val != 99) {
+		kprintf("FATAL: COW copy dropped PTE_USER or corrupted data (flags=%p val=%d)\n",
+			(void *)flags, val);
+		for (;;) __builtin_riscv_wfi();
+	}
+	kprintf("COW test: PTE_USER preserved after copy OK\n");
+}
+
+/* Regression test for a real bug (mm/pmm.h's pmm_reserve_range(), see
+ * its own comment): pmm_init() never reserved
+ * arch/riscv64_memmap.h's hardcoded scratch region (boot stack, trap
+ * dispatch pointer, trapframe, trap stack), so pmm_alloc_page() could
+ * -- and, once enough allocations happened, did -- hand out a page
+ * underneath the kernel's own currently-running boot stack. Directly
+ * exercises the actual failure mode: allocate enough pages to reach
+ * past the scratch region (same order of magnitude that surfaced the
+ * real bug), and assert none of them fall inside it. Frees everything
+ * back afterward -- this runs before anything else has claimed real
+ * memory, and every later checkpoint needs the same free pool. */
+#define PMM_RESERVE_TEST_COUNT 300
+
+static void run_pmm_reserve_test(void) {
+	static unsigned int addrs[PMM_RESERVE_TEST_COUNT];
+	unsigned int n;
+	int hit_reserved = 0;
+
+	for (n = 0; n < PMM_RESERVE_TEST_COUNT; n++) {
+		addrs[n] = pmm_alloc_page();
+		if (!addrs[n])
+			break; /* genuinely out of memory before hitting the count -- fine, just stop */
+		if (addrs[n] >= (unsigned int)RV64_SCRATCH_BASE && addrs[n] < (unsigned int)RV64_TRAP_STACK_TOP)
+			hit_reserved = 1;
+	}
+	for (unsigned int i = 0; i < n; i++)
+		pmm_free_page(addrs[i]);
+
+	if (hit_reserved) {
+		kprintf("FATAL: pmm handed out a page inside the reserved scratch region\n");
+		for (;;) __builtin_riscv_wfi();
+	}
+	kprintf("pmm: reserve test OK (%u pages, none in [%p, %p))\n",
+		n, (void *)RV64_SCRATCH_BASE, (void *)RV64_TRAP_STACK_TOP);
+}
+
 /* --- two-task scheduler test -- see kmain.c's equivalent for the
  * full rationale (cooperative switches at a safe point, not forced
  * mid-instruction from inside the timer IRQ itself, since kprintf/
@@ -280,9 +346,11 @@ void kmain(unsigned long hartid, unsigned long dtb) {
 	 * mm/pmm.h's pmm_reserve_range() comment for why this is required,
 	 * not defensive. */
 	pmm_reserve_range((unsigned int)RV64_SCRATCH_BASE, (unsigned int)RV64_TRAP_STACK_TOP);
+	run_pmm_reserve_test();
 	paging_init(RV64_MEM_TOP);
 
 	run_cow_test();
+	run_cow_user_test();
 
 	timer_set_tick_handler(timer_tick);
 	timer_init(100);
