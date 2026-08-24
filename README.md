@@ -98,27 +98,38 @@ cd ../demo && ./build-musl-i386.sh   # or -riscv64
 cd ../kernel && make test            # or make ARCH=riscv64 test
 ```
 
-## Current all-in demo: kernel.elf booting in a real browser tab
+## Current all-in demo: a real interactive shell, in a real browser tab
 
 The riscv64 kernel, running under the from-scratch JS emulator
-(`emulator/`), in an actual browser tab -- not just Node or QEMU:
+(`emulator/`), in an actual browser tab -- not just Node or QEMU --
+boots all the way to a real busybox ash prompt that accepts real
+typed input:
 
 ```
 cd kernel && make ARCH=riscv64           # build kernel.elf
-cd ../emulator/js && python3 -m http.server 8000
-# open http://localhost:8000/index.html
+cd ..                                    # repo root -- index.html
+                                          # fetches ../../kernel/kernel.elf,
+                                          # so the server has to be rooted
+                                          # here, not in emulator/js/
+python3 -m http.server 8000
+# open http://localhost:8000/emulator/js/index.html
 ```
 (Any static HTTP server works -- `fetch()` and Worker script loading
 both need a real origin, not `file://`.)
 
 You'll see the kernel boot, run its pmm/paging/COW/scheduler/syscall
-checkpoints, and drop a real static musl+TCC riscv64 binary into
-userspace via a real ELF loader -- all inside `xterm.js`, with the CPU
-running in a Web Worker so it never blocks the UI.
+checkpoints, load a real static musl+TCC riscv64 binary into userspace
+via a real ELF loader, fork/exec/wait4 real child processes, and
+finally hand off to a real embedded busybox `ash` -- all inside
+`xterm.js`, with the CPU running in a Web Worker so it never blocks
+the UI. Once you see the `#` prompt, click into the terminal and
+type: real keystrokes go out over the same UART byte interface the
+kernel's own serial console uses. (The boot sequence itself is CPU-
+bound JS interpretation of the whole checkpoint 1-10 test suite, so
+reaching that prompt takes real wall-clock minutes, not seconds --
+patience, not a hang.)
 
-Headless equivalent (same checkpoints, asserted against QEMU's own
-output so the two can't silently drift apart): `cd kernel && make
-ARCH=riscv64 test-js`. See `emulator/README.md` for both in more
-detail, and `docs/emulator-plan.md` for what's next (P4: real
-userspace binaries beyond the kernel itself, e.g. busybox, which needs
-F/D instruction support -- in progress).
+Headless equivalent (same checkpoints, including a scripted shell
+session, asserted against QEMU's own output so the two can't silently
+drift apart): `cd kernel && make ARCH=riscv64 test-js`. See
+`emulator/README.md` for both in more detail.
