@@ -35,6 +35,8 @@ void syscall_init(void);
 void enter_usermode(unsigned long entry, unsigned long user_sp);
 void run_elf_test(void); /* riscv64_kmain.c -- see arch/riscv64_syscall.c's sys_exit */
 void run_process_test(void); /* riscv64_kmain.c -- see arch/riscv64_syscall.c's sys_exit_group */
+int serial_rx_ready(void);   /* drivers/riscv64_serial.c -- checkpoint 8, blocking stdin reads */
+unsigned char serial_getc(void);
 #endif
 
 #endif

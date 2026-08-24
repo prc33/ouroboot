@@ -29,6 +29,7 @@
 #include "riscv64_trap.h"
 #include "mm/pmm.h"
 #include "mm/paging.h"
+#include "mm/ramfs.h"
 #include "sched/process.h"
 
 #define SYS_ioctl             29
@@ -45,6 +46,12 @@
 #define SYS_wait4                              260
 #define SYS_rt_sigprocmask                        135
 #define SYS_gettid                                    178
+#define SYS_openat                                        56
+#define SYS_close                                            57
+#define SYS_read                                                63
+#define SYS_execve                                                221
+
+#define AT_FDCWD (-100)
 
 #define MAP_FIXED  0x10
 #define MAP_ANON   0x20
@@ -56,6 +63,7 @@
 #define ENOTTY  25
 #define ENOMEM  12
 #define ENOSYS  38
+#define ENOENT   2
 
 /* --- process address-space bookkeeping (see file comment) --- */
 #define BRK_BASE   0x40000000UL
@@ -305,6 +313,140 @@ static void sys_gettid(struct regs *r) {
 	r->a0 = current_tid();
 }
 
+/* checkpoint 8: real open()+read()+close(), against mm/ramfs.h's
+ * fixed embedded file table -- see that file's own comment for what
+ * "real" means here (actual bytes an actual musl+TCC binary actually
+ * reads, just not backed by a real block device or writable
+ * namespace yet). fd numbers 3.. (0/1/2 stay the UART console,
+ * unaffected) -- sched/process.h's process_fd_alloc/get/close index
+ * by the raw fds[] slot, this file applies the +3 offset. */
+#define PATH_MAX_LOCAL 64
+
+static int copy_path_from_user(char *dst, const char *user_src) {
+	int i = 0;
+	while (user_src[i] && i < PATH_MAX_LOCAL - 1) {
+		dst[i] = user_src[i];
+		i++;
+	}
+	dst[i] = 0;
+	return i;
+}
+
+static void sys_openat(struct regs *r) {
+	/* a0=dirfd, a1=path, a2=flags, a3=mode -- dirfd is ignored (only
+	 * AT_FDCWD/absolute paths make sense with no real cwd concept
+	 * yet), flags/mode too (this ramfs is read-only, nothing to
+	 * create or truncate). */
+	char path[PATH_MAX_LOCAL];
+	copy_path_from_user(path, (const char *)r->a1);
+
+	const struct ramfs_file *file = ramfs_lookup(path);
+	if (!file) {
+		r->a0 = (unsigned long)-ENOENT;
+		return;
+	}
+	int idx = process_fd_alloc();
+	if (idx < 0) {
+		r->a0 = (unsigned long)-ENOMEM; /* table full -- real errno would be EMFILE/ENFILE, close enough here */
+		return;
+	}
+	struct fd_entry *fd = process_fd_get(idx);
+	fd->data = file->data;
+	fd->size = file->size;
+	fd->pos = 0;
+	r->a0 = (unsigned long)(idx + 3);
+}
+
+static void sys_close(struct regs *r) {
+	unsigned long fd = r->a0;
+	if (fd == 0 || fd == 1 || fd == 2) {
+		r->a0 = 0; /* no-op close of the console -- honest enough, nothing to release */
+		return;
+	}
+	if (fd < 3 || !process_fd_get((int)fd - 3)) {
+		r->a0 = (unsigned long)-EBADF;
+		return;
+	}
+	process_fd_close((int)fd - 3);
+	r->a0 = 0;
+}
+
+/* checkpoint 8: real blocking stdin read (fd 0) -- spin-yield until a
+ * byte is available, same "cooperative block" idea as
+ * SYS_sched_yield/SYS_wait4's own spin loops, then a single-byte read.
+ * Returning fewer bytes than requested is POSIX-legal (read() has
+ * never promised to fill the buffer); one raw byte at a time, no
+ * echo/line-editing (no tty/line-discipline layer exists yet -- an
+ * honest, documented gap, not a bug: whatever's on the other end of
+ * the UART is responsible for its own local echo for now). fd>=3
+ * reads from mm/ramfs.h via this process's own fd table instead. */
+static void sys_read(struct regs *r) {
+	unsigned long fd = r->a0;
+	unsigned char *buf = (unsigned char *)r->a1;
+	unsigned long count = r->a2;
+
+	if (fd == 0) {
+		if (count == 0) {
+			r->a0 = 0;
+			return;
+		}
+		while (!serial_rx_ready())
+			process_schedule();
+		buf[0] = serial_getc();
+		r->a0 = 1;
+		return;
+	}
+	if (fd == 1 || fd == 2) {
+		r->a0 = (unsigned long)-EBADF; /* stdout/stderr aren't readable */
+		return;
+	}
+
+	struct fd_entry *entry = fd >= 3 ? process_fd_get((int)fd - 3) : 0;
+	if (!entry) {
+		r->a0 = (unsigned long)-EBADF;
+		return;
+	}
+	unsigned long remaining = entry->size - entry->pos;
+	unsigned long n = count < remaining ? count : remaining;
+	for (unsigned long i = 0; i < n; i++)
+		buf[i] = entry->data[entry->pos + i];
+	entry->pos += n;
+	r->a0 = n;
+}
+
+/* checkpoint 8: real execve() -- sched/process.h's process_execve()
+ * does the actual work (new address space, new stack, rewrites the
+ * live trapframe in place); this just copies argv/envp's user-space
+ * pointer arrays into kernel memory first (each element is itself a
+ * user pointer, walked here rather than inside process_execve() so
+ * that function's own signature can just be "two NUL-terminated
+ * char* arrays", arch-neutral in spirit even though nothing else
+ * uses it yet). */
+#define EXECVE_MAX_ARGV 8
+
+static void sys_execve(struct regs *r) {
+	char path[PATH_MAX_LOCAL];
+	copy_path_from_user(path, (const char *)r->a0);
+
+	char *argv[EXECVE_MAX_ARGV + 1];
+	unsigned long *user_argv = (unsigned long *)r->a1;
+	int argc = 0;
+	if (user_argv)
+		while (argc < EXECVE_MAX_ARGV && user_argv[argc]) {
+			argv[argc] = (char *)user_argv[argc];
+			argc++;
+		}
+	argv[argc] = 0;
+
+	int ret = process_execve(r, path, argv, 0);
+	if (ret < 0)
+		r->a0 = (unsigned long)-ENOENT;
+	/* on success, process_execve() already rewrote every register
+	 * that matters -- r->a0 is meaningless here either way (execve()
+	 * doesn't "return" 0 on success, it just doesn't return to this
+	 * call site at all) */
+}
+
 static void syscall_dispatch(struct regs *r) {
 	switch (r->a7) {
 	case SYS_write:            sys_write(r); return;
@@ -321,6 +463,10 @@ static void syscall_dispatch(struct regs *r) {
 	case SYS_wait4:                            sys_wait4(r); return;
 	case SYS_rt_sigprocmask:                      sys_rt_sigprocmask(r); return;
 	case SYS_gettid:                                 sys_gettid(r); return;
+	case SYS_openat:                                    sys_openat(r); return;
+	case SYS_close:                                        sys_close(r); return;
+	case SYS_read:                                            sys_read(r); return;
+	case SYS_execve:                                              sys_execve(r); return;
 	default:
 		kprintf("FATAL: unimplemented syscall %lu\n", r->a7);
 		r->a0 = (unsigned long)-ENOSYS;
@@ -331,5 +477,5 @@ void syscall_init(void) {
 	syscall_set_handler(syscall_dispatch);
 	kprintf("syscall: dispatch installed (write, writev, exit, exit_group, "
 		"brk, mmap, munmap, ioctl, sched_yield, set_tid_address, "
-		"clone, wait4, rt_sigprocmask, gettid)\n");
+		"clone, wait4, rt_sigprocmask, gettid, openat, close, read, execve)\n");
 }

@@ -60,7 +60,7 @@ OBJS := boot/riscv64_boot.o riscv64_entry.o riscv64_kmain.o \
         drivers/riscv64_serial.o drivers/kprintf.o \
         arch/riscv64_trap_entry.o arch/riscv64_trap.o arch/riscv64_timer.o \
         arch/riscv64_usermode.o arch/riscv64_syscall.o \
-        mm/pmm.o mm/riscv64_paging.o mm/elf.o \
+        mm/pmm.o mm/riscv64_paging.o mm/elf.o mm/ramfs.o \
         sched/riscv64_task.o sched/riscv64_switch_context.o \
         sched/riscv64_process.o \
         arch/riscv64_kend.o
@@ -175,6 +175,10 @@ RISCV64_TEST_ASSERTIONS := \
 	--must-contain "child counter=42" \
 	--must-contain "parent counter=1 reaped_pid_ok=1 child_status=7" \
 	--must-contain "P7 checkpoint OK" \
+	--must-contain "argv1=execved_ok" \
+	--must-contain "hello from ramfs" \
+	--must-contain "exec test: child_status=42" \
+	--must-contain "P8 checkpoint OK" \
 	--must-not-contain "FATAL" \
 	--must-not-contain "UNHANDLED EXCEPTION" \
 	--must-not-contain "UNHANDLED INTERRUPT" \

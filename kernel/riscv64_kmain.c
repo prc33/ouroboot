@@ -10,6 +10,7 @@
 #include "hello_elf_riscv64_payload.h"
 #include "proc_test_elf_riscv64_payload.h"
 #include "proc_fork_test_elf_riscv64_payload.h"
+#include "proc_exec_test_elf_riscv64_payload.h"
 
 static volatile int g_breakpoint_hit = 0;
 
@@ -266,14 +267,35 @@ void run_elf_test(void) {
  * comment for why that's the right place to hook a new test's setup
  * in, same idea as arch/riscv64_syscall.c's sys_exit/sys_exit_group
  * chaining P4->P5 checkpoint 1->P5 checkpoint 2. */
+static void run_exec_test(void);
+
 static void run_fork_test(void) {
 	kprintf("P6 checkpoint OK\n");
+	process_set_drain_hook(run_exec_test);
 	struct process *p = process_create_from_elf(proc_fork_test_elf_riscv64_payload, PROC_FORK_TEST_ELF_RISCV64_SIZE, "fork_test");
 	if (!p) {
 		kprintf("FATAL: process_create_from_elf failed\n");
 		for (;;) __builtin_riscv_wfi();
 	}
 	kprintf("process: fork test process created (pid %d)\n", p->pid);
+	process_run(p);
+	/* not expected to return */
+}
+
+/* --- checkpoint 8: real ramfs (mm/ramfs.c) + open()/read()/close() +
+ * execve() -- see user_test/proc_exec_test_riscv64.c and
+ * user_test/exec_target_riscv64.c for the two real binaries involved
+ * (fork()'s child execve()s from one into the completely separate
+ * other one), and sched/riscv64_process.c's process_execve() for the
+ * mechanism. Chained the same way as checkpoint 7 above. */
+static void run_exec_test(void) {
+	kprintf("P7 checkpoint OK\n");
+	struct process *p = process_create_from_elf(proc_exec_test_elf_riscv64_payload, PROC_EXEC_TEST_ELF_RISCV64_SIZE, "exec_test");
+	if (!p) {
+		kprintf("FATAL: process_create_from_elf failed\n");
+		for (;;) __builtin_riscv_wfi();
+	}
+	kprintf("process: exec test process created (pid %d)\n", p->pid);
 	process_run(p);
 	/* not expected to return */
 }

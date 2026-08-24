@@ -19,6 +19,22 @@ enum process_state {
 	PROC_ZOMBIE,
 };
 
+/* checkpoint 8: per-process file descriptors, fd numbers 3.. (0/1/2
+ * are the UART console, handled specially in arch/riscv64_syscall.c's
+ * sys_read/sys_write same as always -- never stored here). Only ever
+ * describes an open mm/ramfs.h file: read-only, `data`+`size` point
+ * straight at that file's embedded bytes, `pos` is this fd's own
+ * cursor into it. No real inode table, no write support -- this
+ * checkpoint's ramfs is read-only static data, see mm/ramfs.h. */
+#define MAX_FDS 8
+
+struct fd_entry {
+	int used;
+	const unsigned char *data;
+	unsigned long size;
+	unsigned long pos;
+};
+
 struct process {
 	int pid;
 	int ppid;                          /* checkpoint 7: real parent, for process_wait4()'s "is this my child" check */
@@ -28,6 +44,7 @@ struct process {
 	unsigned long kernel_stack[PROC_KSTACK_WORDS];
 	struct regs user_regs;             /* saved U-mode context when this process isn't the one currently running */
 	int exit_code;
+	struct fd_entry fds[MAX_FDS];      /* checkpoint 8 -- see the struct's own comment */
 };
 
 void process_init(void);
@@ -100,5 +117,33 @@ int process_fork(struct regs *r);
  * slot) and returns its pid, with *status_out set to the same
  * WIFEXITED/WEXITSTATUS-decodable encoding real Linux uses. */
 long process_wait4(int pid, int *status_out);
+
+/* checkpoint 8: fd-table access for arch/riscv64_syscall.c's
+ * sys_openat/sys_read/sys_close, all against the *currently running*
+ * process. All index by the raw fds[] array position (0..MAX_FDS-1)
+ * -- the syscall-visible fd number (index + 3, since 0/1/2 are always
+ * the UART console, handled separately and never stored here) is
+ * entirely the syscall layer's own concern. */
+int process_fd_alloc(void);                 /* index of the first unused slot, marked used; -1 if the table's full */
+struct fd_entry *process_fd_get(int index); /* 0 if out of range or not currently used */
+void process_fd_close(int index);           /* no-op if already unused/out of range */
+
+/* checkpoint 8: real execve(), via SYS_execve. Replaces the
+ * *currently running* process's address space with `path` (looked up
+ * in mm/ramfs.h) in place -- same pid, same fd table (real execve()
+ * semantics: file descriptors survive; only memory and register state
+ * don't), brand new address space and entry point. `r` is the live
+ * trapframe of the ecall that got us here; on success this rewrites
+ * it in place (sepc/sp to the new program's, every GPR else zeroed)
+ * so the eventual sret lands directly in the new program -- execve()
+ * never "returns" to its caller on success, by definition. Returns
+ * < 0 on failure (bad path / out of memory / bad ELF), in which case
+ * `r` is left untouched and the syscall handler returns that value
+ * as a normal negative-errno result. `argv`/`envp` are real user-space
+ * pointer arrays (NUL-terminated char* arrays, each pointing at a
+ * NUL-terminated string) -- copied into kernel memory before the old
+ * address space is touched, since they live in memory this call is
+ * about to replace. */
+int process_execve(struct regs *r, const char *path, char **argv, char **envp);
 
 #endif

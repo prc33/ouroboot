@@ -39,6 +39,7 @@
 #include "mm/elf.h"
 #include "sched/task.h" /* switch_context() -- shared with the P4 task scheduler */
 #include "sched/process.h"
+#include "mm/ramfs.h"
 
 #define CSR_SSTATUS 0x100
 #define SSTATUS_SPP  (1UL << 8)
@@ -187,6 +188,8 @@ struct process *process_create_from_elf(const unsigned char *elf_data, unsigned 
 	p->pid = next_pid++;
 	p->ppid = 0; /* no real parent -- created directly by kmain, not fork() */
 	p->exit_code = 0;
+	for (int fd = 0; fd < MAX_FDS; fd++)
+		p->fds[fd].used = 0;
 
 	/* Hand-built initial kernel-stack frame -- identical technique to
 	 * sched/riscv64_task.c's task_init: 13 fake callee-saved registers
@@ -264,14 +267,15 @@ static void halt_process_test(void) __attribute__((noreturn));
 static void halt_process_test(void) {
 	/* Reached only once the process table has drained *and* no drain
 	 * hook chained in another test -- currently that means every
-	 * checkpoint 6/7 test has finished (riscv64_kmain.c's
-	 * run_process_test/run_fork_test), so this is genuinely the last
-	 * checkpoint in the chain right now. Will need the "P7" bumped
-	 * (or replaced with a hook-supplied string) if a checkpoint 8 ever
-	 * chains in after this one, same as every earlier "next checkpoint
-	 * appends here" point in this kernel's own history. */
+	 * checkpoint 6/7/8 test has finished (riscv64_kmain.c's
+	 * run_process_test/run_fork_test/run_exec_test), so this is
+	 * genuinely the last checkpoint in the chain right now. Will need
+	 * the "P8" bumped (or replaced with a hook-supplied string) if a
+	 * checkpoint 9 ever chains in after this one, same as every
+	 * earlier "next checkpoint appends here" point in this kernel's
+	 * own history. */
 	kprintf("process: all processes exited\n");
-	kprintf("P7 checkpoint OK\n");
+	kprintf("P8 checkpoint OK\n");
 	kprintf("halting.\n");
 	for (;;) __builtin_riscv_wfi();
 }
@@ -362,6 +366,24 @@ int process_fork(struct regs *r) {
 	child->ppid = parent->pid;
 	child->exit_code = 0;
 
+	/* Real fork() semantics: open file descriptors survive into the
+	 * child. Simplified here to an independent copy (including `pos`)
+	 * rather than a real shared-refcount file object -- real POSIX
+	 * fork() has parent and child *share* the underlying offset (one
+	 * advances, the other sees it too); nothing in this checkpoint's
+	 * tests needs that, and this ramfs has no real inode table to hang
+	 * a shared object off yet anyway. */
+	for (int fd = 0; fd < MAX_FDS; fd++) {
+		/* field-by-field, not a struct assignment -- TCC's codegen
+		 * would ask for memmove() for that, which this freestanding
+		 * kernel has never linked (same reason as process_trampoline's
+		 * own copy_regs() above). */
+		child->fds[fd].used = parent->fds[fd].used;
+		child->fds[fd].data = parent->fds[fd].data;
+		child->fds[fd].size = parent->fds[fd].size;
+		child->fds[fd].pos = parent->fds[fd].pos;
+	}
+
 	/* Child's saved trapframe: an exact snapshot of the parent's live
 	 * regs at this ecall (same registers, same sepc -- both processes
 	 * resume right after the same `ecall` instruction), except a0,
@@ -417,4 +439,137 @@ long process_wait4(int pid, int *status_out) {
 		}
 		process_schedule();
 	}
+}
+
+int process_fd_alloc(void) {
+	for (int i = 0; i < MAX_FDS; i++)
+		if (!current_process->fds[i].used) {
+			current_process->fds[i].used = 1;
+			return i;
+		}
+	return -1;
+}
+
+struct fd_entry *process_fd_get(int index) {
+	if (index < 0 || index >= MAX_FDS || !current_process->fds[index].used)
+		return 0;
+	return &current_process->fds[index];
+}
+
+void process_fd_close(int index) {
+	if (index >= 0 && index < MAX_FDS)
+		current_process->fds[index].used = 0;
+}
+
+/* checkpoint 8: real execve() -- see process.h's own comment for the
+ * contract. Same "new address space, elf_load, hand-built stack"
+ * shape as process_create_from_elf(), the two real differences being
+ * (a) this replaces the *current* process's root_table instead of
+ * creating a new process, and (b) the stack carries real caller-
+ * supplied argv instead of a single fixed arg0. */
+#define EXECVE_MAX_ARGV 8
+#define EXECVE_ARG_MAX 64
+
+int process_execve(struct regs *r, const char *path, char **argv, char **envp) {
+	(void)envp; /* real environment support is future scope -- every
+	             * process in this kernel gets an empty one, same
+	             * simplification process_create_from_elf already made */
+
+	const struct ramfs_file *file = ramfs_lookup(path);
+	if (!file)
+		return -1;
+
+	/* Snapshot argv strings into kernel memory *before* touching the
+	 * address space they live in -- once the new address space is
+	 * activated, `argv`/`argv[i]` (pointers into the *old* one) stop
+	 * meaning anything. Bounded: nothing this kernel execve()s needs
+	 * more than a handful of short arguments. */
+	static char argbuf[EXECVE_MAX_ARGV][EXECVE_ARG_MAX];
+	int argc = 0;
+	while (argv && argv[argc] && argc < EXECVE_MAX_ARGV) {
+		int i = 0;
+		while (argv[argc][i] && i < EXECVE_ARG_MAX - 1) {
+			argbuf[argc][i] = argv[argc][i];
+			i++;
+		}
+		argbuf[argc][i] = 0;
+		argc++;
+	}
+
+	struct process *p = current_process;
+	unsigned long *prev_root = paging_active_root(); /* == p->root_table, still valid until we succeed */
+	unsigned long *new_root = paging_new_addrspace();
+	paging_activate(new_root);
+
+	unsigned long entry = elf_load(file->data, file->size);
+	if (!entry) {
+		paging_activate(prev_root);
+		return -1;
+	}
+
+	/* Stack -- same VA/size as process_create_from_elf, now with real
+	 * argv instead of a single fixed arg0. String data goes in the
+	 * top 256 bytes, the argc/argv/envp/auxv pointer block in the
+	 * 256 bytes below that -- comfortably separate, both well clear
+	 * of real stack use below. */
+	unsigned long stack_va = 0xB0000000UL;
+	unsigned long stack_pages = 2;
+	for (unsigned long i = 0; i < stack_pages; i++) {
+		unsigned long phys = pmm_alloc_page();
+		paging_map_page(stack_va + i * PAGE_SIZE, phys, PTE_PRESENT | PTE_WRITABLE | PTE_USER);
+	}
+	unsigned long stack_top = stack_va + stack_pages * PAGE_SIZE;
+
+	unsigned char *strp = (unsigned char *)(stack_top - 256);
+	unsigned long argv_ptrs[EXECVE_MAX_ARGV];
+	for (int a = 0; a < argc; a++) {
+		int len = 0;
+		while (argbuf[a][len])
+			len++;
+		for (int i = 0; i <= len; i++) /* <= to include the NUL */
+			strp[i] = argbuf[a][i];
+		argv_ptrs[a] = (unsigned long)strp;
+		strp += len + 1;
+	}
+
+	unsigned long *sp = (unsigned long *)(stack_top - 512);
+	int idx = 0;
+	sp[idx++] = argc;
+	for (int a = 0; a < argc; a++)
+		sp[idx++] = argv_ptrs[a];
+	sp[idx++] = 0; /* argv[] NULL terminator */
+	sp[idx++] = 0; /* envp[0] = NULL */
+	sp[idx++] = 6; /* auxv[0].a_type = AT_PAGESZ */
+	sp[idx++] = PAGE_SIZE;
+	sp[idx++] = 0; /* auxv[1] = AT_NULL */
+	sp[idx++] = 0;
+
+	/* Replace this process's address space in place -- old physical
+	 * pages (code/data/stack of whatever was running before) are
+	 * simply never freed. Documented leak, not an oversight: this
+	 * kernel has no "tear down an address space" walk yet (same
+	 * "no reclaim yet" simplification as arch/riscv64_syscall.c's
+	 * sys_brk shrink path), and every process in this checkpoint's
+	 * tests execve()s at most once. */
+	p->root_table = new_root;
+
+	/* Rewrite the live trapframe in place -- this *is* what makes the
+	 * syscall "return" into the new program: every GPR real execve()
+	 * doesn't promise to preserve gets zeroed (stale values from the
+	 * old program have no business surviving into the new one), sp
+	 * and sepc get the new program's real values, sstatus is left
+	 * exactly as it already was (it's already correctly configured
+	 * for "return to U-mode" -- we got here via a real ecall *from*
+	 * U-mode, so SPP/SPIE are already right; recomputing it would
+	 * just reproduce what's already there). */
+	r->ra = 0; r->gp = 0; r->tp = 0;
+	r->t0 = 0; r->t1 = 0; r->t2 = 0;
+	r->s0 = 0; r->s1 = 0;
+	r->a0 = 0; r->a1 = 0; r->a2 = 0; r->a3 = 0; r->a4 = 0; r->a5 = 0; r->a6 = 0; r->a7 = 0;
+	r->s2 = 0; r->s3 = 0; r->s4 = 0; r->s5 = 0; r->s6 = 0; r->s7 = 0; r->s8 = 0; r->s9 = 0; r->s10 = 0; r->s11 = 0;
+	r->t3 = 0; r->t4 = 0; r->t5 = 0; r->t6 = 0;
+	r->sp = (unsigned long)sp;
+	r->sepc = entry;
+
+	return 0;
 }

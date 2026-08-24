@@ -31,6 +31,21 @@ static int transmit_empty(void) {
 	return mmio_read8(UART0 + 5) & 0x20;
 }
 
+/* checkpoint 8: RX support, for real blocking stdin reads
+ * (arch/riscv64_syscall.c's sys_read fd==0 path) -- LSR bit 0 (Data
+ * Ready) same register transmit_empty() already reads, bit 5 there
+ * instead of bit 0 here. Polled, same as transmit_empty()/serial_putc
+ * -- IRQs are still disabled (serial_init's own comment), consistent
+ * with this whole kernel never doing interrupt-driven I/O beyond the
+ * Sstc timer. */
+int serial_rx_ready(void) {
+	return mmio_read8(UART0 + 5) & 0x01;
+}
+
+unsigned char serial_getc(void) {
+	return mmio_read8(UART0);
+}
+
 void serial_putc(char c) {
 	if (c == '\n')
 		serial_putc('\r');
