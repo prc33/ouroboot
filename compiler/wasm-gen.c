@@ -382,7 +382,9 @@ ST_FUNC void load(int r, SValue *sv)
 
         if (bt == VT_FLOAT) wo = wasm_emit_op(WASM_OP_LOAD_F32);
         else if (bt == VT_DOUBLE || bt == VT_LDOUBLE) wo = wasm_emit_op(WASM_OP_LOAD_F64);
-        else if (bt == VT_LLONG) wo = wasm_emit_op(WASM_OP_LOAD_I64);
+        else if (bt == VT_LLONG)
+            wo = wasm_emit_op((reg_classes[r] & RC_I64) ? WASM_OP_LOAD_I64
+                                                       : WASM_OP_LOAD_I32);
         else if (reg_classes[r] & RC_I64) {
             wo = wasm_emit_op(WASM_OP_LOAD_I32_I64);
             if (wo && (ft & VT_UNSIGNED)) wo->flags |= WASM_OP_FLAG_UNSIGNED;
@@ -488,7 +490,12 @@ ST_FUNC void load(int r, SValue *sv)
             return;
         wo->r0 = r;
         wo->r1 = v;
+        if (ft & VT_UNSIGNED)
+            wo->flags |= WASM_OP_FLAG_UNSIGNED;
     }
+    /* Once an address/addend has been materialized in a register it must not
+       be applied again if that register is later dereferenced. */
+    sv->c.i = 0;
 }
 
 ST_FUNC void store(int r, SValue *v)
@@ -523,6 +530,8 @@ ST_FUNC void store(int r, SValue *v)
             return;
         wo->r0 = fr;
         wo->r1 = r;
+        if (ft & VT_UNSIGNED)
+            wo->flags |= WASM_OP_FLAG_UNSIGNED;
     }
 }
 

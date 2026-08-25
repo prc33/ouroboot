@@ -598,14 +598,44 @@ static void wasm_emit_case(WasmBuf *b, WasmFuncIR *f, WasmOp *op,
         break;
 
     case WASM_OP_MOV_I32:
+        if (op->r0 >= 4) {
+            dst = wasm_i64_reg_local(op->r0, local_tmp64);
+            src = wasm_i32_reg_local(op->r1, local_i0);
+            WB_GET_OR_SKIP(b, src);
+            wb_u8(b, (op->flags & WASM_OP_FLAG_UNSIGNED) ? 0xad : 0xac);
+            WB_SET_OR_TEE(b, dst);
+            break;
+        }
         dst = wasm_i32_reg_local(op->r0, local_i0);
+        if (op->r1 >= 4) {
+            src = wasm_i64_reg_local(op->r1, local_tmp64);
+            WB_GET_OR_SKIP(b, src);
+            wb_u8(b, 0xa7);
+            WB_SET_OR_TEE(b, dst);
+            break;
+        }
         src = wasm_i32_reg_local(op->r1, local_i0);
         WB_GET_OR_SKIP(b, src);
         WB_SET_OR_TEE(b, dst);
         break;
 
     case WASM_OP_MOV_I64:
+        if (op->r0 < 4) {
+            dst = wasm_i32_reg_local(op->r0, local_i0);
+            src = wasm_i64_reg_local(op->r1, local_tmp64);
+            WB_GET_OR_SKIP(b, src);
+            wb_u8(b, 0xa7); /* i32.wrap_i64 */
+            WB_SET_OR_TEE(b, dst);
+            break;
+        }
         dst = wasm_i64_reg_local(op->r0, local_tmp64);
+        if (op->r1 < 4) {
+            src = wasm_i32_reg_local(op->r1, local_i0);
+            WB_GET_OR_SKIP(b, src);
+            wb_u8(b, (op->flags & WASM_OP_FLAG_UNSIGNED) ? 0xad : 0xac);
+            WB_SET_OR_TEE(b, dst);
+            break;
+        }
         src = wasm_i64_reg_local(op->r1, local_tmp64);
         WB_GET_OR_SKIP(b, src);
         WB_SET_OR_TEE(b, dst);

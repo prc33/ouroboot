@@ -54,3 +54,14 @@ unsigned long long extend_unsigned(unsigned int x) { return x; }
 int truncate64(long long x) { return x; }
 double i64_to_double(long long x) { return x; }
 long long double_to_i64(double x) { return x; }
+int copy_out(unsigned long long x, unsigned long long *out) { *out = x; return 1; }
+unsigned long long test_copy_out(unsigned long long x) { unsigned long long out = 0; copy_out(x, &out); return out; }
+static unsigned long long global64;
+static unsigned long long echo64(unsigned long long x) { return x; }
+unsigned long long test_global64(unsigned long long x) { global64 = x; return echo64(global64); }
+static unsigned long long first4(unsigned long long a, unsigned int b, unsigned int c, unsigned long long *d) { *d = a; return a + b + c; }
+unsigned long long test_four_args(unsigned long long a) { unsigned long long d; return first4(a, 4, 0, &d) + d; }
+static unsigned char byte_array[4096];
+unsigned int byte_array_ptr(void) { return (unsigned int)byte_array; }
+unsigned int byte_array_read(unsigned int i) { return byte_array[i]; }
+unsigned long long byte_array_read64(unsigned int i) { return *(unsigned long long *)(byte_array + i); }
