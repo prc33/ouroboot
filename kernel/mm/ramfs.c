@@ -96,3 +96,19 @@ const struct ramfs_file *ramfs_lookup(const char *path) {
 
 	return 0;
 }
+
+unsigned int ramfs_root_entry_count(void) {
+	return NUM_FILES + NUM_APPLETS;
+}
+
+const char *ramfs_root_entry_name(unsigned int index) {
+	if (index < NUM_FILES)
+		return files[index].name;
+	return busybox_applets[index - NUM_FILES];
+}
+
+int ramfs_root_entry_is_symlink(unsigned int index) {
+	/* index == NUM_FILES is busybox_applets[0] == "busybox" itself,
+	 * the real file; every applet index after that is an alias. */
+	return index > NUM_FILES;
+}

@@ -61,6 +61,7 @@
 #define SYS_getgid                                                                               176
 #define SYS_getegid                                                                                 177
 #define SYS_getpid                                                                           172
+#define SYS_getdents64                                                                          61
 
 #define F_DUPFD 0
 #define F_GETFD 1
@@ -82,6 +83,7 @@
 #define ENOMEM  12
 #define ENOSYS  38
 #define ENOENT   2
+#define ENOTDIR 20
 
 /* --- process address-space bookkeeping (see file comment) --- */
 #define BRK_BASE   0x40000000UL
@@ -361,6 +363,30 @@ static void sys_openat(struct regs *r) {
 	char path[PATH_MAX_LOCAL];
 	copy_path_from_user(path, (const char *)r->a1);
 
+	/* checkpoint 11: opendir(".") -- musl's own opendir() (src/dirent/
+	 * opendir.c) is just open(name, O_DIRECTORY|...), so this is the
+	 * only place left to recognize "you're opening the one directory
+	 * this ramfs has", same "." /"/" special case sys_newfstatat
+	 * already makes for stat(). Real bug, found running real `ls`:
+	 * stat(".") already worked (correctly reporting a directory), so
+	 * ash's own cwd-tracking never noticed anything wrong, but open(".")
+	 * fell through to ramfs_lookup() -- which only ever matches real
+	 * *files* -- and failed with ENOENT ("ls: can't open '.'"). */
+	if ((path[0] == '.' && path[1] == 0) || (path[0] == '/' && path[1] == 0)) {
+		int idx = process_fd_alloc();
+		if (idx < 0) {
+			r->a0 = (unsigned long)-ENOMEM;
+			return;
+		}
+		struct fd_entry *fd = process_fd_get(idx);
+		fd->data = 0;
+		fd->size = 0;
+		fd->pos = 0; /* which root-directory entry sys_getdents64 hands out next */
+		fd->is_dir = 1;
+		r->a0 = (unsigned long)(idx + 3);
+		return;
+	}
+
 	const struct ramfs_file *file = ramfs_lookup(path);
 	if (!file) {
 		r->a0 = (unsigned long)-ENOENT;
@@ -375,6 +401,7 @@ static void sys_openat(struct regs *r) {
 	fd->data = file->data;
 	fd->size = file->size;
 	fd->pos = 0;
+	fd->is_dir = 0;
 	r->a0 = (unsigned long)(idx + 3);
 }
 
@@ -473,6 +500,85 @@ static void sys_read(struct regs *r) {
 		buf[i] = entry->data[entry->pos + i];
 	entry->pos += n;
 	r->a0 = n;
+}
+
+/* checkpoint 11: real ls -- musl's readdir() (src/dirent/readdir.c) is
+ * a thin wrapper around this one syscall, refilling its own 2KB
+ * buffer whenever exhausted. struct linux_dirent64's layout (this is
+ * a Linux kernel ABI struct, not the C library's own struct dirent,
+ * even though musl's arch/generic/bits/dirent.h happens to define
+ * struct dirent with the exact same field order/sizes and just
+ * treats a raw getdents64 buffer as an array of them -- confirmed by
+ * reading both, not assumed): d_ino (8), d_off (8), d_reclen (2),
+ * d_type (1), then a NUL-terminated name. d_off is real Linux's
+ * "seek cookie for the next entry" (what a real filesystem's
+ * seekdir()/telldir() round-trips through); nothing this kernel runs
+ * calls those, so it's left 0 rather than computed. */
+#define DT_DIR 4
+#define DT_REG 8
+#define DT_LNK 10
+
+static unsigned int fill_dirent64(unsigned char *buf, unsigned long ino, const char *name, unsigned char d_type) {
+	unsigned int namelen = 0;
+	while (name[namelen])
+		namelen++;
+	unsigned int reclen = 19 + namelen + 1; /* d_ino+d_off+d_reclen+d_type, then name+NUL */
+	reclen = (reclen + 7) & ~7u; /* round up so the *next* record's d_ino stays 8-byte aligned */
+	*(unsigned long *)(buf + 0) = ino;
+	*(long *)(buf + 8) = 0; /* d_off -- see this function's own comment */
+	*(unsigned short *)(buf + 16) = (unsigned short)reclen;
+	buf[18] = d_type;
+	for (unsigned int i = 0; i < namelen; i++)
+		buf[19 + i] = name[i];
+	for (unsigned int i = 19 + namelen; i < reclen; i++)
+		buf[i] = 0; /* NUL terminator plus any alignment padding */
+	return reclen;
+}
+
+static void sys_getdents64(struct regs *r) {
+	unsigned long fd_num = r->a0;
+	unsigned char *buf = (unsigned char *)r->a1;
+	unsigned long count = r->a2;
+
+	struct fd_entry *fd = fd_num >= 3 ? process_fd_get((int)fd_num - 3) : 0;
+	if (!fd) {
+		r->a0 = (unsigned long)-EBADF;
+		return;
+	}
+	if (!fd->is_dir) {
+		r->a0 = (unsigned long)-ENOTDIR;
+		return;
+	}
+
+	/* fd->pos indexes a virtual entry list: ".", "..", then
+	 * mm/ramfs.c's own root directory (ramfs_root_entry_*()) --
+	 * synthesized here rather than stored anywhere, since there both
+	 * are exactly two fixed extra entries every real directory has. */
+	unsigned int total = 2 + ramfs_root_entry_count();
+	unsigned long written = 0;
+	while (fd->pos < total) {
+		const char *name;
+		unsigned char d_type;
+		if (fd->pos == 0) { name = "."; d_type = DT_DIR; }
+		else if (fd->pos == 1) { name = ".."; d_type = DT_DIR; }
+		else {
+			unsigned int i = (unsigned int)(fd->pos - 2);
+			name = ramfs_root_entry_name(i);
+			d_type = ramfs_root_entry_is_symlink(i) ? DT_LNK : DT_REG;
+		}
+
+		unsigned int namelen = 0;
+		while (name[namelen])
+			namelen++;
+		unsigned int reclen = (19 + namelen + 1 + 7) & ~7u;
+		if (written + reclen > count)
+			break; /* caller's buffer is full -- stop, resume from here next call */
+
+		paging_ensure_writable((unsigned long)(buf + written), reclen);
+		written += fill_dirent64(buf + written, fd->pos + 1, name, d_type);
+		fd->pos++;
+	}
+	r->a0 = written; /* 0 once fd->pos reaches total -- musl's readdir() treats that as EOF */
 }
 
 /* checkpoint 8: real execve() -- sched/process.h's process_execve()
@@ -735,6 +841,7 @@ static void syscall_dispatch(struct regs *r) {
 	case SYS_getegid:                                                                                      sys_getegid(r); return;
 	case SYS_getpid:                                                                                 sys_getpid(r); return;
 	case SYS_fcntl:                                                                                     sys_fcntl(r); return;
+	case SYS_getdents64:                                                                                   sys_getdents64(r); return;
 	default:
 		kprintf("FATAL: unimplemented syscall %lu\n", r->a7);
 		r->a0 = (unsigned long)-ENOSYS;
@@ -747,5 +854,5 @@ void syscall_init(void) {
 		"brk, mmap, munmap, ioctl, sched_yield, set_tid_address, "
 		"clone, wait4, rt_sigprocmask, gettid, openat, close, read, execve, "
 		"getcwd, chdir, newfstatat, rt_sigaction, getppid, geteuid, "
-		"getpid, fcntl)\n");
+		"getpid, fcntl, getdents64)\n");
 }

@@ -33,6 +33,11 @@ struct fd_entry {
 	const unsigned char *data;
 	unsigned long size;
 	unsigned long pos;
+	int is_dir; /* checkpoint 11: opendir()/readdir() -- see arch/riscv64_syscall.c's
+	             * sys_openat/sys_getdents64. When set, `pos` means something
+	             * different: not a byte offset into `data` (there is none --
+	             * a directory fd has no backing bytes), but which
+	             * mm/ramfs.c root-directory entry to hand out next. */
 };
 
 struct process {

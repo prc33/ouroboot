@@ -41,4 +41,20 @@ struct ramfs_file {
  * file. Returns 0 if no name/basename in the table matches. */
 const struct ramfs_file *ramfs_lookup(const char *path);
 
+/* checkpoint 11: real ls/opendir/readdir -- "." and "/" both mean the
+ * one flat root directory (arch/riscv64_syscall.c's sys_newfstatat's
+ * own comment), and its contents are exactly what ramfs_lookup() can
+ * actually resolve: mm/ramfs.c's own files[] (real files) plus every
+ * name in busybox_applets[] -- applets[0] itself ("busybox") is the
+ * real file every other name in that list is a symlink to on a real
+ * multi-call install, reported the same way here (see
+ * ramfs_root_entry_is_symlink()). Index-based rather than returning
+ * anything dirent-shaped, so this header doesn't need to know
+ * struct dirent64's exact (Linux-ABI, not C-standard) layout --
+ * arch/riscv64_syscall.c's sys_getdents64 builds real records from
+ * this. */
+unsigned int ramfs_root_entry_count(void);
+const char *ramfs_root_entry_name(unsigned int index); /* index must be < ramfs_root_entry_count() */
+int ramfs_root_entry_is_symlink(unsigned int index);   /* 1 for every busybox alias but the first */
+
 #endif

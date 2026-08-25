@@ -185,6 +185,8 @@ RISCV64_TEST_ASSERTIONS := \
 	--must-contain "P9 checkpoint OK" \
 	--must-contain "built-in shell (ash)" \
 	--must-contain "hello ash" \
+	--must-contain "greeting" \
+	--must-contain "exec_target" \
 	--must-contain "process: all processes exited" \
 	--must-contain "P10 checkpoint OK" \
 	--must-not-contain "FATAL" \
@@ -233,7 +235,19 @@ RISCV64_TEST_ASSERTIONS := \
 # either way. A no-op for emulator/js/boot.js's own --input too (it
 # never loses anything -- see uart.js's own comment), just two extra
 # harmless empty prompts.
-RISCV64_INTERACTIVE_INPUT := \r\recho hello ash\rexit 7\r
+#
+# `ls` in the middle: the real regression test for a real bug (a user
+# report, not something this test suite happened to catch on its own)
+# -- open(".") failed with ENOENT (mm/ramfs.c has no real directory
+# entries to match against) even though stat(".") already worked, so
+# every `ls` in the browser demo failed with "can't open '.'". Fixed
+# by arch/riscv64_syscall.c's sys_openat/sys_getdents64 (see their own
+# comments); "greeting"/"exec_target" below are mm/ramfs.c's own real
+# files, only reachable in the transcript through a real, successful
+# directory listing, not (unlike "busybox") also produced some other
+# way (the boot banner prints "BusyBox", capital B, a different
+# string).
+RISCV64_INTERACTIVE_INPUT := \r\recho hello ash\rls\rexit 7\r
 
 test: kernel.elf
 	python3 test/boot_test.py kernel.elf \
@@ -253,13 +267,15 @@ test: kernel.elf
 #
 # --max-seconds: a speed *regression* test, not just a correctness one
 # -- see boot.js's own comment on the flag. 120s is generous headroom
-# over an uncontended ~60s (194M instructions, this exact checkpoint
-# sequence) so a loaded CI box doesn't flake, while still catching the
-# real regression this guards: reverting cpu.js's TLBs took this exact
-# run from ~60s to multiple *minutes* (git history/commit f0180da).
+# over an uncontended ~67s (225M instructions, this exact checkpoint
+# sequence, including the `ls` RISCV64_INTERACTIVE_INPUT now runs) so
+# a loaded CI box doesn't flake, while still catching the real
+# regression this guards: reverting cpu.js's TLBs took this exact run
+# from under a minute to multiple *minutes* (git history/commit
+# f0180da). --max-instructions has matching headroom over that 225M.
 test-js: kernel.elf
 	node ../emulator/js/boot.js kernel.elf \
-		--max-instructions 200000000 \
+		--max-instructions 260000000 \
 		--max-seconds 120 \
 		--time-advance 100 \
 		--input "$(RISCV64_INTERACTIVE_INPUT)" \
@@ -277,13 +293,13 @@ kernel-shell.elf: $(SHELL_OBJS)
 	$(TCC) $(LDFLAGS) -o $@ $(SHELL_OBJS)
 
 # Covers both properties this target exists for: real interactive use
-# (RISCV64_INTERACTIVE_INPUT's `echo`/`exit` round-trip actually runs
-# and produces "hello ash" + a clean process-table drain, not just a
-# prompt appearing -- reaching "built-in shell (ash)" alone doesn't
-# prove typed input is ever read) and speed (--max-seconds 45,
-# generous over an uncontended ~12s for this smaller ~70M-instruction
-# direct-shell path -- see test-js's own comment on the flag and the
-# budget-sizing rationale).
+# (RISCV64_INTERACTIVE_INPUT's `echo`/`ls`/`exit` round-trip actually
+# runs and produces "hello ash" + a real ls listing + a clean
+# process-table drain, not just a prompt appearing -- reaching
+# "built-in shell (ash)" alone doesn't prove typed input is ever read)
+# and speed (--max-seconds 45, generous over an uncontended ~18s for
+# this smaller ~100M-instruction direct-shell path -- see test-js's
+# own comment on the flag and the budget-sizing rationale).
 shell-js: kernel-shell.elf
 	node ../emulator/js/boot.js kernel-shell.elf \
 		--max-instructions 200000000 \

@@ -424,6 +424,7 @@ int process_fork(struct regs *r) {
 		child->fds[fd].data = parent->fds[fd].data;
 		child->fds[fd].size = parent->fds[fd].size;
 		child->fds[fd].pos = parent->fds[fd].pos;
+		child->fds[fd].is_dir = parent->fds[fd].is_dir;
 	}
 
 	/* Child's saved trapframe: an exact snapshot of the parent's live
