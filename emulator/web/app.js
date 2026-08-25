@@ -8,7 +8,7 @@ const term = new Terminal({
 	theme: { background: '#000000', foreground: '#e0e0e0' },
 });
 term.open(document.getElementById('terminal'));
-term.write('Fetching kernel.elf...\r\n');
+term.write('Fetching kernel and initrd...\r\n');
 window.term = term; /* debugging/testability hook, e.g. reading term.buffer from outside */
 
 const worker = new Worker('worker.js');
@@ -31,16 +31,17 @@ term.onData((data) => {
 		worker.postMessage({ type: 'input', byte: data.charCodeAt(i) });
 });
 
-const kernelPath = new URLSearchParams(location.search).get('kernel') || '../../kernel/kernel.elf';
-fetch(kernelPath)
-	.then((r) => {
-		if (!r.ok) throw new Error(`fetching ${kernelPath}: HTTP ${r.status}`);
-		return r.arrayBuffer();
-	})
-	.then((elfBytes) => {
-		term.write(`Booting ${kernelPath} (${elfBytes.byteLength} bytes)...\r\n\r\n`);
-		worker.postMessage({ type: 'boot', elfBytes }, [elfBytes]);
-	})
+const params = new URLSearchParams(location.search);
+const kernelPath = params.get('kernel') || '../../kernel/kernel-shell.elf';
+const initrdPath = params.get('initrd') || '../../kernel/tcc-initrd.tar';
+
+Promise.all([kernelPath, initrdPath].map((path) => fetch(path).then((r) => {
+	if (!r.ok) throw new Error(`fetching ${path}: HTTP ${r.status}`);
+	return r.arrayBuffer();
+}))).then(([elfBytes, initrdBytes]) => {
+	term.write(`Booting ${kernelPath} with ${initrdPath}...\r\n\r\n`);
+	worker.postMessage({ type: 'boot', elfBytes, initrdBytes }, [elfBytes, initrdBytes]);
+})
 	.catch((e) => {
-		term.write(`\r\n\x1b[31mfailed to fetch kernel: ${e.message}\x1b[0m\r\n`);
+		term.write(`\r\n\x1b[31mfailed to fetch boot files: ${e.message}\x1b[0m\r\n`);
 	});

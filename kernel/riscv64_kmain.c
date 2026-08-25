@@ -429,15 +429,14 @@ void kmain(unsigned long hartid, unsigned long dtb) {
 	run_pmm_reserve_test();
 	paging_init(RV64_MEM_TOP);
 
-	/* checkpoint 13: a real, separate boot module -- see mm/tar.h's
-	 * own comment. Harmless (0 files, real memory that was never
-	 * written to reads as zero, so the tar parser's own end-of-archive
-	 * check fires on the very first header) if nothing actually loaded
-	 * one -- every existing checkpoint below runs identically either
-	 * way, only kernel/Makefile's own test-initrd target actually
-	 * supplies a real archive. */
+	/* The filesystem is always an explicit boot module; kernel.elf contains
+	 * no ramdisk bytes. */
 	unsigned int initrd_files = tar_load_initrd((const unsigned char *)RV64_INITRD_BASE, RV64_INITRD_MAX_SIZE);
 	kprintf("initrd: %u file(s) loaded from tar at %p\n", initrd_files, (void *)RV64_INITRD_BASE);
+	if (!initrd_files) {
+		kprintf("FATAL: an explicit initrd tar is required\n");
+		goto halt;
+	}
 
 #ifdef KERNEL_DIRECT_SHELL
 	/* Product/performance boot: the checkpoint chain remains the default test

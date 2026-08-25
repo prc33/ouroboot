@@ -25,6 +25,13 @@ function loadElf(bytes) {
     return entry;
 }
 
+function loadInitrd(bytes) {
+    const start = rv.rv_ram() + 0x04000000;
+    if (bytes.byteLength > 0x01000000)
+        throw new Error('initrd exceeds the kernel 16 MiB limit');
+    new Uint8Array(rv.memory.buffer).set(bytes, start);
+}
+
 function flushOutput() {
     const bytes = [];
     while (rv.rv_output_count()) bytes.push(rv.rv_output());
@@ -43,18 +50,20 @@ function runChunk() {
     }
 }
 
-async function boot(elfBuffer) {
+async function boot(elfBuffer, initrdBuffer) {
     const response = await fetch('rv64.wasm');
     if (!response.ok) throw new Error(`fetching rv64.wasm: HTTP ${response.status}`);
     ({ instance: { exports: rv } } = await WebAssembly.instantiate(await response.arrayBuffer()));
-    rv.rv_init(loadElf(new Uint8Array(elfBuffer)));
+    const entry = loadElf(new Uint8Array(elfBuffer));
+    loadInitrd(new Uint8Array(initrdBuffer));
+    rv.rv_init(entry);
     running = true;
     runChunk();
 }
 
 onmessage = ({ data }) => {
     if (data.type === 'boot') {
-        boot(data.elfBytes).catch(error =>
+        boot(data.elfBytes, data.initrdBytes).catch(error =>
             postMessage({ type: 'error', message: error.stack || error.message }));
     } else if (data.type === 'input' && rv) {
         rv.rv_input(data.byte);

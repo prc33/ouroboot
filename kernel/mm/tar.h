@@ -4,16 +4,14 @@
 /* checkpoint 13: a real (uncompressed, USTAR) tar archive, already
  * sitting in memory -- loaded at a fixed physical address
  * (arch/riscv64_memmap.h's RV64_INITRD_BASE) by whatever actually
- * booted the kernel, *not* baked into kernel.elf the way every other
- * embedded payload in this kernel is (mm/ramfs.c's own files[]/
- * busybox_elf_riscv64_payload.h). Every regular file entry becomes a
+ * booted the kernel; no filesystem contents are baked into kernel.elf.
+ * Every regular file entry becomes a
  * real, immediately readable/writable/listable ramfs entry (mm/ramfs.h's
  * own checkpoint 12 dynamic files) -- the same mechanism a running
  * program creating a file with open()+write() uses, not a separate
  * read-only fixed table. Directories/symlinks/etc are silently
- * skipped -- this ramfs is flat (basename-matched, mm/ramfs.c's own
- * comment), so a tar's own directory structure doesn't need modeling,
- * just each real file's content.
+ * skipped. Directory components in regular-file names are retained as part
+ * of the lookup key; directory inodes themselves are not modeled.
  *
  * Uncompressed tar, not zip: USTAR's own format is a flat, forward-
  * only stream of fixed 512-byte headers + block-padded data, parseable
@@ -27,11 +25,8 @@
  * self-terminating convention, so the *exact* archive size never
  * needs to be known or passed in) or after `max_size` bytes, whichever
  * comes first -- `max_size` is a safety bound against scanning into
- * uninitialized memory if no real archive was actually loaded (which
- * this function then correctly, harmlessly treats as "zero bytes read,
- * zero files loaded" -- every real tar starts with a real header, and
- * unloaded RAM reads as zero, so the very first end-of-archive check
- * fires immediately). Returns the number of regular files loaded. */
+ * invalid memory. Returns the number of regular files loaded; the kernel
+ * rejects zero because an explicit initrd is required. */
 unsigned int tar_load_initrd(const unsigned char *data, unsigned long max_size);
 
 #endif

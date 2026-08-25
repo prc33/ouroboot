@@ -106,9 +106,8 @@
  * archive (mm/tar.c), loaded at this fixed physical address by
  * whatever's actually booting the kernel (QEMU's `-device
  * loader,file=...,addr=...` -- kernel/Makefile's own test target --
- * or emulator/js/boot.js's equivalent second fetch()+loadBytes()),
- * *not* baked into kernel.elf the way every other embedded payload in
- * this kernel is. 64MB in from RV64_RAM_BASE: comfortably past
+ * or either C emulator front end), never baked into kernel.elf. 64MB in from
+ * RV64_RAM_BASE: comfortably past
  * kernel_end (a few MB at most) and the scratch region above, with
  * still-generous headroom below RV64_MEM_TOP (128MB total) for
  * whatever the archive actually contains. Not a linker symbol or a

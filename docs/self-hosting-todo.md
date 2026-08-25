@@ -10,7 +10,7 @@ The target builds a RISC-V64 stage-1 TCC with this repository's TCC, packs
 that compiler, the TCC sources, headers, runtime, and musl development files
 into a tar initrd, and boots the normal kernel under QEMU. Inside BusyBox ash:
 
-1. stage 1 compiles `tcc.c` and links `/tcc-stage2`;
+1. `/tcc` compiles `/tcc-src/tcc.c` and links `/tcc-stage2`;
 2. stage 2 runs and reports its version;
 3. stage 2 compiles and links a fresh program;
 4. that program runs and prints `hello from stage2 tcc`.

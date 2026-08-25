@@ -68,6 +68,19 @@ bad:
     exit(1);
 }
 
+static void load_initrd(const char *path)
+{
+    FILE *file = fopen(path, "rb");
+    long size;
+    if (!file || fseek(file, 0, SEEK_END) || (size = ftell(file)) < 0 ||
+        size > 0x01000000L || fseek(file, 0, SEEK_SET) ||
+        fread(ram + 0x04000000, 1, (size_t)size, file) != (size_t)size) {
+        fprintf(stderr, "%s: invalid, unreadable, or larger than 16 MiB\n", path);
+        exit(1);
+    }
+    fclose(file);
+}
+
 static void host_input(void)
 {
     u8 bytes[256];
@@ -95,17 +108,18 @@ int main(int argc, char **argv)
     u64 limit = 0, done = 0;
     int flags;
 
-    if (argc < 2 || argc > 3) {
-        fprintf(stderr, "usage: %s kernel.elf [max-instructions]\n", argv[0]);
+    if (argc < 3 || argc > 4) {
+		fprintf(stderr, "usage: %s kernel.elf initrd.tar [max-instructions]\n", argv[0]);
         return 2;
     }
-    if (argc == 3) limit = strtoull(argv[2], 0, 0);
+    if (argc == 4) limit = strtoull(argv[3], 0, 0);
     flags = fcntl(0, F_GETFL, 0);
     if (flags < 0 || fcntl(0, F_SETFL, flags | O_NONBLOCK) < 0) {
         perror("stdin nonblocking mode");
         return 1;
     }
 
+    load_initrd(argv[2]);
     rv_init(load_elf(argv[1]));
     while (!limit || done < limit) {
         u32 batch = 200000;

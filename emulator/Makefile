@@ -20,12 +20,13 @@ rv64-run: runner.c rv64.c
 test: test-boot test-shell
 
 test-boot: $(RV64_WASM)
-	node test/boot.mjs ../kernel/kernel.elf
+	node test/boot.mjs ../kernel/kernel.elf 200000000 '' 'P5 checkpoint 2 OK' \
+		../kernel/initrd.tar
 
 test-shell: $(RV64_WASM)
 	node test/boot.mjs ../kernel/kernel-shell.elf 200000000 \
 		'\r\recho hello ash\rls\recho writable-fs-works > wtest\rls\rexit 7\r' \
-		'P10 checkpoint OK'
+		'P10 checkpoint OK' ../kernel/initrd.tar
 
 clean:
 	rm -f $(RV64_WASM) rv64-run

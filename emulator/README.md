@@ -19,6 +19,7 @@ directly into BusyBox `ash`:
 make -C compiler clean
 make -C compiler TARGET=riscv64
 make -C kernel ARCH=riscv64 kernel-shell.elf
+make -C kernel ARCH=riscv64 tcc-initrd
 ```
 
 Use `kernel/kernel.elf` instead if you want the longer boot containing every
@@ -41,18 +42,24 @@ Then serve the repository root and open the terminal page:
 python3 -m http.server 8000
 ```
 
-Open <http://localhost:8000/emulator/web/?kernel=../../kernel/kernel-shell.elf>.
+Open <http://localhost:8000/emulator/web/>. By default it loads the direct-shell
+kernel and `kernel/tcc-initrd.tar`, so `ls` includes the runnable `tcc`.
+Use `?kernel=../../kernel/kernel.elf` to run every historical checkpoint first.
+To expose the complete source/header closure image instead, build
+`selfhost-initrd` and add `?initrd=../../kernel/selfhost-initrd.tar`.
 The page obtains xterm.js from a CDN, so that first load needs network access.
 It starts the emulator in a Web Worker, leaving the terminal responsive while
 the guest runs. `fetch()` and Worker loading require HTTP; opening the HTML as
 a `file://` URL will not work.
 
-Without the `kernel` query parameter, the page loads `kernel/kernel.elf`. The
-generated `web/rv64.wasm` is freestanding and has no WASI or JavaScript imports.
+The `kernel` and `initrd` query parameters can select any served ELF and tar.
+Both are mandatory boot artifacts; the kernel contains no built-in filesystem.
+The generated `web/rv64.wasm` is freestanding and has no WASI or JavaScript
+imports.
 
 ## Native command-line demo
 
-The 119-line `runner.c` front end loads ELF segments and bridges the
+The small `runner.c` front end loads ELF segments and the initrd, then bridges the
 emulated UART to standard input and output. Inside an i386 POSIX VM containing
 this project's TCC, a libc such as musl, and the repository, build and run it
 with:
@@ -60,7 +67,7 @@ with:
 ```sh
 cd emulator
 tcc -O2 -o rv64-run runner.c
-./rv64-run ../kernel/kernel-shell.elf
+./rv64-run ../kernel/kernel-shell.elf ../kernel/tcc-initrd.tar
 ```
 
 From the repository root, the equivalent build is `make -C emulator
@@ -68,9 +75,9 @@ native`; it uses `compiler/tcc`, which must have been built with `TARGET=i386`
 and must have an i386 libc available for linking. A normal host C compiler can
 also build the runner for quick development (`cc -O2 -o rv64-run runner.c`).
 
-The runner stays attached to the terminal until interrupted. An optional
-second argument limits executed instructions, for example
-`./rv64-run ../kernel/kernel.elf 100000000`.
+The runner stays attached to the terminal until interrupted. An optional third
+argument limits executed instructions, for example
+`./rv64-run ../kernel/kernel.elf ../kernel/initrd.tar 100000000`.
 
 ## Automated checks
 
@@ -82,8 +89,8 @@ make -C emulator test-shell  # scripted BusyBox shell session
 make -C emulator test        # run both
 ```
 
-`test-boot` and `test-shell` expect their respective kernel ELF files to have
-already been built. The repository-level regression test is:
+`test-boot` and `test-shell` expect their kernel ELF and `kernel/initrd.tar` to
+have already been built. The repository-level regression test is:
 
 ```sh
 make -C kernel ARCH=riscv64 test-wasm

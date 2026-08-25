@@ -69,7 +69,7 @@ $(error unknown ARCH '$(ARCH)' -- expected i386 or riscv64)
 endif
 
 .PHONY: all test test-wasm shell-wasm test-initrd test-initrd-wasm \
-	test-selfhost selfhost-initrd clean
+	test-selfhost tcc-initrd selfhost-initrd clean
 
 all: kernel.elf
 
@@ -280,22 +280,23 @@ RISCV64_INTERACTIVE_INPUT := \r\recho hello ash\rls\recho writable-fs-works > wt
 # had this problem -- only the real-QEMU path was under-provisioned.
 # Explicit here now so QEMU's real configuration actually matches what
 # the kernel has always assumed it has.
-test: kernel.elf
+test: kernel.elf initrd.tar
 	python3 test/boot_test.py kernel.elf \
 		--qemu-binary qemu-system-riscv64 \
 		--qemu-arg=-M --qemu-arg=virt \
 		--qemu-arg=-bios --qemu-arg=default \
 		--qemu-arg=-cpu --qemu-arg=rv64,sstc=true \
+		--qemu-arg=-device --qemu-arg=loader,file=initrd.tar,addr=0x84000000 \
 		--mem 128 \
 		--stdin-input "$(RISCV64_INTERACTIVE_INPUT)" \
 		$(RISCV64_TEST_ASSERTIONS)
 
 # TCC-built C/Wasm emulator instead of QEMU. Reaching P10 implies that all
 # earlier boot, process, filesystem, and interactive-shell work completed.
-test-wasm: kernel.elf
+test-wasm: kernel.elf initrd.tar
 	$(MAKE) -C ../emulator web/rv64.wasm
 	node ../emulator/test/boot.mjs kernel.elf 340000000 \
-		"$(RISCV64_INTERACTIVE_INPUT)" 'P10 checkpoint OK'
+		"$(RISCV64_INTERACTIVE_INPUT)" 'P10 checkpoint OK' initrd.tar
 
 # Direct product boot used for interactive development and the emulator's
 # startup-time budget. It runs the exact same P10 process/BusyBox path while
@@ -314,26 +315,16 @@ kernel-shell.elf: $(SHELL_OBJS)
 # real created-and-read-back file + a clean process-table drain, not
 # just a prompt appearing -- reaching "built-in shell (ash)" alone
 # doesn't prove typed input is ever read).
-shell-wasm: kernel-shell.elf
+shell-wasm: kernel-shell.elf initrd.tar
 	$(MAKE) -C ../emulator test-shell
 
-# checkpoint 13: the actual point of mm/tar.c -- a real, separate
-# tar archive (test/initrd-fixture/, one small real file, tarred by
-# the host's own `tar`, same "external, unmodified host tool" role
-# `qemu-riscv64-static`/`git` already have throughout this project's
-# own build scripts -- nothing about *packaging* a tar is this
-# project's own work to reinvent) loaded at boot by QEMU's real
-# `-device loader,file=...,addr=...` (a real, documented QEMU
-# mechanism for placing an arbitrary file at a fixed physical address
-# before the guest starts -- exactly the same address
-# arch/riscv64_memmap.h's RV64_INITRD_BASE already hardcodes), parsed
-# and turned into a real, readable ramfs file entirely at runtime, no
-# kernel rebuild involved in changing what's inside it. "1 file(s)
-# loaded" plus the fixture's own real content (not embedded anywhere
-# else in this kernel) is the real proof this actually worked, not
-# just that boot reached a prompt.
-initrd.tar: test/initrd-fixture/from-initrd.txt
-	tar cf $@ -C test/initrd-fixture from-initrd.txt
+# The ordinary explicit filesystem image: BusyBox, the process-test fixtures,
+# and one plain data file. The host tar packages it; QEMU or the Wasm host puts
+# it at RV64_INITRD_BASE. The kernel contains no file payload bytes.
+initrd.tar: test/build-initrd.sh test/initrd-fixture/from-initrd.txt \
+		test/initrd-fixture/greeting test/initrd-fixture/test.sh \
+		user_test/busybox_riscv64.elf user_test/exec_target_riscv64.elf
+	sh test/build-initrd.sh .. $@
 
 test-initrd: kernel.elf initrd.tar
 	python3 test/boot_test.py kernel.elf \
@@ -344,7 +335,7 @@ test-initrd: kernel.elf initrd.tar
 		--qemu-arg=-device --qemu-arg=loader,file=initrd.tar,addr=0x84000000 \
 		--mem 128 \
 		--stdin-input "\r\rcat from-initrd.txt\rexit 7\r" \
-		--must-contain "initrd: 1 file(s) loaded" \
+		--must-contain "initrd: 5 file(s) loaded" \
 		--must-contain "hello from a real initrd tar" \
 		--must-contain "process: all processes exited" \
 		--must-contain "P10 checkpoint OK" \
@@ -359,7 +350,7 @@ test-initrd-wasm: kernel.elf initrd.tar
 	$(MAKE) -C ../emulator web/rv64.wasm
 	node ../emulator/test/boot.mjs kernel.elf 200000000 \
 		"\r\rcat from-initrd.txt\rexit 7\r" \
-		'initrd: 1 file(s) loaded\nhello from a real initrd tar\nP10 checkpoint OK' \
+		'initrd: 5 file(s) loaded\nhello from a real initrd tar\nP10 checkpoint OK' \
 		initrd.tar
 
 # Full closure test: build a riscv64 TCC with this repository's TCC, place
@@ -370,7 +361,14 @@ selfhost-initrd:
 	$(MAKE) -C ../compiler TARGET=riscv64 stage1
 	sh test/build-selfhost-initrd.sh .. selfhost-initrd.tar
 
-RISCV64_SELFHOST_INPUT := \r\recho SELFHOST: stage1 compiling TCC\r/tcc/tcc -B/tcc -I/tcc -I/tcc/include -I/musl/obj/include -I/musl/include -I/musl/arch/riscv64 -I/musl/arch/generic -nostdinc -DTCC_TARGET_RISCV64 -c -o /tcc-stage2.o /tcc/tcc.c\r/tcc/tcc -B/tcc -static -nostdinc -nostdlib -o /tcc-stage2 /musl/lib/crt1.o /musl/lib/crti.o /tcc-stage2.o /musl/lib/libc.a /tcc/libtcc1.a /musl/lib/crtn.o\recho SELFHOST: stage2 runs\r/tcc-stage2 -v\recho SELFHOST: stage2 compiling program\r/tcc-stage2 -B/tcc -I/tcc/include -I/musl/obj/include -I/musl/include -I/musl/arch/riscv64 -I/musl/arch/generic -nostdinc -static -nostdlib -o /selfhost-hello /musl/lib/crt1.o /musl/lib/crti.o /selfhost-hello.c /musl/lib/libc.a /tcc/libtcc1.a /musl/lib/crtn.o\r/selfhost-hello\recho SELFHOST: complete\rexit 7\r
+# Small interactive image: the ordinary BusyBox filesystem plus a runnable
+# stage-1 compiler, without the much larger source/header closure payload.
+tcc-initrd:
+	$(MAKE) -C ../compiler clean
+	$(MAKE) -C ../compiler TARGET=riscv64 stage1
+	sh test/build-initrd.sh .. tcc-initrd.tar ../compiler/stage1/tcc
+
+RISCV64_SELFHOST_INPUT := \r\recho SELFHOST: stage1 compiling TCC\r/tcc -B/tcc-src -I/tcc-src -I/tcc-src/include -I/musl/obj/include -I/musl/include -I/musl/arch/riscv64 -I/musl/arch/generic -nostdinc -DTCC_TARGET_RISCV64 -c -o /tcc-stage2.o /tcc-src/tcc.c\r/tcc -B/tcc-src -static -nostdinc -nostdlib -o /tcc-stage2 /musl/lib/crt1.o /musl/lib/crti.o /tcc-stage2.o /musl/lib/libc.a /tcc-src/libtcc1.a /musl/lib/crtn.o\recho SELFHOST: stage2 runs\r/tcc-stage2 -v\recho SELFHOST: stage2 compiling program\r/tcc-stage2 -B/tcc-src -I/tcc-src/include -I/musl/obj/include -I/musl/include -I/musl/arch/riscv64 -I/musl/arch/generic -nostdinc -static -nostdlib -o /selfhost-hello /musl/lib/crt1.o /musl/lib/crti.o /selfhost-hello.c /musl/lib/libc.a /tcc-src/libtcc1.a /musl/lib/crtn.o\r/selfhost-hello\recho SELFHOST: complete\rexit 7\r
 
 test-selfhost: kernel.elf
 	$(MAKE) selfhost-initrd
@@ -395,4 +393,4 @@ endif
 
 clean:
 	rm -f kernel.elf kernel-shell.elf riscv64_kmain_shell.o initrd.tar \
-		selfhost-initrd.tar $(OBJS)
+		tcc-initrd.tar selfhost-initrd.tar $(OBJS)

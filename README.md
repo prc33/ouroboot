@@ -113,10 +113,11 @@ boots all the way to a real busybox ash prompt that accepts real
 typed input:
 
 ```
-cd kernel && make ARCH=riscv64           # build kernel.elf
+cd kernel && make ARCH=riscv64 kernel-shell.elf
+make ARCH=riscv64 tcc-initrd             # explicit filesystem with TCC
 cd ..                                    # repo root -- index.html
-                                          # fetches ../../kernel/kernel.elf,
-                                          # so the server has to be rooted
+                                          # fetches both files from kernel/,
+                                          # so the server must be rooted
                                           # here, not in emulator/web/
 python3 -m http.server 8000
 # open http://localhost:8000/emulator/web/index.html
@@ -124,15 +125,13 @@ python3 -m http.server 8000
 (Any static HTTP server works -- `fetch()` and Worker script loading
 both need a real origin, not `file://`.)
 
-You'll see the kernel boot, run its pmm/paging/COW/scheduler/syscall
-checkpoints, load a real static musl+TCC riscv64 binary into userspace
-via a real ELF loader, fork/exec/wait4 real child processes, and
-finally hand off to a real embedded busybox `ash` -- all inside
+You'll see the direct-shell kernel boot and hand off to BusyBox `ash` from the
+explicit initrd, with a runnable `/tcc`, all inside
 `xterm.js`, with the CPU running in a Web Worker so it never blocks
 the UI. Once you see the `#` prompt, click into the terminal and
 type: real keystrokes go out over the same UART byte interface the
 kernel's own serial console uses. The direct BusyBox shell reaches its prompt
-in about five seconds on a typical desktop V8 engine.
+in roughly twenty seconds in the Node/V8 regression environment.
 
 Headless equivalent (same checkpoints, including a scripted shell
 session, asserted against QEMU's own output so the two can't silently
@@ -142,4 +141,4 @@ drift apart): `cd kernel && make ARCH=riscv64 test-wasm`. See
 The same emulator also has a C command-line front end, so Wasm and a browser
 are optional. On an i386 machine or VM containing this project's TCC, run
 `cd emulator && tcc -O2 -o rv64-run runner.c`, then
-`./rv64-run ../kernel/kernel-shell.elf`.
+`./rv64-run ../kernel/kernel-shell.elf ../kernel/tcc-initrd.tar`.

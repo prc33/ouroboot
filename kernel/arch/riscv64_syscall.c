@@ -482,11 +482,8 @@ static void sys_gettid(struct regs *r) {
 	r->a0 = current_tid();
 }
 
-/* checkpoint 8: real open()+read()+close(), against mm/ramfs.h's
- * fixed embedded file table -- see that file's own comment for what
- * "real" means here (actual bytes an actual musl+TCC binary actually
- * reads, just not backed by a real block device or writable
- * namespace yet). fd numbers 3.. (0/1/2 stay the UART console,
+/* Real open()+read()+close() against the initrd-populated ramfs. fd numbers
+ * 3.. (0/1/2 stay the UART console,
  * unaffected) -- sched/process.h's process_fd_alloc/get/close index
  * by the raw fds[] slot, this file applies the +3 offset. */
 /* checkpoint 14: bumped from 64 -- the tar-loaded initrd's real
@@ -1169,6 +1166,8 @@ static void sys_fcntl(struct regs *r) {
 		nf->data = old->data;
 		nf->size = old->size;
 		nf->pos = old->pos;
+		nf->is_dir = old->is_dir;
+		nf->dynfile = old->dynfile;
 		r->a0 = (unsigned long)(idx + 3);
 		return;
 	}
