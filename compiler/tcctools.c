@@ -299,14 +299,6 @@ the_end:
  * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
-/* tcc_tool_impdef (Windows .def import-library generation) removed
- * from this fork -- it was already entirely inert here (its own
- * body was `#ifdef TCC_TARGET_PE`-gated, and this project never
- * defines TCC_TARGET_PE -- no PE/Windows target at all, per
- * docs/self-hosting-system-plan.md's own "Delete: ... PE/COFF +
- * Windows"), just leftover mainline source contributing nothing
- * to any build this project does. */
-
 /* -------------------------------------------------------------- */
 /*
  *  TCC - Tiny C Compiler
@@ -346,12 +338,6 @@ ST_FUNC void tcc_tool_cross(TCCState *s1, char **argv, int option)
 /* -------------------------------------------------------------- */
 /* enable commandline wildcard expansion (tcc -o x.exe *.c) */
 
-#ifdef _WIN32
-int _CRT_glob = 1;
-#ifndef _CRT_glob
-int _dowildcard = 1;
-#endif
-#endif
 
 /* -------------------------------------------------------------- */
 /* generate xxx.d file */

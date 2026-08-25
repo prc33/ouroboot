@@ -1,8 +1,5 @@
 #include <stdio.h>
 
-#if defined(_WIN32)
-#include <fcntl.h>
-#endif
 
 /* Define architecture */
 #if defined(__i386__) || defined _M_IX86
@@ -24,10 +21,6 @@
 # define TRIPLET_OS "linux"
 #elif defined (__FreeBSD__) || defined (__FreeBSD_kernel__)
 # define TRIPLET_OS "kfreebsd"
-#elif defined(_WIN32)
-# define TRIPLET_OS "win32"
-#elif defined(__APPLE__)
-# define TRIPLET_OS "darwin"
 #elif !defined (__GNU__)
 # define TRIPLET_OS "unknown"
 #endif
@@ -43,23 +36,15 @@
 # define TRIPLET_ABI "gnu"
 #endif
 
-#if defined _WIN32
-# define TRIPLET TRIPLET_ARCH "-" TRIPLET_OS
-#elif defined __GNU__
+#if   defined __GNU__
 # define TRIPLET TRIPLET_ARCH "-" TRIPLET_ABI
 #else
 # define TRIPLET TRIPLET_ARCH "-" TRIPLET_OS "-" TRIPLET_ABI
 #endif
 
-#if defined(_WIN32)
-int _CRT_glob = 0;
-#endif
 
 int main(int argc, char *argv[])
 {
-#if defined(_WIN32)
-    _setmode(_fileno(stdout), _O_BINARY);  /* don't translate \n to \r\n */
-#endif
     switch(argc == 2 ? argv[1][0] : 0) {
         case 'b'://igendian
         {
@@ -80,13 +65,6 @@ int main(int argc, char *argv[])
             break;
         case 'm'://inor
             printf("%d\n", __TINYC__);
-            break;
-#elif defined(_MSC_VER)
-        case 'v'://ersion
-            puts("0");
-            break;
-        case 'm'://inor
-            printf("%d\n", _MSC_VER);
             break;
 #elif defined(__GNUC__) && defined(__GNUC_MINOR__)
         /* GNU comes last as other compilers may add 'GNU' compatibility */
@@ -110,8 +88,6 @@ int main(int argc, char *argv[])
             puts("clang");
 #elif defined(__TINYC__)
             puts("tcc");
-#elif defined(_MSC_VER)
-            puts("msvc");
 #elif defined(__GNUC__)
             puts("gcc");
 #else

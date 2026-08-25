@@ -38,22 +38,6 @@
 #include "i386-gen.c"
 #include "i386-link.c"
 #include "i386-asm.c"
-#elif defined(TCC_TARGET_ARM)
-#include "arm-gen.c"
-#include "arm-link.c"
-#include "arm-asm.c"
-#elif defined(TCC_TARGET_ARM64)
-#include "arm64-gen.c"
-#include "arm64-link.c"
-#include "arm-asm.c"
-#elif defined(TCC_TARGET_C67)
-#include "c67-gen.c"
-#include "c67-link.c"
-#include "tcccoff.c"
-#elif defined(TCC_TARGET_X86_64)
-#include "x86_64-gen.c"
-#include "x86_64-link.c"
-#include "i386-asm.c"
 #elif defined(TCC_TARGET_RISCV64)
 #include "riscv64-gen.c"
 #include "riscv64-link.c"
@@ -67,12 +51,6 @@
 #endif
 #ifdef CONFIG_TCC_ASM
 #include "tccasm.c"
-#endif
-#ifdef TCC_TARGET_PE
-#include "tccpe.c"
-#endif
-#ifdef TCC_TARGET_MACHO
-#include "tccmacho.c"
 #endif
 #endif /* ONE_SOURCE */
 
@@ -89,78 +67,11 @@ static int nb_states;
 #endif
 
 /********************************************************/
-#ifdef _WIN32
-ST_FUNC char *normalize_slashes(char *path)
-{
-    char *p;
-    for (p = path; *p; ++p)
-        if (*p == '\\')
-            *p = '/';
-    return path;
-}
-
-static HMODULE tcc_module;
-
-/* on win32, we suppose the lib and includes are at the location of 'tcc.exe' */
-static void tcc_set_lib_path_w32(TCCState *s)
-{
-    char path[1024], *p;
-    GetModuleFileNameA(tcc_module, path, sizeof path);
-    p = tcc_basename(normalize_slashes(strlwr(path)));
-    if (p > path)
-        --p;
-    *p = 0;
-    tcc_set_lib_path(s, path);
-}
-
-#ifdef TCC_TARGET_PE
-static void tcc_add_systemdir(TCCState *s)
-{
-    char buf[1000];
-    GetSystemDirectory(buf, sizeof buf);
-    tcc_add_library_path(s, normalize_slashes(buf));
-}
-#endif
-
-#ifdef LIBTCC_AS_DLL
-BOOL WINAPI DllMain (HINSTANCE hDll, DWORD dwReason, LPVOID lpReserved)
-{
-    if (DLL_PROCESS_ATTACH == dwReason)
-        tcc_module = hDll;
-    return TRUE;
-}
-#endif
-#endif
 
 /********************************************************/
 #ifndef CONFIG_TCC_SEMLOCK
 #define WAIT_SEM()
 #define POST_SEM()
-#elif defined _WIN32
-static int tcc_sem_init;
-static CRITICAL_SECTION tcc_cr;
-static void wait_sem(void)
-{
-    if (!tcc_sem_init)
-        InitializeCriticalSection(&tcc_cr), tcc_sem_init = 1;
-    EnterCriticalSection(&tcc_cr);
-}
-#define WAIT_SEM() wait_sem()
-#define POST_SEM() LeaveCriticalSection(&tcc_cr);
-#elif defined __APPLE__
-/* Half-compatible MacOS doesn't have non-shared (process local)
-   semaphores.  Use the dispatch framework for lightweight locks.  */
-#include <dispatch/dispatch.h>
-static int tcc_sem_init;
-static dispatch_semaphore_t tcc_sem;
-static void wait_sem(void)
-{
-    if (!tcc_sem_init)
-      tcc_sem = dispatch_semaphore_create(1), tcc_sem_init = 1;
-    dispatch_semaphore_wait(tcc_sem, DISPATCH_TIME_FOREVER);
-}
-#define WAIT_SEM() wait_sem()
-#define POST_SEM() dispatch_semaphore_signal(tcc_sem)
 #else
 #include <semaphore.h>
 static int tcc_sem_init;
@@ -661,9 +572,6 @@ ST_FUNC void tcc_open_bf(TCCState *s1, const char *filename, int initlen)
     bf->buf_end = bf->buffer + initlen;
     bf->buf_end[0] = CH_EOB; /* put eob symbol */
     pstrcpy(bf->filename, sizeof(bf->filename), filename);
-#ifdef _WIN32
-    normalize_slashes(bf->filename);
-#endif
     bf->true_filename = bf->filename;
     bf->line_num = 1;
     bf->ifdef_stack_ptr = s1->ifdef_stack_ptr;
@@ -810,20 +718,13 @@ LIBTCCAPI TCCState *tcc_new(void)
     s->seg_size = 32;
 #endif
     /* enable this if you want symbols with leading underscore on windows: */
-#if defined TCC_TARGET_MACHO /* || defined TCC_TARGET_PE */
-    s->leading_underscore = 1;
-#endif
     s->ppfp = stdout;
     /* might be used in error() before preprocess_start() */
     s->include_stack_ptr = s->include_stack;
 
     tccelf_new(s);
 
-#ifdef _WIN32
-    tcc_set_lib_path_w32(s);
-#else
     tcc_set_lib_path(s, CONFIG_TCCDIR);
-#endif
 
     {
         /* define __TINYC__ 92X  */
@@ -856,31 +757,6 @@ LIBTCCAPI TCCState *tcc_new(void)
     tcc_define_symbol(s, "__i386__", NULL);
     tcc_define_symbol(s, "__i386", NULL);
     tcc_define_symbol(s, "i386", NULL);
-#elif defined(TCC_TARGET_X86_64)
-    tcc_define_symbol(s, "__x86_64__", NULL);
-#elif defined(TCC_TARGET_ARM)
-    tcc_define_symbol(s, "__ARM_ARCH_4__", NULL);
-    tcc_define_symbol(s, "__arm_elf__", NULL);
-    tcc_define_symbol(s, "__arm_elf", NULL);
-    tcc_define_symbol(s, "arm_elf", NULL);
-    tcc_define_symbol(s, "__arm__", NULL);
-    tcc_define_symbol(s, "__arm", NULL);
-    tcc_define_symbol(s, "arm", NULL);
-    tcc_define_symbol(s, "__APCS_32__", NULL);
-    tcc_define_symbol(s, "__ARMEL__", NULL);
-#if defined(TCC_ARM_EABI)
-    tcc_define_symbol(s, "__ARM_EABI__", NULL);
-#endif
-#if defined(TCC_ARM_HARDFLOAT)
-    s->float_abi = ARM_HARD_FLOAT;
-    tcc_define_symbol(s, "__ARM_PCS_VFP", NULL);
-#else
-    s->float_abi = ARM_SOFTFP_FLOAT;
-#endif
-#elif defined(TCC_TARGET_ARM64)
-    tcc_define_symbol(s, "__aarch64__", NULL);
-#elif defined TCC_TARGET_C67
-    tcc_define_symbol(s, "__C67__", NULL);
 #elif defined TCC_TARGET_RISCV64
     tcc_define_symbol(s, "__riscv", NULL);
     tcc_define_symbol(s, "__riscv_xlen", "64");
@@ -892,14 +768,6 @@ LIBTCCAPI TCCState *tcc_new(void)
     tcc_define_symbol(s, "__riscv_float_abi_double", NULL);
 #endif
 
-#ifdef TCC_TARGET_PE
-    tcc_define_symbol(s, "_WIN32", NULL);
-    tcc_define_symbol(s, "__declspec(x)", "__attribute__((x))");
-    tcc_define_symbol(s, "__cdecl", "");
-# ifdef TCC_TARGET_X86_64
-    tcc_define_symbol(s, "_WIN64", NULL);
-# endif
-#else
     tcc_define_symbol(s, "__unix__", NULL);
     tcc_define_symbol(s, "__unix", NULL);
     tcc_define_symbol(s, "unix", NULL);
@@ -921,7 +789,6 @@ LIBTCCAPI TCCState *tcc_new(void)
 # if defined(__OpenBSD__)
     tcc_define_symbol(s, "__OpenBSD__", "__OpenBSD__");
 # endif
-#endif
 
     /* TinyCC & gcc defines */
 #if PTR_SIZE == 4
@@ -942,10 +809,6 @@ LIBTCCAPI TCCState *tcc_new(void)
 #endif
     tcc_define_symbol(s, "__SIZEOF_POINTER__", PTR_SIZE == 4 ? "4" : "8");
 
-#ifdef TCC_TARGET_PE
-    tcc_define_symbol(s, "__WCHAR_TYPE__", "unsigned short");
-    tcc_define_symbol(s, "__WINT_TYPE__", "unsigned short");
-#else
     tcc_define_symbol(s, "__WCHAR_TYPE__", "int");
     /* wint_t is unsigned int by default, but (signed) int on BSDs
        and unsigned short on windows.  Other OSes might have still
@@ -970,28 +833,6 @@ LIBTCCAPI TCCState *tcc_new(void)
 # endif
     /* Some GCC builtins that are simple to express as macros.  */
     tcc_define_symbol(s, "__builtin_extract_return_addr(x)", "x");
-#endif /* ndef TCC_TARGET_PE */
-#ifdef TCC_TARGET_MACHO
-    /* emulate APPLE-GCC to make libc's headerfiles compile: */
-    tcc_define_symbol(s, "__APPLE__", "1");
-    tcc_define_symbol(s, "__GNUC__", "4");   /* darwin emits warning on GCC<4 */
-    tcc_define_symbol(s, "__APPLE_CC__", "1"); /* for <TargetConditionals.h> */
-    tcc_define_symbol(s, "_DONT_USE_CTYPE_INLINE_", "1");
-    tcc_define_symbol(s, "__builtin_alloca", "alloca"); /* as we claim GNUC */
-    /* used by math.h */
-    tcc_define_symbol(s, "__builtin_huge_val()", "1e500");
-    tcc_define_symbol(s, "__builtin_huge_valf()", "1e50f");
-    tcc_define_symbol(s, "__builtin_huge_vall()", "1e5000L");
-    tcc_define_symbol(s, "__builtin_nanf(ignored_string)", "__nan()");
-    /* used by _fd_def.h */
-    tcc_define_symbol(s, "__builtin_bzero(p, ignored_size)", "bzero(p, sizeof(*(p)))");
-    /* used by floats.h to implement FLT_ROUNDS C99 macro. 1 == to nearest */
-    tcc_define_symbol(s, "__builtin_flt_rounds()", "1");
-
-    /* avoids usage of GCC/clang specific builtins in libc-headerfiles: */
-    tcc_define_symbol(s, "__FINITE_MATH_ONLY__", "1");
-    tcc_define_symbol(s, "_FORTIFY_SOURCE", "0");
-#endif /* ndef TCC_TARGET_MACHO */
 
 #if LONG_SIZE == 4
     tcc_define_symbol(s, "__SIZEOF_LONG__", "4");
@@ -1072,13 +913,11 @@ LIBTCCAPI int tcc_set_output_type(TCCState *s, int output_type)
         tcc_define_symbol(s, "__STDC_NO_ATOMICS__", NULL);
         tcc_define_symbol(s, "__STDC_NO_COMPLEX__", NULL);
         tcc_define_symbol(s, "__STDC_NO_THREADS__", NULL);
-#ifndef TCC_TARGET_PE
         /* on Linux, this conflicts with a define introduced by
            /usr/include/stdc-predef.h included by glibc libs
         tcc_define_symbol(s, "__STDC_ISO_10646__", "201605L"); */
         tcc_define_symbol(s, "__STDC_UTF_16__", NULL);
         tcc_define_symbol(s, "__STDC_UTF_32__", NULL);
-#endif
     }
 
     if (s->optimize > 0)
@@ -1111,25 +950,16 @@ LIBTCCAPI int tcc_set_output_type(TCCState *s, int output_type)
 
     tcc_add_library_path(s, CONFIG_TCC_LIBPATHS);
 
-#ifdef TCC_TARGET_PE
-# ifdef _WIN32
-    if (!s->nostdlib && output_type != TCC_OUTPUT_OBJ)
-        tcc_add_systemdir(s);
-# endif
-#else
     /* paths for crt objects */
     tcc_split_path(s, &s->crt_paths, &s->nb_crt_paths, CONFIG_TCC_CRTPREFIX);
     /* add libc crt1/crti objects */
     if ((output_type == TCC_OUTPUT_EXE || output_type == TCC_OUTPUT_DLL) &&
         !s->nostdlib) {
-#ifndef TCC_TARGET_MACHO
         /* Mach-O with LC_MAIN doesn't need any crt startup code.  */
         if (output_type != TCC_OUTPUT_DLL)
             tcc_add_crt(s, "crt1.o");
         tcc_add_crt(s, "crti.o");
-#endif
     }
-#endif
     return 0;
 }
 
@@ -1165,16 +995,11 @@ ST_FUNC int tcc_add_file_internal(TCCState *s1, const char *filename, int flags)
         obj_type = tcc_object_type(fd, &ehdr);
         lseek(fd, 0, SEEK_SET);
 
-#ifdef TCC_TARGET_MACHO
-        if (0 == obj_type && 0 == strcmp(tcc_fileextension(filename), ".dylib"))
-            obj_type = AFF_BINTYPE_DYN;
-#endif
 
         switch (obj_type) {
         case AFF_BINTYPE_REL:
             ret = tcc_load_object_file(s1, fd, 0);
             break;
-#ifndef TCC_TARGET_PE
         case AFF_BINTYPE_DYN:
             if (s1->output_type == TCC_OUTPUT_MEMORY) {
                 /* Only ever reachable via -run (TCC_OUTPUT_MEMORY),
@@ -1185,33 +1010,16 @@ ST_FUNC int tcc_add_file_internal(TCCState *s1, const char *filename, int flags)
                  * fork never links a real shared library dynamically. */
                 ret = -1;
             } else {
-#ifndef TCC_TARGET_MACHO
                 ret = tcc_load_dll(s1, fd, filename,
                                    (flags & AFF_REFERENCED_DLL) != 0);
-#else
-                ret = macho_load_dll(s1, fd, filename,
-                                     (flags & AFF_REFERENCED_DLL) != 0);
-#endif
             }
             break;
-#endif
         case AFF_BINTYPE_AR:
             ret = tcc_load_archive(s1, fd, !(flags & AFF_WHOLE_ARCHIVE));
             break;
-#ifdef TCC_TARGET_COFF
-        case AFF_BINTYPE_C67:
-            ret = tcc_load_coff(s1, fd);
-            break;
-#endif
         default:
-#ifdef TCC_TARGET_PE
-            ret = pe_load_file(s1, filename, fd);
-#elif defined(TCC_TARGET_MACHO)
-            ret = -1;
-#else
             /* as GNU ld, consider it is an ld script if not recognized */
             ret = tcc_load_ldscript(s1, fd);
-#endif
             if (ret < 0)
                 tcc_error_noabort("%s: unrecognized file type %d", filename,
                                   obj_type);
@@ -1270,7 +1078,6 @@ static int tcc_add_library_internal(TCCState *s, const char *fmt,
     return -1;
 }
 
-#ifndef TCC_TARGET_MACHO
 /* find and load a dll. Return non zero if not found */
 /* XXX: add '-rpath' option support ? */
 ST_FUNC int tcc_add_dll(TCCState *s, const char *filename, int flags)
@@ -1278,9 +1085,7 @@ ST_FUNC int tcc_add_dll(TCCState *s, const char *filename, int flags)
     return tcc_add_library_internal(s, "%s/%s", filename, flags,
         s->library_paths, s->nb_library_paths);
 }
-#endif
 
-#if !defined TCC_TARGET_PE && !defined TCC_TARGET_MACHO
 ST_FUNC int tcc_add_crt(TCCState *s1, const char *filename)
 {
     if (-1 == tcc_add_library_internal(s1, "%s/%s",
@@ -1288,21 +1093,12 @@ ST_FUNC int tcc_add_crt(TCCState *s1, const char *filename)
         tcc_error_noabort("file '%s' not found", filename);
     return 0;
 }
-#endif
 
 /* the library name is the same as the argument of the '-l' option */
 LIBTCCAPI int tcc_add_library(TCCState *s, const char *libraryname)
 {
-#if defined TCC_TARGET_PE
-    const char *libs[] = { "%s/%s.def", "%s/lib%s.def", "%s/%s.dll", "%s/lib%s.dll", "%s/lib%s.a", NULL };
-    const char **pp = s->static_link ? libs + 4 : libs;
-#elif defined TCC_TARGET_MACHO
-    const char *libs[] = { "%s/lib%s.dylib", "%s/lib%s.a", NULL };
-    const char **pp = s->static_link ? libs + 1 : libs;
-#else
     const char *libs[] = { "%s/lib%s.so", "%s/lib%s.a", NULL };
     const char **pp = s->static_link ? libs + 1 : libs;
-#endif
     int flags = s->filetype & AFF_WHOLE_ARCHIVE;
     while (*pp) {
         if (0 == tcc_add_library_internal(s, *pp,
@@ -1331,11 +1127,6 @@ ST_FUNC void tcc_add_pragma_libs(TCCState *s1)
 
 LIBTCCAPI int tcc_add_symbol(TCCState *s1, const char *name, const void *val)
 {
-#ifdef TCC_TARGET_PE
-    /* On x86_64 'val' might not be reachable with a 32bit offset.
-       So it is handled here as if it were in a DLL. */
-    pe_putimport(s1, 0, name, (uintptr_t)val);
-#else
     char buf[256];
     if (s1->leading_underscore) {
         buf[0] = '_';
@@ -1343,7 +1134,6 @@ LIBTCCAPI int tcc_add_symbol(TCCState *s1, const char *name, const void *val)
         name = buf;
     }
     set_global_sym(s1, name, NULL, (addr_t)(uintptr_t)val); /* NULL: SHN_ABS */
-#endif
     return 0;
 }
 
@@ -1513,9 +1303,7 @@ static int tcc_set_linker(TCCState *s, const char *option)
             copy_linker_arg(&s->init_symbol, p, 0);
             ignoring = 1;
         } else if (link_option(option, "oformat=", &p)) {
-#if defined(TCC_TARGET_PE)
-            if (strstart("pe-", &p)) {
-#elif PTR_SIZE == 8
+#if   PTR_SIZE == 8
             if (strstart("elf64-", &p)) {
 #else
             if (strstart("elf32-", &p)) {
@@ -1523,10 +1311,6 @@ static int tcc_set_linker(TCCState *s, const char *option)
                 s->output_format = TCC_OUTPUT_FORMAT_ELF;
             } else if (!strcmp(p, "binary")) {
                 s->output_format = TCC_OUTPUT_FORMAT_BINARY;
-#ifdef TCC_TARGET_COFF
-            } else if (!strcmp(p, "coff")) {
-                s->output_format = TCC_OUTPUT_FORMAT_COFF;
-#endif
             } else
                 goto err;
 
@@ -1546,38 +1330,6 @@ static int tcc_set_linker(TCCState *s, const char *option)
             s->section_align = strtoul(p, &end, 16);
         } else if (link_option(option, "soname=", &p)) {
             copy_linker_arg(&s->soname, p, 0);
-#ifdef TCC_TARGET_PE
-        } else if (link_option(option, "large-address-aware", &p)) {
-            s->pe_characteristics |= 0x20;
-        } else if (link_option(option, "file-alignment=", &p)) {
-            s->pe_file_align = strtoul(p, &end, 16);
-        } else if (link_option(option, "stack=", &p)) {
-            s->pe_stack_size = strtoul(p, &end, 10);
-        } else if (link_option(option, "subsystem=", &p)) {
-#if defined(TCC_TARGET_I386) || defined(TCC_TARGET_X86_64)
-            if (!strcmp(p, "native")) {
-                s->pe_subsystem = 1;
-            } else if (!strcmp(p, "console")) {
-                s->pe_subsystem = 3;
-            } else if (!strcmp(p, "gui") || !strcmp(p, "windows")) {
-                s->pe_subsystem = 2;
-            } else if (!strcmp(p, "posix")) {
-                s->pe_subsystem = 7;
-            } else if (!strcmp(p, "efiapp")) {
-                s->pe_subsystem = 10;
-            } else if (!strcmp(p, "efiboot")) {
-                s->pe_subsystem = 11;
-            } else if (!strcmp(p, "efiruntime")) {
-                s->pe_subsystem = 12;
-            } else if (!strcmp(p, "efirom")) {
-                s->pe_subsystem = 13;
-#elif defined(TCC_TARGET_ARM)
-            if (!strcmp(p, "wince")) {
-                s->pe_subsystem = 9;
-#endif
-            } else
-                goto err;
-#endif
         } else if (ret = link_option(option, "?whole-archive", &p), ret) {
             if (ret > 0)
                 s->filetype |= AFF_WHOLE_ARCHIVE;
@@ -1705,9 +1457,6 @@ static const TCCOption tcc_options[] = {
     { "Wp,", TCC_OPTION_Wp, TCC_OPTION_HAS_ARG | TCC_OPTION_NOSEP },
     { "W", TCC_OPTION_W, TCC_OPTION_HAS_ARG | TCC_OPTION_NOSEP },
     { "O", TCC_OPTION_O, TCC_OPTION_HAS_ARG | TCC_OPTION_NOSEP },
-#ifdef TCC_TARGET_ARM
-    { "mfloat-abi", TCC_OPTION_mfloat_abi, TCC_OPTION_HAS_ARG },
-#endif
     { "m", TCC_OPTION_m, TCC_OPTION_HAS_ARG | TCC_OPTION_NOSEP },
     { "f", TCC_OPTION_f, TCC_OPTION_HAS_ARG | TCC_OPTION_NOSEP },
     { "isystem", TCC_OPTION_isystem, TCC_OPTION_HAS_ARG },
@@ -1722,9 +1471,6 @@ static const TCCOption tcc_options[] = {
     { "MF", TCC_OPTION_MF, TCC_OPTION_HAS_ARG },
     { "x", TCC_OPTION_x, TCC_OPTION_HAS_ARG },
     { "ar", TCC_OPTION_ar, 0},
-#ifdef TCC_TARGET_PE
-    { "impdef", TCC_OPTION_impdef, 0},
-#endif
     { "C", TCC_OPTION_C, 0},
     { NULL, 0, 0 },
 };
@@ -1752,9 +1498,6 @@ static const FlagDef options_f[] = {
 
 static const FlagDef options_m[] = {
     { offsetof(TCCState, ms_bitfields), 0, "ms-bitfields" },
-#ifdef TCC_TARGET_X86_64
-    { offsetof(TCCState, nosse), FD_INVERT, "sse" },
-#endif
     { 0, 0, NULL }
 };
 
@@ -1994,12 +1737,8 @@ reparse:
             s->nostdlib = 1;
             break;
         case TCC_OPTION_run:
-            /* Always an error, not just "in a cross compiler" (mainline's
-             * own #ifndef TCC_IS_NATIVE guard) -- this fork removed
-             * tccrun.c outright (unused by every build this project
-             * does; see libtcc.c's own comment by the #include block
-             * above), so -run has nothing to dispatch to even once
-             * self-hosted (native). `run` (declared above, used by the
+            /* tccrun.c is absent, so -run has nothing to dispatch to. `run`
+             * (declared above, used by the
              * "-run @ args..." trailing-argv handling further down)
              * simply stays NULL forever now -- harmless, that handling
              * is unreachable dead code along with -run itself. */
@@ -2012,18 +1751,6 @@ reparse:
             if (set_flag(s, options_f, optarg) < 0)
                 goto unsupported_option;
             break;
-#ifdef TCC_TARGET_ARM
-        case TCC_OPTION_mfloat_abi:
-            /* tcc doesn't support soft float yet */
-            if (!strcmp(optarg, "softfp")) {
-                s->float_abi = ARM_SOFTFP_FLOAT;
-                tcc_undefine_symbol(s, "__ARM_PCS_VFP");
-            } else if (!strcmp(optarg, "hard"))
-                s->float_abi = ARM_HARD_FLOAT;
-            else
-                tcc_error("unsupported float abi '%s'", optarg);
-            break;
-#endif
         case TCC_OPTION_m:
             if (set_flag(s, options_m, optarg) < 0) {
                 if (x = atoi(optarg), x != 32 && x != 64)

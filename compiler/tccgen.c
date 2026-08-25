@@ -275,10 +275,7 @@ static int R_RET(int t)
 #endif
     if (!is_float(t))
         return REG_IRET;
-#ifdef TCC_TARGET_X86_64
-    if ((t & VT_BTYPE) == VT_LDOUBLE)
-        return TREG_ST0;
-#elif defined TCC_TARGET_RISCV64
+#if   defined TCC_TARGET_RISCV64
     if ((t & VT_BTYPE) == VT_LDOUBLE)
         return REG_IRET;
 #endif
@@ -292,11 +289,6 @@ static int R2_RET(int t)
 #ifdef TCC_TARGET_I386
     if (t == VT_LLONG)
         return REG_IRE2;
-#elif defined TCC_TARGET_X86_64
-    if (t == VT_QLONG)
-        return REG_IRE2;
-    if (t == VT_QFLOAT)
-        return REG_FRE2;
 #elif defined TCC_TARGET_RISCV64
     if (t == VT_LDOUBLE)
         return REG_IRE2;
@@ -332,12 +324,7 @@ static int RC_TYPE(int t)
 #endif
     if (!is_float(t))
         return RC_INT;
-#ifdef TCC_TARGET_X86_64
-    if ((t & VT_BTYPE) == VT_LDOUBLE)
-        return RC_ST0;
-    if ((t & VT_BTYPE) == VT_QFLOAT)
-        return RC_FRET;
-#elif defined TCC_TARGET_RISCV64
+#if   defined TCC_TARGET_RISCV64
     if ((t & VT_BTYPE) == VT_LDOUBLE)
         return RC_INT;
 #endif
@@ -374,7 +361,7 @@ ST_FUNC int ieee_finite(double d)
 
 /* compiling intel long double natively */
 #if (defined __i386__ || defined __x86_64__) \
-    && (defined TCC_TARGET_I386 || defined TCC_TARGET_X86_64)
+    && (defined TCC_TARGET_I386)
 # define TCC_IS_NATIVE_387
 #endif
 
@@ -419,9 +406,6 @@ ST_FUNC void tcc_debug_start(TCCState *s1)
                                   ELFW(ST_INFO)(STB_LOCAL, STT_SECTION), 0,
                                   text_section->sh_num, NULL);
         getcwd(buf, sizeof(buf));
-#ifdef _WIN32
-        normalize_slashes(buf);
-#endif
         pstrcat(buf, sizeof(buf), "/");
         put_stabs_r(s1, buf, N_SO, 0, 0,
                     text_section->data_offset, text_section, section_sym);
@@ -813,9 +797,6 @@ ST_FUNC int tccgen_compile(TCCState *s1)
     local_scope = 0;
 
     tcc_debug_start(s1);
-#ifdef TCC_TARGET_ARM
-    arm_init(s1);
-#endif
 #ifdef INC_DEBUG
     printf("%s: **** new file\n", file->filename);
 #endif
@@ -875,12 +856,6 @@ ST_FUNC void update_storage(Sym *sym)
         esym->st_info = ELFW(ST_INFO)(sym_bind, ELFW(ST_TYPE)(esym->st_info));
     }
 
-#ifdef TCC_TARGET_PE
-    if (sym->a.dllimport)
-        esym->st_other |= ST_PE_IMPORT;
-    if (sym->a.dllexport)
-        esym->st_other |= ST_PE_EXPORT;
-#endif
 
 #if 0
     printf("storage %s: bind=%c vis=%d exp=%d imp=%d\n",
@@ -922,20 +897,6 @@ ST_FUNC void put_extern_sym2(Sym *sym, int sh_num,
             sym_bind = STB_GLOBAL;
         other = 0;
 
-#ifdef TCC_TARGET_PE
-        if (sym_type == STT_FUNC && sym->type.ref) {
-            Sym *ref = sym->type.ref;
-            if (ref->a.nodecorate) {
-                can_add_underscore = 0;
-            }
-            if (ref->f.func_call == FUNC_STDCALL && can_add_underscore) {
-                sprintf(buf1, "_%s@%d", name, ref->f.func_args * PTR_SIZE);
-                name = buf1;
-                other |= ST_PE_STDCALL;
-                can_add_underscore = 0;
-            }
-        }
-#endif
 
         if (sym->asm_label) {
             name = get_tok_str(sym->asm_label & ~SYM_FIELD, NULL);
@@ -1230,7 +1191,7 @@ ST_FUNC void vpop(void)
 {
     int v;
     v = vtop->r & VT_VALMASK;
-#if defined(TCC_TARGET_I386) || defined(TCC_TARGET_X86_64)
+#if defined(TCC_TARGET_I386)
     /* for x86, we need to pop the FP stack */
     if (v == TREG_ST0) {
         o(0xd8dd); /* fstp %st(0) */
@@ -1600,11 +1561,6 @@ static void patch_storage(Sym *sym, AttributeDef *ad, CType *type)
     if (type)
         patch_type(sym, type);
 
-#ifdef TCC_TARGET_PE
-    if (sym->a.dllimport != ad->a.dllimport)
-        tcc_error("incompatible dll linkage for redefinition of '%s'",
-            get_tok_str(sym->v, NULL));
-#endif
     merge_symattr(&sym->a, &ad->a);
     if (ad->asm_label)
         sym->asm_label = ad->asm_label;
@@ -1714,7 +1670,7 @@ ST_FUNC void save_reg_upstack(int r, int n)
                 sv.r = VT_LOCAL | VT_LVAL;
                 sv.c.i = l;
                 store(p->r & VT_VALMASK, &sv);
-#if defined(TCC_TARGET_I386) || defined(TCC_TARGET_X86_64)
+#if defined(TCC_TARGET_I386)
                 /* x86 specific: need to pop fp register ST0 if saved */
                 if (r == TREG_ST0) {
                     o(0xd8dd); /* fstp %st(0) */
@@ -1741,30 +1697,6 @@ ST_FUNC void save_reg_upstack(int r, int n)
     }
 }
 
-#ifdef TCC_TARGET_ARM
-/* find a register of class 'rc2' with at most one reference on stack.
- * If none, call get_reg(rc) */
-ST_FUNC int get_reg_ex(int rc, int rc2)
-{
-    int r;
-    SValue *p;
-    
-    for(r=0;r<NB_REGS;r++) {
-        if (reg_classes[r] & rc2) {
-            int n;
-            n=0;
-            for(p = vstack; p <= vtop; p++) {
-                if ((p->r & VT_VALMASK) == r ||
-                    p->r2 == r)
-                    n++;
-            }
-            if (n <= 1)
-                return r;
-        }
-    }
-    return get_reg(rc);
-}
-#endif
 
 /* find a free register of class 'rc'. If none, save one register */
 ST_FUNC int get_reg(int rc)
@@ -1979,17 +1911,15 @@ ST_FUNC void gbound_args(int nb_args)
         v = sv->sym->v;
         if (v == TOK_setjmp
           || v == TOK__setjmp
-#ifndef TCC_TARGET_PE
           || v == TOK_sigsetjmp
           || v == TOK___sigsetjmp
-#endif
           ) {
             vpush_global_sym(&func_old_type, TOK___bound_setjmp);
             vpushv(sv + 1);
             gfunc_call(1);
             func_bound_add_epilog = 1;
         }
-#if defined TCC_TARGET_I386 || defined TCC_TARGET_X86_64
+#if defined TCC_TARGET_I386
         if (v == TOK_alloca)
             func_bound_add_epilog = 1;
 #endif
@@ -2260,11 +2190,6 @@ ST_FUNC int gv(int rc)
             }
         }
         vtop->r = r;
-#ifdef TCC_TARGET_C67
-        /* uses register pairs for doubles */
-        if (bt == VT_DOUBLE)
-            vtop->r2 = r+1;
-#endif
     }
     return r;
 }
@@ -2488,10 +2413,6 @@ static void gen_opif(int op)
 {
     int c1, c2;
     SValue *v1, *v2;
-#if defined _MSC_VER && defined __x86_64__
-    /* avoid bad optimization with f1 -= f2 for f1:-0.0, f2:0.0 */
-    volatile
-#endif
     long double f1, f2;
 
     v1 = vtop - 1;
@@ -3077,7 +2998,7 @@ redo:
         gv(is_float(vtop->type.t & VT_BTYPE) ? RC_FLOAT : RC_INT);
 }
 
-#if defined TCC_TARGET_ARM64 || defined TCC_TARGET_RISCV64 || defined TCC_TARGET_ARM
+#if defined TCC_TARGET_RISCV64
 #define gen_cvt_itof1 gen_cvt_itof
 #else
 /* generic itof for unsigned long long case */
@@ -3104,7 +3025,7 @@ static void gen_cvt_itof1(int t)
 }
 #endif
 
-#if defined TCC_TARGET_ARM64 || defined TCC_TARGET_RISCV64
+#if defined TCC_TARGET_RISCV64
 #define gen_cvt_ftoi1 gen_cvt_ftoi
 #else
 /* generic ftoi for unsigned long long case */
@@ -3178,7 +3099,7 @@ again:
         sbt_bt = sbt & VT_BTYPE;
 
         c = (vtop->r & (VT_VALMASK | VT_LVAL | VT_SYM)) == VT_CONST;
-#if !defined TCC_IS_NATIVE && !defined TCC_IS_NATIVE_387
+#if !defined TCC_IS_NATIVE_387
         c &= (dbt != VT_LDOUBLE) | !!nocode_wanted;
 #endif
         if (c) {
@@ -3356,7 +3277,7 @@ again:
 
         if (ds >= ss)
             goto done;
-#if defined TCC_TARGET_I386 || defined TCC_TARGET_X86_64 || defined TCC_TARGET_ARM64
+#if defined TCC_TARGET_I386
         if (ss == 4) {
             gen_cvt_csti(dbt);
             goto done;
@@ -3411,17 +3332,7 @@ ST_FUNC int type_size(CType *type, int *a)
         return LDOUBLE_SIZE;
     } else if (bt == VT_DOUBLE || bt == VT_LLONG) {
 #ifdef TCC_TARGET_I386
-#ifdef TCC_TARGET_PE
-        *a = 8;
-#else
         *a = 4;
-#endif
-#elif defined(TCC_TARGET_ARM)
-#ifdef TCC_ARM_EABI
-        *a = 8; 
-#else
-        *a = 4;
-#endif
 #else
         *a = 8;
 #endif
@@ -3608,13 +3519,6 @@ ST_FUNC void vstore(void)
             gaddrof();
 
             /* address of memcpy() */
-#ifdef TCC_ARM_EABI
-            if(!(align & 7))
-                vpush_global_sym(&func_old_type, TOK_memmove8);
-            else if(!(align & 3))
-                vpush_global_sym(&func_old_type, TOK_memmove4);
-            else
-#endif
             /* Use memmove, rather than memcpy, as dest and src may be same: */
             vpush_global_sym(&func_old_type, TOK_memmove);
 
@@ -4589,13 +4493,6 @@ static int parse_btype(CType *type, AttributeDef *ad)
             }
             next();
             break;
-#ifdef TCC_TARGET_ARM64
-        case TOK_UINT128:
-            /* GCC's __uint128_t appears in some Linux header files. Make it a
-               synonym for long double to get the size and alignment right. */
-            u = VT_LDOUBLE;
-            goto basic_type;
-#endif
         case TOK_BOOL:
             u = VT_BOOL;
             goto basic_type;
@@ -4749,10 +4646,6 @@ the_end:
     bt = t & (VT_BTYPE|VT_LONG);
     if (bt == VT_LONG)
         t |= LONG_SIZE == 8 ? VT_LLONG : VT_INT;
-#if defined TCC_TARGET_PE || (defined _WIN32 && defined _MSC_VER)
-    if (bt == VT_LDOUBLE)
-        t = (t & ~(VT_BTYPE|VT_LONG)) | (VT_DOUBLE|VT_LONG);
-#endif
     type->t = t;
     return type_found;
 }
@@ -5197,10 +5090,6 @@ ST_FUNC void unary(void)
         next();
         goto tok_next;
     case TOK_LCHAR:
-#ifdef TCC_TARGET_PE
-        t = VT_SHORT|VT_UNSIGNED;
-        goto push_tokc;
-#endif
     case TOK_CINT:
     case TOK_CCHAR: 
 	t = VT_INT;
@@ -5257,11 +5146,7 @@ ST_FUNC void unary(void)
         }
         break;
     case TOK_LSTR:
-#ifdef TCC_TARGET_PE
-        t = VT_SHORT | VT_UNSIGNED;
-#else
         t = VT_INT;
-#endif
         goto str_init;
     case TOK_STR:
         /* string parsing */
@@ -5612,10 +5497,7 @@ ST_FUNC void unary(void)
             }
             if (tok1 == TOK_builtin_return_address) {
                 // assume return address is just above frame pointer on stack
-#ifdef TCC_TARGET_ARM
-                vpushi(2*PTR_SIZE);
-                gen_op('+');
-#elif defined TCC_TARGET_RISCV64
+#if   defined TCC_TARGET_RISCV64
                 vpushi(PTR_SIZE);
                 gen_op('-');
 #else
@@ -5639,56 +5521,7 @@ ST_FUNC void unary(void)
 	vstore();
         break;
 #endif
-#ifdef TCC_TARGET_X86_64
-#ifdef TCC_TARGET_PE
-    case TOK_builtin_va_start:
-	parse_builtin_params(0, "ee");
-        r = vtop->r & VT_VALMASK;
-        if (r == VT_LLOCAL)
-            r = VT_LOCAL;
-        if (r != VT_LOCAL)
-            tcc_error("__builtin_va_start expects a local variable");
-        vtop->r = r;
-	vtop->type = char_pointer_type;
-	vtop->c.i += 8;
-	vstore();
-        break;
-#else
-    case TOK_builtin_va_arg_types:
-	parse_builtin_params(0, "t");
-	vpushi(classify_x86_64_va_arg(&vtop->type));
-	vswap();
-	vpop();
-	break;
-#endif
-#endif
 
-#ifdef TCC_TARGET_ARM64
-    case TOK_builtin_va_start: {
-	parse_builtin_params(0, "ee");
-        //xx check types
-        gen_va_start();
-        vpushi(0);
-        vtop->type.t = VT_VOID;
-        break;
-    }
-    case TOK_builtin_va_arg: {
-	parse_builtin_params(0, "et");
-	type = vtop->type;
-	vpop();
-        //xx check types
-        gen_va_arg(&type);
-        vtop->type = type;
-        break;
-    }
-    case TOK___arm64_clear_cache: {
-	parse_builtin_params(0, "ee");
-        gen_clear_cache();
-        vpushi(0);
-        vtop->type.t = VT_VOID;
-        break;
-    }
-#endif
 
     /* pre operations */
     case TOK_INC:
@@ -5859,11 +5692,6 @@ special_math_val:
             /* for simple function calls, we tolerate undeclared
                external reference to int() function */
             if (tcc_state->warn_implicit_function_declaration
-#ifdef TCC_TARGET_PE
-                /* people must be warned about using undeclared WINAPI functions
-                   (which usually start with uppercase letter) */
-                || (name[0] >= 'A' && name[0] <= 'Z')
-#endif
             )
                 tcc_warning("implicit declaration of function '%s'", name);
             s = external_global_sym(t, &func_old_type);
@@ -5969,15 +5797,6 @@ special_math_val:
                 if (ret_nregs <= 0) {
                     /* get some space for the returned structure */
                     size = type_size(&s->type, &align);
-#ifdef TCC_TARGET_ARM64
-                /* On arm64, a small struct is return in registers.
-                   It is much easier to write it to memory if we know
-                   that we are allowed to write some extra bytes, so
-                   round the allocated space up to a power of 2: */
-                if (size < 16)
-                    while (size & (size - 1))
-                        size = (size | (size - 1)) + 1;
-#endif
                     loc = (loc - size) & -align;
                     ret.type = s->type;
                     ret.r = VT_LOCAL | VT_LVAL;
@@ -6494,7 +6313,6 @@ ST_FUNC int expr_const(void)
 /* ------------------------------------------------------------------------- */
 /* return from function */
 
-#ifndef TCC_TARGET_ARM64
 static void gfunc_return(CType *func_type)
 {
     if ((func_type->t & VT_BTYPE) == VT_STRUCT) {
@@ -6556,7 +6374,6 @@ static void gfunc_return(CType *func_type)
     }
     vtop--; /* NOT vpop() because on x86 it would flush the fp stack */
 }
-#endif
 
 static void check_func_return(void)
 {
@@ -7184,9 +7001,6 @@ static void parse_init_elem(int expr_type)
         if (((vtop->r & (VT_VALMASK | VT_LVAL)) != VT_CONST
              && ((vtop->r & (VT_SYM|VT_LVAL)) != (VT_SYM|VT_LVAL)
                  || vtop->sym->v < SYM_FIRST_ANOM))
-#ifdef TCC_TARGET_PE
-                 || ((vtop->r & VT_SYM) && vtop->sym->a.dllimport)
-#endif
            )
             tcc_error("initializer element is not constant");
         break;
@@ -7204,13 +7018,8 @@ static void init_putz(Section *sec, unsigned long c, int size)
     } else {
         vpush_global_sym(&func_old_type, TOK_memset);
         vseti(VT_LOCAL, c);
-#ifdef TCC_TARGET_ARM
-        vpushs(size);
-        vpushi(0);
-#else
         vpushi(0);
         vpushs(size);
-#endif
         gfunc_call(3);
     }
 }
@@ -7588,11 +7397,7 @@ static void decl_initializer(CType *type, Section *sec, unsigned long c,
         /* only parse strings here if correct type (otherwise: handle
            them as ((w)char *) expressions */
         if ((tok == TOK_LSTR && 
-#ifdef TCC_TARGET_PE
-             (t1->t & VT_BTYPE) == VT_SHORT && (t1->t & VT_UNSIGNED)
-#else
              (t1->t & VT_BTYPE) == VT_INT
-#endif
             ) || (tok == TOK_STR && (t1->t & VT_BTYPE) == VT_BYTE)) {
             int nb;
 	    len = 0;
@@ -7942,11 +7747,6 @@ static void decl_initializer_alloc(CType *type, AttributeDef *ad, int r,
 
         vla_runtime_type_size(type, &a);
         gen_vla_alloc(type, a);
-#if defined TCC_TARGET_PE && defined TCC_TARGET_X86_64
-        /* on _WIN64, because of the function args scratch area, the
-           result of alloca differs from RSP and is returned in RAX.  */
-        gen_vla_result(addr), addr = (loc -= PTR_SIZE);
-#endif
         gen_vla_sp_save(addr);
         cur_scope->vla.loc = addr;
         cur_scope->vla.num++;
@@ -8186,18 +7986,6 @@ static int decl0(int l, int is_for_loop_init, Sym *func_sym)
                 sym = type.ref;
                 if (sym->f.func_type == FUNC_OLD && l == VT_CONST)
                     decl0(VT_CMP, 0, sym);
-#ifdef TCC_TARGET_MACHO
-                if (sym->f.func_alwinl
-                    && ((type.t & (VT_EXTERN | VT_INLINE))
-                        == (VT_EXTERN | VT_INLINE))) {
-                    /* always_inline functions must be handled as if they
-                       don't generate multiple global defs, even if extern
-                       inline, i.e. GNU inline semantics for those.  Rewrite
-                       them into static inline.  */
-                    type.t &= ~VT_EXTERN;
-                    type.t |= VT_STATIC;
-                }
-#endif
                 /* always compile 'extern inline' */
                 if (type.t & VT_EXTERN)
                     type.t &= ~VT_INLINE;
@@ -8215,22 +8003,6 @@ static int decl0(int l, int is_for_loop_init, Sym *func_sym)
             #endif
             }
 
-#ifdef TCC_TARGET_PE
-            if (ad.a.dllimport || ad.a.dllexport) {
-                if (type.t & VT_STATIC)
-                    tcc_error("cannot have dll linkage with static");
-                if (type.t & VT_TYPEDEF) {
-                    tcc_warning("'%s' attribute ignored for typedef",
-                        ad.a.dllimport ? (ad.a.dllimport = 0, "dllimport") :
-                        (ad.a.dllexport = 0, "dllexport"));
-                } else if (ad.a.dllimport) {
-                    if ((type.t & VT_BTYPE) == VT_FUNC)
-                        ad.a.dllimport = 0;
-                    else
-                        type.t |= VT_EXTERN;
-                }
-            }
-#endif
             if (tok == '{') {
                 if (l != VT_CONST)
                     tcc_error("cannot use local functions");

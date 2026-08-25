@@ -502,11 +502,7 @@ ST_FUNC const char *get_tok_str(int v, CValue *cv)
     case TOK_CLLONG:
     case TOK_CULLONG:
         /* XXX: not quite exact, but only useful for testing  */
-#ifdef _WIN32
-        sprintf(p, "%u", (unsigned)cv->i);
-#else
         sprintf(p, "%llu", (unsigned long long)cv->i);
-#endif
         break;
     case TOK_LCHAR:
         cstr_ccat(&cstr_buf, 'L');
@@ -1604,11 +1600,7 @@ static CachedInclude *search_cached_include(TCCState *s1, const char *filename, 
     h = TOK_HASH_INIT;
     s = (unsigned char *) filename;
     while (*s) {
-#ifdef _WIN32
-        h = TOK_HASH_FUNC(h, toup(*s));
-#else
         h = TOK_HASH_FUNC(h, *s);
-#endif
         s++;
     }
     h &= (CACHED_INCLUDES_HASH_SIZE - 1);
@@ -2207,18 +2199,7 @@ static void parse_escape_string(CString *outstr, const uint8_t *buf, int is_long
         if (!is_long)
             cstr_ccat(outstr, c);
         else {
-#ifdef TCC_TARGET_PE
-            /* store as UTF-16 */
-            if (c < 0x10000) {
-                cstr_wccat(outstr, c);
-            } else {
-                c -= 0x10000;
-                cstr_wccat(outstr, (c >> 10) + 0xD800);
-                cstr_wccat(outstr, (c & 0x3FF) + 0xDC00);
-            }
-#else
             cstr_wccat(outstr, c);
-#endif
         }
     }
     /* add a trailing '\0' */
@@ -2429,14 +2410,9 @@ static void parse_number(const char *p)
                 tokc.f = (float)d;
             } else if (t == 'L') {
                 ch = *p++;
-#ifdef TCC_TARGET_PE
-                tok = TOK_CDOUBLE;
-                tokc.d = d;
-#else
                 tok = TOK_CLDOUBLE;
                 /* XXX: not large enough */
                 tokc.ld = (long double)d;
-#endif
             } else {
                 tok = TOK_CDOUBLE;
                 tokc.d = d;
@@ -2485,13 +2461,8 @@ static void parse_number(const char *p)
                 tokc.f = strtof(token_buf, NULL);
             } else if (t == 'L') {
                 ch = *p++;
-#ifdef TCC_TARGET_PE
-                tok = TOK_CDOUBLE;
-                tokc.d = strtod(token_buf, NULL);
-#else
                 tok = TOK_CLDOUBLE;
                 tokc.ld = strtold(token_buf, NULL);
-#endif
             } else {
                 tok = TOK_CDOUBLE;
                 tokc.d = strtod(token_buf, NULL);
@@ -3628,38 +3599,7 @@ static void tcc_predefs(CString *cstr)
 
     //"#include <tcc_predefs.h>\n"
 
-#if defined TCC_TARGET_X86_64
-#ifndef TCC_TARGET_PE
-    /* GCC compatible definition of va_list. */
-    /* This should be in sync with the declaration in our lib/libtcc1.c */
-    "typedef struct{\n"
-    "unsigned gp_offset,fp_offset;\n"
-    "union{\n"
-    "unsigned overflow_offset;\n"
-    "char*overflow_arg_area;\n"
-    "};\n"
-    "char*reg_save_area;\n"
-    "}__builtin_va_list[1];\n"
-    "void*__va_arg(__builtin_va_list ap,int arg_type,int size,int align);\n"
-    "#define __builtin_va_start(ap,last) (*(ap)=*(__builtin_va_list)((char*)__builtin_frame_address(0)-24))\n"
-    "#define __builtin_va_arg(ap,t) (*(t*)(__va_arg(ap,__builtin_va_arg_types(t),sizeof(t),__alignof__(t))))\n"
-    "#define __builtin_va_copy(dest,src) (*(dest)=*(src))\n"
-#else /* TCC_TARGET_PE */
-    "typedef char*__builtin_va_list;\n"
-    "#define __builtin_va_arg(ap,t) ((sizeof(t)>8||(sizeof(t)&(sizeof(t)-1)))?**(t**)((ap+=8)-8):*(t*)((ap+=8)-8))\n"
-#endif
-#elif defined TCC_TARGET_ARM
-    "typedef char*__builtin_va_list;\n"
-    "#define _tcc_alignof(type) ((int)&((struct{char c;type x;}*)0)->x)\n"
-    "#define _tcc_align(addr,type) (((unsigned)addr+_tcc_alignof(type)-1)&~(_tcc_alignof(type)-1))\n"
-    "#define __builtin_va_start(ap,last) (ap=((char*)&(last))+((sizeof(last)+3)&~3))\n"
-    "#define __builtin_va_arg(ap,type) (ap=(void*)((_tcc_align(ap,type)+sizeof(type)+3)&~3),*(type*)(ap-((sizeof(type)+3)&~3)))\n"
-#elif defined TCC_TARGET_ARM64
-    "typedef struct{\n"
-    "void*__stack,*__gr_top,*__vr_top;\n"
-    "int __gr_offs,__vr_offs;\n"
-    "}__builtin_va_list;\n"
-#elif defined TCC_TARGET_RISCV64
+#if   defined TCC_TARGET_RISCV64
     "typedef char*__builtin_va_list;\n"
     "#define __va_reg_size (__riscv_xlen>>3)\n"
     "#define _tcc_align(addr,type) (((unsigned long)addr+__alignof__(type)-1)&-(__alignof__(type)))\n"
@@ -3695,32 +3635,19 @@ static void tcc_predefs(CString *cstr)
     "__BOTH(char*,strcat,(char*,const char*))\n"
     "__BOTH(char*,strchr,(const char*,int))\n"
     "__BOTH(char*,strdup,(const char*))\n"
-#ifdef TCC_TARGET_PE
-    "#define __MAYBE_REDIR __BOTH\n"
-#else  // HAVE MALLOC_REDIR
     "#define __MAYBE_REDIR __BUILTIN\n"
-#endif
     "__MAYBE_REDIR(void*,malloc,(__SIZE_TYPE__))\n"
     "__MAYBE_REDIR(void*,realloc,(void*,__SIZE_TYPE__))\n"
     "__MAYBE_REDIR(void*,calloc,(__SIZE_TYPE__,__SIZE_TYPE__))\n"
     "__MAYBE_REDIR(void*,memalign,(__SIZE_TYPE__,__SIZE_TYPE__))\n"
     "__MAYBE_REDIR(void,free,(void*))\n"
-#if defined TCC_TARGET_I386 || defined TCC_TARGET_X86_64
+#if defined TCC_TARGET_I386
     "__BOTH(void*,alloca,(__SIZE_TYPE__))\n"
-#endif
-#if defined(TCC_TARGET_ARM) && defined(TCC_ARM_EABI)
-    "__BOUND(void*,__aeabi_memcpy,(void*,const void*,__SIZE_TYPE__))\n"
-    "__BOUND(void*,__aeabi_memmove,(void*,const void*,__SIZE_TYPE__))\n"
-    "__BOUND(void*,__aeabi_memmove4,(void*,const void*,__SIZE_TYPE__))\n"
-    "__BOUND(void*,__aeabi_memmove8,(void*,const void*,__SIZE_TYPE__))\n"
-    "__BOUND(void*,__aeabi_memset,(void*,int,__SIZE_TYPE__))\n"
 #endif
     "__BUILTIN(void,abort,(void))\n"
     "__BOUND(int,longjmp,())\n"
-#ifndef TCC_TARGET_PE
     "__BOUND(void*,mmap,())\n"
     "__BOUND(void*,munmap,())\n"
-#endif
     "#undef __BUILTINBC\n"
     "#undef __BUILTIN\n"
     "#undef __BOUND\n"

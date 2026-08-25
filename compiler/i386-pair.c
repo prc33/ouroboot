@@ -91,10 +91,6 @@ static void gen_opl(int op)
     case TOK_UMOD:
         func = TOK___umoddi3;
     gen_mod_func:
-#ifdef TCC_ARM_EABI
-        reg_iret = TREG_R2;
-        reg_lret = TREG_R3;
-#endif
     gen_func:
         /* call generic long long function */
         vpush_global_sym(&func_old_type, func);

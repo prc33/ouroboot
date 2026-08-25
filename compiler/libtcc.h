@@ -83,11 +83,7 @@ LIBTCCAPI int tcc_add_symbol(TCCState *s, const char *name, const void *val);
 /* output an executable, library or object file. */
 LIBTCCAPI int tcc_output_file(TCCState *s, const char *filename);
 
-/* tcc_run()/tcc_relocate()/TCC_RELOCATE_AUTO (tccrun.c's own -run/
- * in-memory-execution API) removed from this fork -- see tcc.h's own
- * comment by TCC_IS_NATIVE's definition for why, and
- * tcc_get_symbol() below for the one piece of that API this fork
- * keeps (defined in tccelf.c, not tccrun.c -- unaffected). */
+/* The in-memory execution API was removed with tccrun.c. */
 
 /* return symbol value or NULL if not found */
 LIBTCCAPI void *tcc_get_symbol(TCCState *s, const char *name);

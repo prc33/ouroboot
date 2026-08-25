@@ -213,10 +213,6 @@ ST_FUNC void load(int r, SValue *sv)
     int v, t, ft, fc, fr;
     SValue v1;
 
-#ifdef TCC_TARGET_PE
-    SValue v2;
-    sv = pe_getimport(sv, &v2);
-#endif
 
     fr = sv->r;
     ft = sv->type.t & ~VT_DEFSIGN;
@@ -292,10 +288,6 @@ ST_FUNC void store(int r, SValue *v)
 {
     int fr, bt, ft, fc;
 
-#ifdef TCC_TARGET_PE
-    SValue v2;
-    v = pe_getimport(v, &v2);
-#endif
 
     ft = v->type.t;
     fc = v->c.i;
@@ -340,7 +332,7 @@ static void gadd_sp(int val)
     }
 }
 
-#if defined CONFIG_TCC_BCHECK || defined TCC_TARGET_PE
+#if defined CONFIG_TCC_BCHECK
 static void gen_static_call(int v)
 {
     Sym *sym;
@@ -374,27 +366,8 @@ static uint8_t fastcallw_regs[2] = { TREG_ECX, TREG_EDX };
    returning via struct pointer. */
 ST_FUNC int gfunc_sret(CType *vt, int variadic, CType *ret, int *ret_align, int *regsize)
 {
-#ifdef TCC_TARGET_PE
-    int size, align;
-    *ret_align = 1; // Never have to re-align return values for x86
-    *regsize = 4;
-    size = type_size(vt, &align);
-    if (size > 8 || (size & (size - 1)))
-        return 0;
-    if (size == 8)
-        ret->t = VT_LLONG;
-    else if (size == 4)
-        ret->t = VT_INT;
-    else if (size == 2)
-        ret->t = VT_SHORT;
-    else
-        ret->t = VT_BYTE;
-    ret->ref = NULL;
-    return 1;
-#else
     *ret_align = 1; // Never have to re-align return values for x86
     return 0;
-#endif
 }
 
 /* Generate function call. The function address is pushed first, then
@@ -417,22 +390,6 @@ ST_FUNC void gfunc_call(int nb_args)
             /* align to stack align size */
             size = (size + 3) & ~3;
             /* allocate the necessary size on stack */
-#ifdef TCC_TARGET_PE
-            if (size >= 0x4096) {
-                /* cannot call alloca with bound checking. Do stack probing. */
-                o(0x50);               // push %eax
-                oad(0xb8, size - 4);   // mov size-4,%eax
-                oad(0x3d, 4096);       // p1: cmp $4096,%eax
-                o(0x1476);             // jbe <p2>
-                oad(0x248485,-4096);   // test %eax,-4096(%esp)
-                oad(0xec81, 4096);     // sub $4096,%esp
-                oad(0x2d, 4096);       // sub $4096,%eax
-                o(0xe5eb);             // jmp <p1>
-                o(0xc429);             // p2: sub %eax,%esp
-                oad(0xc481, size - 4); // add size-4,%esp
-                o(0x58);               // pop %eax
-            }
-#endif
             oad(0xec81, size); /* sub $xxx, %esp */
             /* generate structure store */
             r = get_reg(RC_INT);
@@ -496,10 +453,8 @@ ST_FUNC void gfunc_call(int nb_args)
             args_size -= 4;
         }
     }
-#ifndef TCC_TARGET_PE
     else if ((vtop->type.ref->type.t & VT_BTYPE) == VT_STRUCT)
         args_size -= 4;
-#endif
 
     gcall_or_jmp(0);
 
@@ -508,11 +463,7 @@ ST_FUNC void gfunc_call(int nb_args)
     vtop--;
 }
 
-#ifdef TCC_TARGET_PE
-#define FUNC_PROLOG_SIZE (10 + USE_EBX)
-#else
 #define FUNC_PROLOG_SIZE (9 + USE_EBX)
-#endif
 
 /* generate function prolog of type 't' */
 ST_FUNC void gfunc_prolog(Sym *func_sym)
@@ -546,13 +497,7 @@ ST_FUNC void gfunc_prolog(Sym *func_sym)
     func_sub_sp_offset = ind;
     /* if the function returns a structure, then add an
        implicit pointer parameter */
-#ifdef TCC_TARGET_PE
-    size = type_size(&func_vt,&align);
-    if (((func_vt.t & VT_BTYPE) == VT_STRUCT)
-        && (size > 8 || (size & (size - 1)))) {
-#else
     if ((func_vt.t & VT_BTYPE) == VT_STRUCT) {
-#endif
         /* XXX: fastcall case ? */
         func_vc = addr;
         addr += 4;
@@ -587,10 +532,8 @@ ST_FUNC void gfunc_prolog(Sym *func_sym)
     /* pascal type call or fastcall ? */
     if (func_call == FUNC_STDCALL || func_call == FUNC_FASTCALLW)
         func_ret_sub = addr - 8;
-#ifndef TCC_TARGET_PE
     else if (func_vc)
         func_ret_sub = 4;
-#endif
 
 #ifdef CONFIG_TCC_BCHECK
     if (tcc_state->do_bounds_check)
@@ -626,19 +569,10 @@ ST_FUNC void gfunc_epilog(void)
     }
     saved_ind = ind;
     ind = func_sub_sp_offset - FUNC_PROLOG_SIZE;
-#ifdef TCC_TARGET_PE
-    if (v >= 4096) {
-        oad(0xb8, v); /* mov stacksize, %eax */
-        gen_static_call(TOK___chkstk); /* call __chkstk, (does the stackframe too) */
-    } else
-#endif
     {
         o(0xe58955);  /* push %ebp, mov %esp, %ebp */
         o(0xec81);  /* sub esp, stacksize */
         gen_le32(v);
-#ifdef TCC_TARGET_PE
-        o(0x90);  /* adjust to FUNC_PROLOG_SIZE */
-#endif
     }
     o(0x53 * USE_EBX); /* push ebx */
     ind = saved_ind;
@@ -1093,9 +1027,6 @@ ST_FUNC void gen_vla_alloc(CType *type, int align) {
 
 #if defined(CONFIG_TCC_BCHECK)
     use_call = tcc_state->do_bounds_check;
-#endif
-#ifdef TCC_TARGET_PE    /* alloca does more than just adjust %rsp on Windows */
-    use_call = 1;
 #endif
     if (use_call)
     {

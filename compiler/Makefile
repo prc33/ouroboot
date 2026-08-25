@@ -1,7 +1,4 @@
-# TCC fork, stripped to exactly two targets: i386 and riscv64. Nothing
-# else (arm, arm64, riscv32, x86_64, c67, PE/Mach-O/COFF, bounds
-# checking) is kept -- see docs/tcc-spike-findings.md and
-# docs/riscv-port-findings.md for why these two specifically.
+# TCC fork with exactly three targets: i386, riscv64, and wasm32.
 #
 # One source tree, one target selected at build time -- this is how
 # upstream TCC itself works (TCC_TARGET_* controls which *-gen.c/
