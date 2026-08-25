@@ -36,66 +36,62 @@
  * for free rather than needing an frm-aware software rounder.
  */
 
-const { CSR, SSTATUS_SIE, SSTATUS_SPIE, SSTATUS_SPP, SSTATUS_SUM, SIE_STIE, SIP_STIP } = require('./csr');
-const { translate, PageFault } = require('./mmu');
-const { BusError, RAM_BASE } = require('./memory');
+var csrDefs = require('./csr');
+var CSR = csrDefs.CSR;
+var SSTATUS_SIE = csrDefs.SSTATUS_SIE;
+var SSTATUS_SPIE = csrDefs.SSTATUS_SPIE;
+var SSTATUS_SPP = csrDefs.SSTATUS_SPP;
+var SSTATUS_SUM = csrDefs.SSTATUS_SUM;
+var SIP_STIP = csrDefs.SIP_STIP;
+var mmuDefs = require('./mmu');
+var translate = mmuDefs.translate;
+var PageFault = mmuDefs.PageFault;
+var memoryDefs = require('./memory');
+var BusError = memoryDefs.BusError;
+var RAM_BASE = memoryDefs.RAM_BASE;
 
-const MASK64 = (1n << 64n) - 1n;
-
-/* Sign-extend a `bits`-wide field (given as a BigInt of that width) to
- * a full 64-bit two's-complement value, returned as unsigned BigInt
- * (i.e. already masked to 64 bits, ready to store in a register). */
-function sext(value, bits) {
-	const b = BigInt(bits);
-	const signBit = 1n << (b - 1n);
-	if (value & signBit)
-		return (value | (MASK64 << b)) & MASK64;
-	return value & ((1n << b) - 1n);
+function IllegalInstruction(inst) {
+	this.name = 'IllegalInstruction';
+	this.message = 'illegal instruction ' + (inst >>> 0).toString(16);
 }
+IllegalInstruction.prototype = Object.create(Error.prototype);
+IllegalInstruction.prototype.constructor = IllegalInstruction;
 
-class IllegalInstruction extends Error {
-	constructor(inst) {
-		super(`illegal instruction ${inst.toString(16)}`);
-	}
-}
-
-/* Scratch buffer for float64<->bits and float32<->bits reinterpretation
- * (JS has no direct "punning" operator -- a DataView over a shared
- * ArrayBuffer is the standard way to get IEEE754 bit patterns). Module-
+/* Scratch typed-array views for float64<->bits and float32<->bits
+ * reinterpretation (JS has no direct "punning" operator). Module-
  * level and reused across calls since it's write-then-immediately-read,
  * never held across a yield point. */
-const fConvBuf = new ArrayBuffer(8);
-const fConvView = new DataView(fConvBuf);
+var fConvBuf = new ArrayBuffer(8);
+var fConvU32 = new Uint32Array(fConvBuf);
+var fConvF64 = new Float64Array(fConvBuf);
+var fConvF32 = new Float32Array(fConvBuf);
 
-class Cpu {
-	constructor(mem) {
+function Cpu(mem) {
+		var i;
 		this.mem = mem;
-		/* Typed storage applies RV64's modulo-2^64 register semantics on
-		 * assignment, avoiding an explicit BigInt mask after every write. */
-		this.x = new BigUint64Array(32);
-		/* Exact Number mirror for address generation. Ouroboot maps all RAM,
-		 * userspace, stacks, and MMIO below 4GB; full-width arithmetic still
-		 * uses x above. */
-		this.xNumber = new Float64Array(32);
-		/* 32 float/double registers, stored as raw 64-bit bit patterns
-		 * (BigUint64Array) -- the single source of truth, same as real
+		/* RV64 values as two unboxed 32-bit halves.  The low half is unsigned;
+		 * the high half is signed so comparisons and arithmetic shifts map
+		 * directly to JavaScript's native 32-bit operators. */
+		this.xLo = new Uint32Array(32);
+		this.xHi = new Int32Array(32);
+		/* 32 float/double registers, stored as paired raw 32-bit halves --
+		 * the single source of truth, same bit representation as real
 		 * hardware. Single-precision values are NaN-boxed (upper 32 bits
 		 * all 1s) per the D-extension spec; getF32/setF32 below implement
-		 * that, getF64/setF64 the plain double case, getFBits/setFBits
-		 * the raw-move case fmv.x.d/fld/fsd/etc. need. */
-		this.f = new BigUint64Array(32);
+		 * that and getF64/setF64 implement the plain double case. */
+		this.fLo = new Uint32Array(32);
+		this.fHi = new Int32Array(32);
 		/* Every executable mapping in this machine is below 4GB, where a JS
-		 * Number is exact. GPRs remain full RV64 BigInts. */
+		 * Number is exact. Full-width GPR arithmetic uses the paired arrays. */
 		this.pc = 0;
-		this.priv = 'S'; /* E4: start directly in S-mode, no OpenSBI/M-mode */
-		this.csr = new Map();
-		for (const addr of Object.values(CSR))
-			this.csr.set(addr, 0n);
-		/* Hot CSR mirrors. Fetch and interrupt checks touch these on every
-		 * instruction; the Map remains the canonical interface for the rare
-		 * guest CSR instructions. setCsr keeps both representations together. */
-		this.satp = 0n;
-		this.sstatus = 0n;
+		this.priv = 1; /* 0=U, 1=S; no M-mode */
+		this.csrLo = new Uint32Array(4096);
+		this.csrHi = new Int32Array(4096);
+		/* Hot CSR mirrors avoid typed-array lookups during fetch and interrupt
+		 * checks; setCsrPair keeps both representations together. */
+		this.satpLo = 0;
+		this.satpHi = 0;
+		this.sstatus = 0;
 		this.sum = false;
 		/* The modeled time cannot approach Number's exact-integer limit in a
 		 * boot run. Keep the hot per-instruction clock as a Number and convert
@@ -111,44 +107,132 @@ class Cpu {
 		 * their own, separate, much bigger cache below, since they actually
 		 * range across many pages). satp and the permission-relevant privilege
 		 * state are part of the tag, and sfence.vma invalidates it. */
-		this.tlbVpage = -1n;
+		this.tlbVpage = -1;
 		this.tlbRamOffset = -1; /* the fetch fast path returns straight from RAM, so the physical
 		                          * page itself is never needed again once this offset is cached */
-		this.tlbSatp = 0n;
+		this.tlbSatpLo = 0;
+		this.tlbSatpHi = 0;
 		this.tlbContext = -1;
 		/* Loads and stores range across many pages, so each gets a tiny
 		 * direct-mapped 256-page cache. The indexing rule is the replacement
-		 * policy; there is no list, allocation, or search on the hot path.
-		 * Ppage/satp are BigUint64Array, not plain Array-of-BigInt: a plain
-		 * array stores each BigInt as a separate heap-boxed object, so every
-		 * cache-miss fill would allocate; the typed array stores the raw
-		 * 64-bit values inline instead. */
+		 * policy; there is no list, allocation, or search on the hot path. */
 		this.dataTlbVpage = new Float64Array(512);
-		this.dataTlbVpage.fill(-1);
-		this.dataTlbPpage = new BigUint64Array(512);
-		this.dataTlbSatp = new BigUint64Array(512);
+		for (i = 0; i < 512; i++) this.dataTlbVpage[i] = -1;
+		/* All physical addresses in this deliberately fixed machine are below
+		 * 4 GiB, so cached physical pages are exact Numbers. */
+		this.dataTlbPpage = new Float64Array(512);
+		this.dataTlbSatpLo = new Uint32Array(512);
+		this.dataTlbSatpHi = new Int32Array(512);
 		this.dataTlbContext = new Int8Array(512);
-	}
+		/* Convolution coefficients exceed 32 bits before carry propagation. */
+		this.mulDigits = new Float64Array(8);
+}
 
-	getX(i) { return i === 0 ? 0n : this.x[i]; }
-	setX(i, v) {
+Cpu.prototype.setPair = function(i, lo, hi) {
 		if (i !== 0) {
-			this.x[i] = v;
-			this.xNumber[i] = Number(this.x[i]);
+			this.xLo[i] = lo >>> 0;
+			this.xHi[i] = hi | 0;
 		}
-	}
+};
+Cpu.prototype.setSigned32 = function(i, lo) { this.setPair(i, lo, lo >> 31); }
+Cpu.prototype.umul32High = function(a, b) {
+		var a0 = a & 0xffff, a1 = a >>> 16;
+		var b0 = b & 0xffff, b1 = b >>> 16;
+		var w0 = Math.imul(a0, b0);
+		var t = (Math.imul(a1, b0) >>> 0) + (w0 >>> 16);
+		var w1 = (t & 0xffff) + (Math.imul(a0, b1) >>> 0);
+		return (Math.imul(a1, b1) + Math.floor(t / 65536) + Math.floor(w1 / 65536)) >>> 0;
+};
+Cpu.prototype.multiplyLow = function(alo, ahi, blo, bhi) {
+		this.valueLo = Math.imul(alo, blo) >>> 0;
+		this.valueHi = (this.umul32High(alo, blo) +
+			Math.imul(alo, bhi) + Math.imul(ahi, blo)) | 0;
+}
 
-	getFBits(i) { return this.f[i]; }
-	setFBits(i, bits) { this.f[i] = BigInt.asUintN(64, bits); }
+Cpu.prototype.negatePair = function(lo, hi) {
+		var nlo = (-lo) >>> 0;
+		this.valueLo = nlo;
+		this.valueHi = (~hi + (nlo === 0 ? 1 : 0)) | 0;
+};
 
-	getF64(i) {
-		fConvView.setBigUint64(0, this.f[i], true);
-		return fConvView.getFloat64(0, true);
-	}
-	setF64(i, val) {
-		fConvView.setFloat64(0, val, true);
-		this.f[i] = fConvView.getBigUint64(0, true);
-	}
+	/* Full 64x64 product in eight base-2^16 digits.  This is used only by
+	 * M-extension instructions; common adds, shifts and addresses never
+	 * enter a helper. */
+Cpu.prototype.multiplyPair = function(alo, ahi, blo, bhi, signedA, signedB, highResult) {
+		var neg = false, i, j, carry, k;
+		var d = this.mulDigits;
+		if (signedA && ahi < 0) {
+			this.negatePair(alo, ahi); alo = this.valueLo; ahi = this.valueHi; neg = !neg;
+		}
+		if (signedB && bhi < 0) {
+			this.negatePair(blo, bhi); blo = this.valueLo; bhi = this.valueHi; neg = !neg;
+		}
+		var a = [alo & 0xffff, alo >>> 16, ahi & 0xffff, (ahi >>> 16) & 0xffff];
+		var b = [blo & 0xffff, blo >>> 16, bhi & 0xffff, (bhi >>> 16) & 0xffff];
+		for (i = 0; i < 8; i++) d[i] = 0;
+		for (i = 0; i < 4; i++)
+			for (j = 0; j < 4; j++) d[i + j] += a[i] * b[j];
+		carry = 0;
+		for (i = 0; i < 8; i++) {
+			carry += d[i]; d[i] = carry & 0xffff; carry = Math.floor(carry / 65536);
+		}
+		if (neg) {
+			carry = 1;
+			for (i = 0; i < 8; i++) { k = ((~d[i]) & 0xffff) + carry; d[i] = k & 0xffff; carry = k >>> 16; }
+		}
+		i = highResult ? 4 : 0;
+		this.valueLo = (d[i] | (d[i + 1] << 16)) >>> 0;
+		this.valueHi = (d[i + 2] | (d[i + 3] << 16)) | 0;
+}
+
+Cpu.prototype.dividePair = function(alo, ahi, blo, bhi, signed, remainder) {
+		var negQ = false, negR = false, qlo = 0, qhi = 0, rlo = 0, rhi = 0;
+		var i, bit, nlo, nhi, av, bv, result;
+		if ((blo | bhi) === 0) {
+			this.valueLo = remainder ? alo : 0xffffffff;
+			this.valueHi = remainder ? ahi : -1;
+			return;
+		}
+		/* C library divisions overwhelmingly operate on sign-extended 32-bit
+		 * values.  Keep that path in native Number arithmetic; the restoring
+		 * divider below is only for genuinely wide operands. */
+		if (signed && ahi === (alo >> 31) && bhi === (blo >> 31)) {
+			av = alo | 0; bv = blo | 0;
+			result = remainder ? av % bv : Math.trunc(av / bv);
+			this.valueLo = result >>> 0; this.valueHi = result >> 31;
+			return;
+		}
+		if (!signed && ahi === 0 && bhi === 0) {
+			result = remainder ? alo % blo : Math.floor(alo / blo);
+			this.valueLo = result >>> 0; this.valueHi = 0;
+			return;
+		}
+		if (signed && ahi < 0) { this.negatePair(alo, ahi); alo = this.valueLo; ahi = this.valueHi; negQ = true; negR = true; }
+		if (signed && bhi < 0) { this.negatePair(blo, bhi); blo = this.valueLo; bhi = this.valueHi; negQ = !negQ; }
+		for (i = 63; i >= 0; i--) {
+			bit = i >= 32 ? (ahi >>> (i - 32)) & 1 : (alo >>> i) & 1;
+			rhi = ((rhi << 1) | (rlo >>> 31)) | 0; rlo = ((rlo << 1) | bit) >>> 0;
+			if ((rhi >>> 0) > (bhi >>> 0) || (rhi === bhi && rlo >= blo)) {
+				nlo = (rlo - blo) >>> 0; nhi = (rhi - bhi - (rlo < blo ? 1 : 0)) | 0;
+				rlo = nlo; rhi = nhi;
+				if (i >= 32) qhi |= 1 << (i - 32); else qlo |= 1 << i;
+			}
+		}
+		this.valueLo = remainder ? rlo : qlo;
+		this.valueHi = remainder ? rhi : qhi;
+		if ((remainder ? negR : negQ)) this.negatePair(this.valueLo, this.valueHi);
+}
+
+Cpu.prototype.getF64 = function(i) {
+		fConvU32[0] = this.fLo[i];
+		fConvU32[1] = this.fHi[i];
+		return fConvF64[0];
+};
+Cpu.prototype.setF64 = function(i, val) {
+		fConvF64[0] = val;
+		this.fLo[i] = fConvU32[0];
+		this.fHi[i] = fConvU32[1];
+};
 
 	/* NaN-boxing (D-ext spec 12.2): a single-precision value in a 64-bit
 	 * F register is only valid if the upper 32 bits are all 1s; anything
@@ -156,333 +240,401 @@ class Cpu {
 	 * ever trigger here (nothing in the histogram writes f-regs any way
 	 * but setF32/setF64 above), but it's part of the spec's actual
 	 * semantics, not an edge case worth skipping. */
-	getF32(i) {
-		if ((this.f[i] >> 32n) !== 0xffffffffn) return NaN;
-		fConvView.setUint32(0, Number(this.f[i] & 0xffffffffn), true);
-		return fConvView.getFloat32(0, true);
-	}
-	setF32(i, val) {
-		fConvView.setFloat32(0, val, true);
-		const bits32 = BigInt(fConvView.getUint32(0, true));
-		this.f[i] = (0xffffffffn << 32n) | bits32;
-	}
+Cpu.prototype.getF32 = function(i) {
+		if (this.fHi[i] !== -1) return NaN;
+		fConvU32[0] = this.fLo[i];
+		return fConvF32[0];
+};
+Cpu.prototype.setF32 = function(i, val) {
+		fConvF32[0] = val;
+		this.fLo[i] = fConvU32[0];
+		this.fHi[i] = -1;
+};
 
 	/* fsgnj.s/fsgnj.d: rs1's magnitude, rs2's sign bit -- operates on raw
 	 * bits, not the numeric value (so it's correct for NaNs too, unlike
 	 * doing this via Math.abs()/multiply). fmv.s/fmv.d (rs2===rs1, a
 	 * self-copy) fall out of this for free, matching how the real ISA
 	 * defines them as pseudo-instructions rather than separate opcodes. */
-	rs2SignOnF32(rs1, rs2) {
-		const mag = this.getFBits(rs1) & 0x7fffffffn;
-		const sign = this.getFBits(rs2) & 0x80000000n;
-		fConvView.setUint32(0, Number(mag | sign), true);
-		return fConvView.getFloat32(0, true);
-	}
-	rs2SignOnF64(rs1, rs2) {
-		const mag = this.getFBits(rs1) & 0x7fffffffffffffffn;
-		const sign = this.getFBits(rs2) & 0x8000000000000000n;
-		fConvView.setBigUint64(0, mag | sign, true);
-		return fConvView.getFloat64(0, true);
-	}
+Cpu.prototype.rs2SignOnF32 = function(rs1, rs2) {
+		fConvU32[0] = (this.fLo[rs1] & 0x7fffffff) |
+			(this.fLo[rs2] & 0x80000000);
+		return fConvF32[0];
+};
+Cpu.prototype.rs2SignOnF64 = function(rs1, rs2) {
+		fConvU32[0] = this.fLo[rs1];
+		fConvU32[1] = (this.fHi[rs1] & 0x7fffffff) |
+			(this.fHi[rs2] & 0x80000000);
+		return fConvF64[0];
+}
 
-	getCsr(addr) {
-		if (addr === CSR.TIME) return BigInt(this.time);
-		if (addr === CSR.SATP) return this.satp;
-		if (addr === CSR.SSTATUS) return this.sstatus;
-		return this.csr.get(addr) ?? 0n;
-	}
-	setCsr(addr, v) {
-		v &= MASK64;
-		this.csr.set(addr, v);
-		if (addr === CSR.SATP) this.satp = v;
+Cpu.prototype.getCsrPair = function(addr) {
+		if (addr === CSR.TIME) {
+			this.valueLo = this.time >>> 0;
+			this.valueHi = Math.floor(this.time / 4294967296) | 0;
+			return;
+		}
+		this.valueLo = this.csrLo[addr];
+		this.valueHi = this.csrHi[addr];
+};
+Cpu.prototype.setCsrPair = function(addr, lo, hi) {
+		this.csrLo[addr] = lo >>> 0;
+		this.csrHi[addr] = hi | 0;
+		if (addr === CSR.SATP) {
+			this.satpLo = lo >>> 0;
+			this.satpHi = hi | 0;
+		}
 		if (addr === CSR.SSTATUS) {
-			this.sstatus = v;
-			this.sum = (v & SSTATUS_SUM) !== 0n;
+			this.sstatus = lo >>> 0;
+			this.sum = (lo & SSTATUS_SUM) !== 0;
 		}
 		if (addr === CSR.STIMECMP) {
-			this.timecmp = Number(v);
+			this.timecmp = (hi >>> 0) * 4294967296 + (lo >>> 0);
 			if (this.timecmp === 0 || this.time < this.timecmp)
-				this.csr.set(CSR.SIP, (this.csr.get(CSR.SIP) ?? 0n) & ~SIP_STIP);
+				this.csrLo[CSR.SIP] &= ~SIP_STIP;
 		}
-	}
+};
 
 	/* --- memory access, MMU + fault translation --- */
 
-	translateAddr(vaddr, access) {
-		const satp = this.satp;
-		const sum = this.sum;
-		const vpage = Math.floor(vaddr / 4096);
-		const context = (this.priv === 'U' ? 1 : 0) | (sum ? 2 : 0);
-		const slot = (vpage & 0xff) + (access === 'w' ? 256 : 0);
+Cpu.prototype.translateAddr = function(vaddr, access) {
+		var satpLo = this.satpLo;
+		var satpHi = this.satpHi;
+		var sum = this.sum;
+		var vpage = Math.floor(vaddr / 4096);
+		var context = (this.priv === 0 ? 1 : 0) | (sum ? 2 : 0);
+		var slot = (vpage & 0xff) + (access === 'w' ? 256 : 0);
 		if (this.dataTlbVpage[slot] === vpage &&
-		    this.dataTlbSatp[slot] === satp &&
+		    this.dataTlbSatpLo[slot] === satpLo &&
+		    this.dataTlbSatpHi[slot] === satpHi &&
 		    this.dataTlbContext[slot] === context)
-			return this.dataTlbPpage[slot] | BigInt(vaddr & 0xfff);
+			return this.dataTlbPpage[slot] + (vaddr & 0xfff);
 
-		const paddr = translate(this.mem, satp, BigInt(vaddr), access, this.priv, sum);
+		var paddr = translate(this.mem, satpLo, satpHi, vaddr, access, this.priv, sum);
 		this.dataTlbVpage[slot] = vpage;
-		this.dataTlbPpage[slot] = paddr & ~0xfffn;
-		this.dataTlbSatp[slot] = satp;
+		this.dataTlbPpage[slot] = Math.floor(paddr / 4096) * 4096;
+		this.dataTlbSatpLo[slot] = satpLo;
+		this.dataTlbSatpHi[slot] = satpHi;
 		this.dataTlbContext[slot] = context;
 		return paddr;
-	}
+}
 
-	flushTlb() {
-		this.tlbVpage = -1n;
-		this.dataTlbVpage.fill(-1);
-	}
+Cpu.prototype.flushTlb = function() {
+		var i;
+		this.tlbVpage = -1;
+		for (i = 0; i < 512; i++) this.dataTlbVpage[i] = -1;
+}
 
-	fetch32(vaddr) {
-		const satp = this.satp;
-		const sum = this.sum;
-		const vpage = Math.floor(vaddr / 4096);
-		const context = (this.priv === 'U' ? 1 : 0) | (sum ? 2 : 0);
+Cpu.prototype.fetch32 = function(vaddr) {
+		var satpLo = this.satpLo;
+		var satpHi = this.satpHi;
+		var sum = this.sum;
+		var vpage = Math.floor(vaddr / 4096);
+		var context = (this.priv === 0 ? 1 : 0) | (sum ? 2 : 0);
 		if (this.tlbVpage === vpage &&
-		    this.tlbSatp === satp &&
+		    this.tlbSatpLo === satpLo &&
+		    this.tlbSatpHi === satpHi &&
 		    this.tlbContext === context &&
 		    this.tlbRamOffset >= 0)
-			return this.mem.ram.getUint32(this.tlbRamOffset + (vaddr & 0xfff), true);
+			return this.mem.u32[(this.tlbRamOffset + (vaddr & 0xfff)) >> 2];
 
-		const paddr = translate(this.mem, satp, BigInt(vaddr), 'x', this.priv, sum);
+		var paddr = translate(this.mem, satpLo, satpHi, vaddr, 'x', this.priv, sum);
 		this.tlbVpage = vpage;
-		this.tlbSatp = satp;
+		this.tlbSatpLo = satpLo;
+		this.tlbSatpHi = satpHi;
 		this.tlbContext = context;
-		const off = paddr - RAM_BASE;
-		if (off < 0n || off + 4n > this.mem.ramSize) {
+		var off = paddr - RAM_BASE;
+		if (off < 0 || off + 4 > this.mem.ramSize) {
 			this.tlbRamOffset = -1;
-			return Number(this.mem.read(paddr, 4));
+			this.mem.readPair(paddr, 4);
+			return this.mem.valueLo;
 		}
-		this.tlbRamOffset = Number((paddr & ~0xfffn) - RAM_BASE);
-		return this.mem.ram.getUint32(Number(off), true);
-	}
+		this.tlbRamOffset = Math.floor(paddr / 4096) * 4096 - RAM_BASE;
+		return this.mem.u32[off >> 2];
+};
 
-	load(vaddr, size, access = 'r') {
-		const paddr = this.translateAddr(vaddr, access);
-		return this.mem.read(paddr, size);
-	}
+	/* Numeric paired-word variant used by the instruction hot path. */
+Cpu.prototype.loadPair = function(vaddr, size, signed) {
+		var paddr = this.translateAddr(vaddr, 'r');
+		var off = paddr - 0x80000000;
+		var lo;
+		if (off >= 0 && off + size <= 0x08000000) {
+			switch (size) {
+				case 1: lo = this.mem.u8[off]; break;
+				case 2: lo = this.mem.u16[off >> 1]; break;
+				case 4: lo = this.mem.u32[off >> 2]; break;
+				case 8:
+					this.valueLo = this.mem.u32[off >> 2];
+					this.valueHi = this.mem.i32[(off >> 2) + 1];
+					return;
+				default: throw new Error('bad load size ' + size);
+			}
+		} else {
+			this.mem.readPair(paddr, size);
+			lo = this.mem.valueLo;
+		}
+		this.valueLo = lo >>> 0;
+		this.valueHi = signed ? (lo << (32 - size * 8)) >> 31 : 0;
+}
 
-	store(vaddr, size, value) {
-		const paddr = this.translateAddr(vaddr, 'w');
-		this.mem.write(paddr, size, value);
-	}
+Cpu.prototype.storePair = function(vaddr, size, lo, hi) {
+		var paddr = this.translateAddr(vaddr, 'w');
+		var off = paddr - 0x80000000;
+		if (off >= 0 && off + size <= 0x08000000) {
+			switch (size) {
+				case 1: this.mem.u8[off] = lo; return;
+				case 2: this.mem.u16[off >> 1] = lo; return;
+				case 4: this.mem.u32[off >> 2] = lo; return;
+				case 8:
+					this.mem.u32[off >> 2] = lo;
+					this.mem.i32[(off >> 2) + 1] = hi;
+					return;
+			}
+		}
+		this.mem.writePair(paddr, size, lo, hi);
+};
 
 	/* --- traps --- */
 
-	raiseTrap(cause, tval, isInterrupt) {
-		const causeVal = isInterrupt ? (cause | (1n << 63n)) : cause;
-		this.setCsr(CSR.SEPC, BigInt(this.pc));
-		this.setCsr(CSR.SCAUSE, causeVal);
-		this.setCsr(CSR.STVAL, tval);
+Cpu.prototype.raiseTrap = function(cause, tvalLo, tvalHi, isInterrupt) {
+		var sstatus = this.sstatus;
+		this.setCsrPair(CSR.SEPC, this.pc, 0);
+		this.setCsrPair(CSR.SCAUSE, cause, isInterrupt ? -2147483648 : 0);
+		this.setCsrPair(CSR.STVAL, tvalLo, tvalHi);
 
-		let sstatus = this.getCsr(CSR.SSTATUS);
-		sstatus = this.priv === 'S' ? (sstatus | SSTATUS_SPP) : (sstatus & ~SSTATUS_SPP);
-		const sie = (sstatus & SSTATUS_SIE) ? 1n : 0n;
-		sstatus = (sstatus & ~SSTATUS_SPIE) | (sie << 5n);
+		sstatus = this.priv === 1 ? (sstatus | SSTATUS_SPP) : (sstatus & ~SSTATUS_SPP);
+		var sie = (sstatus & SSTATUS_SIE) ? 1 : 0;
+		sstatus = (sstatus & ~SSTATUS_SPIE) | (sie << 5);
 		sstatus &= ~SSTATUS_SIE;
-		this.setCsr(CSR.SSTATUS, sstatus);
+		this.setCsrPair(CSR.SSTATUS, sstatus, 0);
 
-		this.priv = 'S';
-		this.pc = Number(this.getCsr(CSR.STVEC) & ~0x3n); /* direct mode only -- low 2 bits are the mode field, kernel always uses 0 */
+		this.priv = 1;
+		this.pc = (this.csrLo[CSR.STVEC] & ~3) >>> 0;
 		this.halted = false;
-	}
+};
 
 	/* Maps a caught access exception to the right scause and re-raises
 	 * as a trap. `access` is 'x'/'r'/'w', matching mmu.js's own
 	 * vocabulary, so the three access-fault/page-fault cause codes
 	 * (which differ only in a fixed offset per access type) fall out
 	 * of one table instead of three near-duplicate catch blocks. */
-	handleAccessFault(e, access) {
-		const causes = {
-			x: { bus: 1n, page: 12n },
-			r: { bus: 5n, page: 13n },
-			w: { bus: 7n, page: 15n },
+Cpu.prototype.handleAccessFault = function(e, access) {
+		var causes = {
+			x: { bus: 1, page: 12 },
+			r: { bus: 5, page: 13 },
+			w: { bus: 7, page: 15 },
 		}[access];
 		if (e instanceof PageFault) {
-			this.raiseTrap(causes.page, e.vaddr, false);
+			this.raiseTrap(causes.page, e.vaddr, 0, false);
 			return true;
 		}
 		if (e instanceof BusError) {
-			this.raiseTrap(causes.bus, e.addr, false);
+			this.raiseTrap(causes.bus, e.addr, 0, false);
 			return true;
 		}
 		return false;
-	}
+}
 
-	checkInterrupts() {
+Cpu.prototype.checkInterrupts = function() {
 		if (this.timecmp === 0 || this.time < this.timecmp)
 			return false;
-		this.setCsr(CSR.SIP, this.getCsr(CSR.SIP) | SIP_STIP);
+		this.csrLo[CSR.SIP] |= SIP_STIP;
 
-		const sstatus = this.getCsr(CSR.SSTATUS);
-		const globallyEnabled = this.priv === 'U' || (this.priv === 'S' && (sstatus & SSTATUS_SIE));
-		const pending = this.getCsr(CSR.SIP) & this.getCsr(CSR.SIE) & SIP_STIP;
+		var sstatus = this.sstatus;
+		var globallyEnabled = this.priv === 0 || (this.priv === 1 && (sstatus & SSTATUS_SIE));
+		var pending = this.csrLo[CSR.SIP] & this.csrLo[CSR.SIE] & SIP_STIP;
 		if (globallyEnabled && pending) {
 			this.halted = false;
-			this.raiseTrap(5n, 0n, true); /* supervisor timer interrupt */
+			this.raiseTrap(5, 0, 0, true); /* supervisor timer interrupt */
 			return true;
 		}
 		return false;
-	}
+};
 
 	/* --- main loop --- */
 
-	step(timeAdvance) {
+Cpu.prototype.step = function(timeAdvance) {
 		this.run(1, timeAdvance);
-	}
+};
 
 	/* Run a host-side batch without paying one JS method call per guest
 	 * instruction. Interrupts and time still advance instruction by
 	 * instruction inside the loop. */
-	run(count, timeAdvance) {
-		for (let i = 0; i < count; i++) {
+Cpu.prototype.run = function(count, timeAdvance) {
+		for (var i = 0; i < count; i++) {
+			/* WFI does not retire instructions while the hart waits.  The old
+			 * loop nevertheless visited every synthetic timer tick, which made an
+			 * idle guest as expensive as a busy one.  Jump directly to the next
+			 * timer deadline; the interrupt check below still observes precisely
+			 * the same architectural time. */
+			if (this.halted && this.timecmp !== 0 && this.time < this.timecmp) {
+				var skip = Math.min(count - i - 1,
+					Math.max(0, Math.ceil((this.timecmp - this.time) / timeAdvance) - 1));
+				this.time += skip * timeAdvance;
+				i += skip;
+			}
 			this.time += timeAdvance;
 			if (this.timecmp !== 0 && this.time >= this.timecmp && this.checkInterrupts())
 				continue;
 			if (this.halted)
 				continue;
 
-			let inst;
+			var inst;
 			try {
 				inst = this.fetch32(this.pc);
-			} catch (e) {
-				if (this.handleAccessFault(e, 'x')) continue;
-				throw e;
+			} catch (fetchError) {
+				if (this.handleAccessFault(fetchError, 'x')) continue;
+				throw fetchError;
 			}
 
 			try {
 				this.execute(inst);
-			} catch (e) {
-				if (e instanceof IllegalInstruction) {
-					this.raiseTrap(2n, BigInt(inst), false);
+			} catch (executeError) {
+				if (executeError instanceof IllegalInstruction) {
+					this.raiseTrap(2, inst, 0, false);
 					continue;
 				}
-				if (this.handleAccessFault(e, e.accessKind || 'r')) continue;
-				throw e;
+				if (this.handleAccessFault(executeError, executeError.accessKind || 'r')) continue;
+				throw executeError;
 			}
 		}
-	}
+};
 
 	/* --- decode + execute --- */
 
-	execute(inst) {
-		const opcode = inst & 0x7f;
-		const rd = (inst >>> 7) & 0x1f;
-		const funct3 = (inst >>> 12) & 0x7;
-		const rs1 = (inst >>> 15) & 0x1f;
-		const rs2 = (inst >>> 20) & 0x1f;
-		const funct7 = (inst >>> 25) & 0x7f;
+Cpu.prototype.execute = function(inst) {
+		var opcode = inst & 0x7f;
+		var rd = (inst >>> 7) & 0x1f;
+		var funct3 = (inst >>> 12) & 0x7;
+		var rs1 = (inst >>> 15) & 0x1f;
+		var rs2 = (inst >>> 20) & 0x1f;
+		var funct7 = (inst >>> 25) & 0x7f;
 
-		const pc = this.pc;
-		let nextPc = pc + 4;
+		var pc = this.pc;
+		var nextPc = pc + 4;
 
 		switch (opcode) {
 			case 0x37: { /* LUI */
-				this.setX(rd, BigInt((inst & 0xfffff000) | 0));
+				var lo = (inst & 0xfffff000) | 0;
+				this.setPair(rd, lo, lo >> 31);
 				break;
 			}
 			case 0x17: { /* AUIPC */
-				const imm = BigInt((inst & 0xfffff000) | 0);
-				this.setX(rd, BigInt(pc) + imm);
+				var imm = (inst & 0xfffff000) | 0;
+				var lo = (pc + imm) >>> 0;
+				var hi = ((imm >> 31) + (lo < (pc >>> 0) ? 1 : 0)) | 0;
+				this.setPair(rd, lo, hi);
 				break;
 			}
 			case 0x6f: { /* JAL */
-				let imm = (((inst >>> 21) & 0x3ff) << 1) |
+				var imm = (((inst >>> 21) & 0x3ff) << 1) |
 				          (((inst >>> 20) & 0x1) << 11) |
 				          (((inst >>> 12) & 0xff) << 12) |
 				          (((inst >>> 31) & 0x1) << 20);
 				if (imm & 0x100000) imm -= 0x200000;
-				this.setX(rd, BigInt(nextPc));
+				this.setPair(rd, nextPc, 0);
 				nextPc = pc + imm;
 				break;
 			}
 			case 0x67: { /* JALR */
-				const imm = BigInt(inst >> 20);
-				const target = (this.getX(rs1) + imm) & ~1n & MASK64;
-				this.setX(rd, BigInt(nextPc));
-				nextPc = Number(target);
+				var imm = inst >> 20;
+				var target = (this.xLo[rs1] + imm) >>> 0;
+				this.setPair(rd, nextPc, 0);
+				nextPc = (target & ~1) >>> 0;
 				break;
 			}
 			case 0x63: { /* BRANCH */
-				let imm = (((inst >>> 8) & 0xf) << 1) |
+				var imm = (((inst >>> 8) & 0xf) << 1) |
 				          (((inst >>> 25) & 0x3f) << 5) |
 				          (((inst >>> 7) & 0x1) << 11) |
 				          (((inst >>> 31) & 0x1) << 12);
 				if (imm & 0x1000) imm -= 0x2000;
-				const a = this.getX(rs1), b = this.getX(rs2);
-				let taken;
+				var alo = this.xLo[rs1], blo = this.xLo[rs2];
+				var ahi = this.xHi[rs1], bhi = this.xHi[rs2];
+				var taken;
 				switch (funct3) {
-					case 0: taken = a === b; break;          /* beq */
-					case 1: taken = a !== b; break;           /* bne */
-					case 4: taken = BigInt.asIntN(64, a) < BigInt.asIntN(64, b); break; /* blt */
-					case 5: taken = BigInt.asIntN(64, a) >= BigInt.asIntN(64, b); break; /* bge */
-					case 6: taken = a < b; break;                /* bltu */
-					case 7: taken = a >= b; break;                /* bgeu */
+					case 0: taken = alo === blo && ahi === bhi; break; /* beq */
+					case 1: taken = alo !== blo || ahi !== bhi; break; /* bne */
+					case 4: taken = ahi < bhi || (ahi === bhi && alo < blo); break; /* blt */
+					case 5: taken = ahi > bhi || (ahi === bhi && alo >= blo); break; /* bge */
+					case 6: taken = (ahi >>> 0) < (bhi >>> 0) || (ahi === bhi && alo < blo); break; /* bltu */
+					case 7: taken = (ahi >>> 0) > (bhi >>> 0) || (ahi === bhi && alo >= blo); break; /* bgeu */
 					default: throw new IllegalInstruction(inst);
 				}
 				if (taken) nextPc = pc + imm;
 				break;
 			}
 			case 0x03: { /* LOAD */
-				const addr = this.xNumber[rs1] + (inst >> 20);
-				let v;
+				var addr = this.xLo[rs1] + (inst >> 20);
 				try {
 					switch (funct3) {
-						case 0: v = sext(this.load(addr, 1), 8); break;   /* lb */
-						case 1: v = sext(this.load(addr, 2), 16); break;  /* lh */
-						case 2: v = sext(this.load(addr, 4), 32); break;  /* lw */
-						case 3: v = this.load(addr, 8); break;             /* ld */
-						case 4: v = this.load(addr, 1); break;              /* lbu */
-						case 5: v = this.load(addr, 2); break;               /* lhu */
-						case 6: v = this.load(addr, 4); break;                /* lwu */
+						case 0: this.loadPair(addr, 1, true); break;  /* lb */
+						case 1: this.loadPair(addr, 2, true); break;  /* lh */
+						case 2: this.loadPair(addr, 4, true); break;  /* lw */
+						case 3: this.loadPair(addr, 8, false); break; /* ld */
+						case 4: this.loadPair(addr, 1, false); break; /* lbu */
+						case 5: this.loadPair(addr, 2, false); break; /* lhu */
+						case 6: this.loadPair(addr, 4, false); break; /* lwu */
 						default: throw new IllegalInstruction(inst);
 					}
-				} catch (e) { e.accessKind = 'r'; throw e; }
-				this.setX(rd, v);
+				} catch (loadError) { loadError.accessKind = 'r'; throw loadError; }
+				this.setPair(rd, this.valueLo, this.valueHi);
 				break;
 			}
 			case 0x23: { /* STORE */
-				const addr = this.xNumber[rs1] + (((inst >> 25) << 5) | ((inst >>> 7) & 0x1f));
-				const v = this.getX(rs2);
+				var addr = this.xLo[rs1] + (((inst >> 25) << 5) | ((inst >>> 7) & 0x1f));
 				try {
 					switch (funct3) {
-						case 0: this.store(addr, 1, v); break; /* sb */
-						case 1: this.store(addr, 2, v); break; /* sh */
-						case 2: this.store(addr, 4, v); break; /* sw */
-						case 3: this.store(addr, 8, v); break; /* sd */
+						case 0: this.storePair(addr, 1, this.xLo[rs2], this.xHi[rs2]); break; /* sb */
+						case 1: this.storePair(addr, 2, this.xLo[rs2], this.xHi[rs2]); break; /* sh */
+						case 2: this.storePair(addr, 4, this.xLo[rs2], this.xHi[rs2]); break; /* sw */
+						case 3: this.storePair(addr, 8, this.xLo[rs2], this.xHi[rs2]); break; /* sd */
 						default: throw new IllegalInstruction(inst);
 					}
-				} catch (e) { e.accessKind = 'w'; throw e; }
+				} catch (storeError) { storeError.accessKind = 'w'; throw storeError; }
 				break;
 			}
 			case 0x13: { /* OP-IMM */
-				const imm = BigInt(inst >> 20);
-				const a = this.getX(rs1);
-				const shamt = BigInt((inst >>> 20) & 0x3f);
-				let v;
+				var imm = inst >> 20;
+				var alo = this.xLo[rs1], ahi = this.xHi[rs1];
+				var shamt = (inst >>> 20) & 0x3f;
+				var lo = 0, hi = 0;
 				switch (funct3) {
-					case 0: v = a + imm; break; /* addi */
-					case 1: v = a << shamt; break;                                /* slli */
-					case 2: v = BigInt.asIntN(64, a) < BigInt.asIntN(64, imm) ? 1n : 0n; break; /* slti */
-					case 3: v = a < (imm & MASK64) ? 1n : 0n; break; /* sltiu */
-					case 4: v = a ^ imm; break; /* xori */
+					case 0: /* addi */
+						lo = (alo + imm) >>> 0;
+						hi = (ahi + (imm >> 31) + (lo < alo ? 1 : 0)) | 0;
+						break;
+					case 1: /* slli */
+						if (shamt === 0) { lo = alo; hi = ahi; }
+						else if (shamt < 32) { lo = alo << shamt; hi = (ahi << shamt) | (alo >>> (32 - shamt)); }
+						else { lo = 0; hi = alo << (shamt - 32); }
+						break;
+					case 2: lo = (ahi < (imm >> 31) || (ahi === (imm >> 31) && alo < (imm >>> 0))) ? 1 : 0; break; /* slti */
+					case 3: lo = ((ahi >>> 0) < ((imm >> 31) >>> 0) || (ahi === (imm >> 31) && alo < (imm >>> 0))) ? 1 : 0; break; /* sltiu */
+					case 4: lo = alo ^ imm; hi = ahi ^ (imm >> 31); break; /* xori */
 					case 5: {
-						if (((inst >>> 25) & 0x7f) & 0x20) /* srai */
-							v = BigInt.asUintN(64, BigInt.asIntN(64, a) >> shamt);
-						else
-							v = a >> shamt; /* srli */
+						var arithmetic = ((inst >>> 25) & 0x20) !== 0;
+						if (shamt === 0) { lo = alo; hi = ahi; }
+						else if (shamt < 32) {
+							lo = (alo >>> shamt) | (ahi << (32 - shamt));
+							hi = arithmetic ? ahi >> shamt : ahi >>> shamt;
+						} else {
+							lo = arithmetic ? ahi >> (shamt - 32) : ahi >>> (shamt - 32);
+							hi = arithmetic ? ahi >> 31 : 0;
+						}
 						break;
 					}
-					case 6: v = a | imm; break; /* ori */
-					case 7: v = a & imm; break; /* andi */
+					case 6: lo = alo | imm; hi = ahi | (imm >> 31); break; /* ori */
+					case 7: lo = alo & imm; hi = ahi & (imm >> 31); break; /* andi */
 					default: throw new IllegalInstruction(inst);
 				}
-				this.setX(rd, v);
+				this.setPair(rd, lo, hi);
 				break;
 			}
 			case 0x1b: { /* OP-IMM-32 */
-				const a32 = Number(this.getX(rs1) & 0xffffffffn) | 0;
-				const shamt = (inst >>> 20) & 0x1f;
-				let v32;
+				var a32 = this.xLo[rs1] | 0;
+				var shamt = (inst >>> 20) & 0x1f;
+				var v32;
 				switch (funct3) {
 					case 0: v32 = (a32 + (inst >> 20)) | 0; break; /* addiw */
 					case 1: v32 = a32 << shamt; break;                /* slliw */
@@ -495,53 +647,61 @@ class Cpu {
 					}
 					default: throw new IllegalInstruction(inst);
 				}
-				this.setX(rd, BigInt(v32));
+				this.setSigned32(rd, v32);
 				break;
 			}
 			case 0x33: { /* OP (incl. M extension when funct7=1) */
-				const a = this.getX(rs1), b = this.getX(rs2);
-				let v;
 				if (funct7 === 0x01) {
+					var alo = this.xLo[rs1], ahi = this.xHi[rs1];
+					var blo = this.xLo[rs2], bhi = this.xHi[rs2];
 					switch (funct3) {
-						case 0: v = a * b; break;                                             /* mul */
-						case 1: v = BigInt.asUintN(64, (BigInt.asIntN(64, a) * BigInt.asIntN(64, b)) >> 64n); break; /* mulh */
-						case 2: v = BigInt.asUintN(64, (BigInt.asIntN(64, a) * b) >> 64n); break; /* mulhsu */
-						case 3: v = BigInt.asUintN(64, (a * b) >> 64n); break;                        /* mulhu */
-						case 4: {
-							const as = BigInt.asIntN(64, a), bs = BigInt.asIntN(64, b);
-							v = bs === 0n ? MASK64 : (bs === -1n && as === -(1n << 63n) ? as & MASK64 : BigInt.asUintN(64, as / bs));
-							break;
-						}
-						case 5: v = b === 0n ? MASK64 : a / b; break;                                     /* divu */
-						case 6: {
-							const as = BigInt.asIntN(64, a), bs = BigInt.asIntN(64, b);
-							v = bs === 0n ? a : (bs === -1n && as === -(1n << 63n) ? 0n : BigInt.asUintN(64, as % bs));
-							break;
-						}
-						case 7: v = b === 0n ? a : a % b; break;                                            /* remu */
+						case 0: this.multiplyLow(alo, ahi, blo, bhi); break;
+						case 1: this.multiplyPair(alo, ahi, blo, bhi, true, true, true); break;
+						case 2: this.multiplyPair(alo, ahi, blo, bhi, true, false, true); break;
+						case 3: this.multiplyPair(alo, ahi, blo, bhi, false, false, true); break;
+						case 4: this.dividePair(alo, ahi, blo, bhi, true, false); break;
+						case 5: this.dividePair(alo, ahi, blo, bhi, false, false); break;
+						case 6: this.dividePair(alo, ahi, blo, bhi, true, true); break;
+						case 7: this.dividePair(alo, ahi, blo, bhi, false, true); break;
 						default: throw new IllegalInstruction(inst);
 					}
+					this.setPair(rd, this.valueLo, this.valueHi);
 				} else {
+					var alo = this.xLo[rs1], blo = this.xLo[rs2];
+					var ahi = this.xHi[rs1], bhi = this.xHi[rs2];
+					var shamt = blo & 63;
+					var lo = 0, hi = 0;
 					switch (funct3) {
-						case 0: v = funct7 & 0x20 ? a - b : a + b; break; /* sub/add */
-						case 1: v = a << (b & 0x3fn); break;             /* sll */
-						case 2: v = BigInt.asIntN(64, a) < BigInt.asIntN(64, b) ? 1n : 0n; break; /* slt */
-						case 3: v = a < b ? 1n : 0n; break;                                           /* sltu */
-						case 4: v = a ^ b; break;                                                       /* xor */
-						case 5: v = funct7 & 0x20 ? BigInt.asUintN(64, BigInt.asIntN(64, a) >> (b & 0x3fn)) : a >> (b & 0x3fn); break; /* sra/srl */
-						case 6: v = a | b; break;                                                          /* or */
-						case 7: v = a & b; break;                                                           /* and */
+						case 0:
+							if (funct7 & 0x20) { lo = (alo - blo) >>> 0; hi = (ahi - bhi - (alo < blo ? 1 : 0)) | 0; }
+							else { lo = (alo + blo) >>> 0; hi = (ahi + bhi + (lo < alo ? 1 : 0)) | 0; }
+							break;
+						case 1:
+							if (shamt === 0) { lo = alo; hi = ahi; }
+							else if (shamt < 32) { lo = alo << shamt; hi = (ahi << shamt) | (alo >>> (32 - shamt)); }
+							else { hi = alo << (shamt - 32); }
+							break;
+						case 2: lo = ahi < bhi || (ahi === bhi && alo < blo) ? 1 : 0; break;
+						case 3: lo = (ahi >>> 0) < (bhi >>> 0) || (ahi === bhi && alo < blo) ? 1 : 0; break;
+						case 4: lo = alo ^ blo; hi = ahi ^ bhi; break;
+						case 5:
+							if (shamt === 0) { lo = alo; hi = ahi; }
+							else if (shamt < 32) { lo = (alo >>> shamt) | (ahi << (32 - shamt)); hi = funct7 & 0x20 ? ahi >> shamt : ahi >>> shamt; }
+							else { lo = funct7 & 0x20 ? ahi >> (shamt - 32) : ahi >>> (shamt - 32); hi = funct7 & 0x20 ? ahi >> 31 : 0; }
+							break;
+						case 6: lo = alo | blo; hi = ahi | bhi; break;
+						case 7: lo = alo & blo; hi = ahi & bhi; break;
 						default: throw new IllegalInstruction(inst);
 					}
+					this.setPair(rd, lo, hi);
 				}
-				this.setX(rd, v);
 				break;
 			}
 			case 0x3b: { /* OP-32 (incl. M extension when funct7=1) */
-				const a32 = Number(this.getX(rs1) & 0xffffffffn) | 0;
-				const b32 = Number(this.getX(rs2) & 0xffffffffn) | 0;
-				const bshamt = b32 & 0x1f;
-				let v32;
+				var a32 = this.xLo[rs1] | 0;
+				var b32 = this.xLo[rs2] | 0;
+				var bshamt = b32 & 0x1f;
+				var v32;
 				if (funct7 === 0x01) {
 					switch (funct3) {
 						case 0: v32 = Math.imul(a32, b32); break; /* mulw */
@@ -559,35 +719,37 @@ class Cpu {
 						default: throw new IllegalInstruction(inst);
 					}
 				}
-				this.setX(rd, BigInt(v32));
+				this.setSigned32(rd, v32);
 				break;
 			}
 			case 0x0f: /* MISC-MEM: fence, fence.i -- no-op (single-hart, no cache model) */
 				break;
 			case 0x07: { /* LOAD-FP: flw/fld -- only these two appear in the histogram */
-				const addr = this.xNumber[rs1] + (inst >> 20);
+				var addr = this.xLo[rs1] + (inst >> 20);
 				try {
 					switch (funct3) {
 						case 2: /* flw -- raw 32-bit load, NaN-boxed into the 64-bit f-reg */
-							this.setFBits(rd, (0xffffffffn << 32n) | (this.load(addr, 4) & 0xffffffffn));
+							this.loadPair(addr, 4, false);
+							this.fLo[rd] = this.valueLo; this.fHi[rd] = -1;
 							break;
 						case 3: /* fld -- raw 64-bit load */
-							this.setFBits(rd, this.load(addr, 8));
+							this.loadPair(addr, 8, false);
+							this.fLo[rd] = this.valueLo; this.fHi[rd] = this.valueHi;
 							break;
 						default: throw new IllegalInstruction(inst);
 					}
-				} catch (e) { e.accessKind = 'r'; throw e; }
+				} catch (floatLoadError) { floatLoadError.accessKind = 'r'; throw floatLoadError; }
 				break;
 			}
 			case 0x27: { /* STORE-FP: fsw/fsd */
-				const addr = this.xNumber[rs1] + (((inst >> 25) << 5) | ((inst >>> 7) & 0x1f));
+				var addr = this.xLo[rs1] + (((inst >> 25) << 5) | ((inst >>> 7) & 0x1f));
 				try {
 					switch (funct3) {
-						case 2: this.store(addr, 4, this.getFBits(rs2) & 0xffffffffn); break; /* fsw */
-						case 3: this.store(addr, 8, this.getFBits(rs2)); break;                /* fsd */
+						case 2: this.storePair(addr, 4, this.fLo[rs2], this.fHi[rs2]); break; /* fsw */
+						case 3: this.storePair(addr, 8, this.fLo[rs2], this.fHi[rs2]); break; /* fsd */
 						default: throw new IllegalInstruction(inst);
 					}
-				} catch (e) { e.accessKind = 'w'; throw e; }
+				} catch (floatStoreError) { floatStoreError.accessKind = 'w'; throw floatStoreError; }
 				break;
 			}
 			case 0x53: { /* OP-FP: see the header comment for exactly which
@@ -612,11 +774,11 @@ class Cpu {
 						break;
 					case 0x68: /* FCVT.S.<int>: only rs2=0 (fcvt.s.w, signed 32-bit int) needed */
 						if (rs2 !== 0) throw new IllegalInstruction(inst);
-						this.setF32(rd, Math.fround(Number(BigInt.asIntN(32, this.getX(rs1) & 0xffffffffn))));
+						this.setF32(rd, Math.fround(this.xLo[rs1] | 0));
 						break;
 					case 0x71: /* FMV.X.D / FCLASS.D: only funct3=0 (fmv.x.d, raw bit move) needed */
 						if (rs2 !== 0 || funct3 !== 0) throw new IllegalInstruction(inst);
-						this.setX(rd, this.getFBits(rs1));
+						this.setPair(rd, this.fLo[rs1], this.fHi[rs1]);
 						break;
 					default:
 						throw new IllegalInstruction(inst);
@@ -632,28 +794,28 @@ class Cpu {
 		}
 
 		this.pc = nextPc;
-	}
+}
 
-	executeSystem(inst, rd, funct3, rs1, rs2, funct7, pc, nextPc) {
+Cpu.prototype.executeSystem = function(inst, rd, funct3, rs1, rs2, funct7, pc, nextPc) {
 		if (funct3 === 0) {
-			const imm12 = inst >>> 20;
+			var imm12 = inst >>> 20;
 			if (imm12 === 0x000) { /* ecall */
-				const cause = this.priv === 'U' ? 8n : 9n;
-				this.raiseTrap(cause, 0n, false);
+				var cause = this.priv === 0 ? 8 : 9;
+				this.raiseTrap(cause, 0, 0, false);
 				return this.pc; /* raiseTrap already set pc to stvec */
 			}
 			if (imm12 === 0x001) { /* ebreak */
-				this.raiseTrap(3n, BigInt(pc), false);
+				this.raiseTrap(3, pc, 0, false);
 				return this.pc;
 			}
 			if (imm12 === 0x102) { /* sret */
-				const sstatus = this.getCsr(CSR.SSTATUS);
-				this.priv = (sstatus & SSTATUS_SPP) ? 'S' : 'U';
-				let newStatus = (sstatus & SSTATUS_SPIE) ? (sstatus | SSTATUS_SIE) : (sstatus & ~SSTATUS_SIE);
+				var sstatus = this.sstatus;
+				this.priv = (sstatus & SSTATUS_SPP) ? 1 : 0;
+				var newStatus = (sstatus & SSTATUS_SPIE) ? (sstatus | SSTATUS_SIE) : (sstatus & ~SSTATUS_SIE);
 				newStatus |= SSTATUS_SPIE; /* SPIE set to 1 per spec */
 				newStatus &= ~SSTATUS_SPP; /* SPP reset to U (least privileged) */
-				this.setCsr(CSR.SSTATUS, newStatus);
-				return Number(this.getCsr(CSR.SEPC));
+				this.setCsrPair(CSR.SSTATUS, newStatus, 0);
+				return this.csrLo[CSR.SEPC];
 			}
 			if (imm12 === 0x105) { /* wfi */
 				this.halted = true;
@@ -667,26 +829,27 @@ class Cpu {
 		}
 
 		/* Zicsr: csrrw/csrrs/csrrc (funct3 1-3), csrrwi/csrrsi/csrrci (5-7) */
-		const csrAddr = (inst >>> 20) & 0xfff;
-		const old = this.getCsr(csrAddr);
-		const useImm = funct3 >= 5;
-		const src = useImm ? BigInt(rs1) : this.getX(rs1);
-		let updated;
+		var csrAddr = (inst >>> 20) & 0xfff;
+		this.getCsrPair(csrAddr);
+		var oldLo = this.valueLo, oldHi = this.valueHi;
+		var useImm = funct3 >= 5;
+		var srcLo = useImm ? rs1 : this.xLo[rs1];
+		var srcHi = useImm ? 0 : this.xHi[rs1];
+		var updatedLo, updatedHi;
 		switch (funct3 & 0x3) {
-			case 1: updated = src; break;                 /* csrrw(i) */
-			case 2: updated = old | src; break;             /* csrrs(i) */
-			case 3: updated = old & ~src; break;              /* csrrc(i) */
+			case 1: updatedLo = srcLo; updatedHi = srcHi; break;
+			case 2: updatedLo = oldLo | srcLo; updatedHi = oldHi | srcHi; break;
+			case 3: updatedLo = oldLo & ~srcLo; updatedHi = oldHi & ~srcHi; break;
 			default: throw new IllegalInstruction(inst);
 		}
 		/* rs1==0 (or zimm==0) for the read-modify-write forms means
 		 * "don't write" per spec -- doesn't apply to csrrw(i), which
 		 * always writes. */
-		const isWriteForm = (funct3 & 0x3) === 1;
+		var isWriteForm = (funct3 & 0x3) === 1;
 		if (isWriteForm || rs1 !== 0)
-			this.setCsr(csrAddr, updated);
-		this.setX(rd, old);
+			this.setCsrPair(csrAddr, updatedLo, updatedHi);
+		this.setPair(rd, oldLo, oldHi);
 		return nextPc;
-	}
-}
+};
 
-module.exports = { Cpu, IllegalInstruction, sext };
+module.exports = { Cpu: Cpu, IllegalInstruction: IllegalInstruction };

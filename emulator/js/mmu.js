@@ -1,75 +1,54 @@
 'use strict';
-/* Sv39 page table walker -- mirrors mm/riscv64_paging.c's own layout
- * exactly (3 levels, 9+9+9+12 bits, same PTE bit meanings), since
- * that's the only page table format kernel/ ever constructs. Not a
- * general Sv39 implementation beyond what that code needs (e.g. no
- * superpage leaf-at-level-1/2 support, since paging_map_page always
- * walks all the way to a level-0 leaf).
- */
+/* Sv39 walker specialized for ouroboot's below-4-GiB mappings.  satp is
+ * supplied as low/high 32-bit words; the resulting physical address is an
+ * exact JavaScript Number. */
 
-const PAGE_SIZE = 4096n;
-const PTE_V = 1n;
-const PTE_R = 1n << 1n;
-const PTE_W = 1n << 2n;
-const PTE_X = 1n << 3n;
-const PTE_U = 1n << 4n;
-const PPN_SHIFT = 10n;
+var PAGE_SIZE = 4096;
+var PTE_V = 1, PTE_R = 2, PTE_W = 4, PTE_X = 8, PTE_U = 16;
 
-const SATP_MODE_SHIFT = 60n;
-const SATP_MODE_SV39 = 8n;
-const SATP_PPN_MASK = (1n << 44n) - 1n;
+function PageFault(vaddr, access) {
+	this.name = 'PageFault';
+	this.message = 'page fault: ' + access + ' at ' +
+		(vaddr >>> 0).toString(16);
+	this.vaddr = vaddr >>> 0;
+	this.access = access;
+}
+PageFault.prototype = Object.create(Error.prototype);
+PageFault.prototype.constructor = PageFault;
 
-/* access: 'r' | 'w' | 'x'. Returns the physical address, or throws
- * PageFault. mode: current privilege ('S' or 'U'); sum: sstatus.SUM,
- * gating whether S-mode may touch U-only pages (see
- * arch/riscv64_trap.c's trap_init() comment for why the kernel needs
- * this set at all). */
-function translate(mem, satp, vaddr, access, mode, sum) {
-	const satpMode = satp >> SATP_MODE_SHIFT;
-	if (satpMode === 0n)
-		return vaddr; /* Bare mode: no translation */
-	if (satpMode !== SATP_MODE_SV39)
-		throw new Error(`unsupported satp MODE ${satpMode} (only Bare and Sv39 implemented)`);
+function translate(mem, satpLo, satpHi, vaddr, access, priv, sum) {
+	var mode = satpHi >>> 28;
+	var tableAddr, level, shift, idx, pteAddr, pteLo, leaf;
+	if (mode === 0) return vaddr >>> 0;
+	if (mode !== 8) throw new Error('unsupported satp mode ' + mode);
 
-	let tableAddr = (satp & SATP_PPN_MASK) << 12n;
-	let pte = 0n;
-	for (let level = 2; level >= 0; level--) {
-		const shift = 12n + 9n * BigInt(level);
-		const idx = (vaddr >> shift) & 0x1ffn;
-		const pteAddr = tableAddr + idx * 8n;
-		pte = mem.read(pteAddr, 8);
-		if (!(pte & PTE_V))
-			throw new PageFault(vaddr, access);
-		const isLeaf = (pte & (PTE_R | PTE_W | PTE_X)) !== 0n;
-		if (!isLeaf) {
-			tableAddr = ((pte >> PPN_SHIFT) << 12n);
+	/* All page tables allocated by this kernel are below 4 GiB, so the
+	 * physical page number needed here is wholly in satpLo. */
+	tableAddr = (satpLo * 4096) >>> 0;
+	for (level = 2; level >= 0; level--) {
+		shift = 12 + 9 * level;
+		idx = Math.floor(vaddr / Math.pow(2, shift)) & 0x1ff;
+		pteAddr = tableAddr + idx * 8;
+		mem.readPair(pteAddr, 8);
+		pteLo = mem.valueLo;
+		if (!(pteLo & PTE_V)) throw new PageFault(vaddr, access);
+		leaf = (pteLo & (PTE_R | PTE_W | PTE_X)) !== 0;
+		if (!leaf) {
+			tableAddr = ((pteLo >>> 10) * 4096) >>> 0;
 			continue;
 		}
-		/* leaf -- permission check */
-		if (access === 'r' && !(pte & PTE_R)) throw new PageFault(vaddr, access);
-		if (access === 'w' && !(pte & PTE_W)) throw new PageFault(vaddr, access);
-		if (access === 'x' && !(pte & PTE_X)) throw new PageFault(vaddr, access);
-		if (pte & PTE_U) {
-			if (mode === 'U') {
-				/* fine */
-			} else if (mode === 'S' && !sum) {
-				throw new PageFault(vaddr, access);
-			}
-		} else if (mode === 'U') {
-			throw new PageFault(vaddr, access); /* U-mode touching a non-U page */
+		if (access === 'r' && !(pteLo & PTE_R)) throw new PageFault(vaddr, access);
+		if (access === 'w' && !(pteLo & PTE_W)) throw new PageFault(vaddr, access);
+		if (access === 'x' && !(pteLo & PTE_X)) throw new PageFault(vaddr, access);
+		if (pteLo & PTE_U) {
+			if (priv !== 0 && !sum) throw new PageFault(vaddr, access);
+		} else if (priv === 0) {
+			throw new PageFault(vaddr, access);
 		}
-		const ppn = pte >> PPN_SHIFT;
-		return (ppn << 12n) | (vaddr & 0xfffn);
+		return (((pteLo >>> 10) * 4096) + (vaddr & 0xfff)) >>> 0;
 	}
-	throw new PageFault(vaddr, access); /* walked to level -1 without a leaf */
+	throw new PageFault(vaddr, access);
 }
 
-class PageFault extends Error {
-	constructor(vaddr, access) {
-		super(`page fault: ${access} at ${vaddr.toString(16)}`);
-		this.vaddr = vaddr;
-		this.access = access;
-	}
-}
-
-module.exports = { translate, PageFault, PAGE_SIZE };
+module.exports = { translate: translate, PageFault: PageFault,
+	PAGE_SIZE: PAGE_SIZE };

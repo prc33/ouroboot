@@ -12,21 +12,20 @@
  * ready, since there's no real transmit latency to model.
  */
 
-const REG_THR = 0; /* write: transmit holding register (also RBR/DLL on read/DLAB) */
-const REG_IER = 1;
-const REG_FCR = 2; /* also IIR on read */
-const REG_LCR = 3;
-const REG_MCR = 4;
-const REG_LSR = 5;
+var REG_THR = 0; /* write: transmit holding register (also RBR/DLL on read/DLAB) */
+var REG_IER = 1;
+var REG_FCR = 2; /* also IIR on read */
+var REG_LCR = 3;
+var REG_MCR = 4;
+var REG_LSR = 5;
 
-const LSR_THRE = 0x20; /* transmit holding register empty */
-const LSR_DR = 0x01;   /* data ready (RX) */
+var LSR_THRE = 0x20; /* transmit holding register empty */
+var LSR_DR = 0x01;   /* data ready (RX) */
 
-class Uart16550 {
-	constructor(onByte) {
-		this.onByte = onByte || (() => {}); /* called with each transmitted byte */
+function Uart16550(onByte) {
+		this.onByte = onByte || function() {}; /* called with each transmitted byte */
 		this.rxQueue = [];
-	}
+}
 
 	/* Feed input bytes in (e.g. from a browser terminal, or stdin in
 	 * Node) -- exercised since checkpoint 10 by kernel/Makefile's own
@@ -35,13 +34,13 @@ class Uart16550 {
 	 * (app.js's term.onData -> worker.js -> here), now that
 	 * kernel/arch/riscv64_syscall.c's sys_read has a real reader on
 	 * the other end. */
-	pushInput(byte) {
+Uart16550.prototype.pushInput = function(byte) {
 		this.rxQueue.push(byte & 0xff);
-	}
+};
 
-	read(offset, size) {
+Uart16550.prototype.read = function(offset, size) {
 		if (size !== 1)
-			throw new Error(`UART: unexpected ${size}-byte read at offset ${offset}`);
+			throw new Error('UART: unexpected ' + size + '-byte read at offset ' + offset);
 		switch (offset) {
 			case REG_THR: /* RBR when DLAB=0 */
 				return this.rxQueue.length ? this.rxQueue.shift() : 0;
@@ -50,17 +49,16 @@ class Uart16550 {
 			default:
 				return 0;
 		}
-	}
+};
 
-	write(offset, size, value) {
+Uart16550.prototype.write = function(offset, size, value) {
 		if (size !== 1)
-			throw new Error(`UART: unexpected ${size}-byte write at offset ${offset}`);
+			throw new Error('UART: unexpected ' + size + '-byte write at offset ' + offset);
 		if (offset === REG_THR)
 			this.onByte(value & 0xff);
 		/* IER/FCR/LCR/MCR: accepted, not modeled -- serial_init()'s
 		 * baud-rate/framing setup has no observable effect here since
 		 * there's no real wire to configure. */
-	}
-}
+	};
 
-module.exports = { Uart16550, UART_BASE: 0x10000000n };
+module.exports = { Uart16550: Uart16550, UART_BASE: 0x10000000 };

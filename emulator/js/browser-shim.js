@@ -35,11 +35,11 @@ self.__cjsModules = {};
  * top-level await and these files must load in a strict dependency
  * order before anything can use them. */
 function fetchTextSync(url) {
-	const xhr = new XMLHttpRequest();
+	var xhr = new XMLHttpRequest();
 	xhr.open('GET', url, false);
 	xhr.send(null);
 	if (xhr.status !== 200)
-		throw new Error(`loading ${url}: HTTP ${xhr.status}`);
+		throw new Error('loading ' + url + ': HTTP ' + xhr.status);
 	return xhr.responseText;
 }
 
@@ -53,16 +53,16 @@ self.loadCjsModule = function (name) {
 	if (self.__cjsModules[name])
 		return self.__cjsModules[name];
 
-	const source = fetchTextSync(name + '.js');
-	const module = { exports: {} };
-	const localRequire = function (path) {
-		const dep = path.replace(/^\.\//, '').replace(/\.js$/, '');
+	var source = fetchTextSync(name + '.js');
+	var module = { exports: {} };
+	var localRequire = function (path) {
+		var dep = path.replace(/^\.\//, '').replace(/\.js$/, '');
 		return self.loadCjsModule(dep);
 	};
 	/* `new Function` instead of eval: same isolation property
 	 * (its own scope, no access to this function's locals beyond
 	 * what's explicitly passed as parameters), clearer intent. */
-	const fn = new Function('module', 'exports', 'require', source);
+	var fn = new Function('module', 'exports', 'require', source);
 	fn(module, module.exports, localRequire);
 
 	self.__cjsModules[name] = module.exports;

@@ -19,21 +19,24 @@
 
 importScripts('browser-shim.js');
 
-const { Memory } = loadCjsModule('memory');
-const { Uart16550, UART_BASE } = loadCjsModule('uart');
-const { Cpu } = loadCjsModule('cpu');
-const { loadElf } = loadCjsModule('elf');
+var memoryDefs = loadCjsModule('memory');
+var Memory = memoryDefs.Memory;
+var uartDefs = loadCjsModule('uart');
+var Uart16550 = uartDefs.Uart16550;
+var UART_BASE = uartDefs.UART_BASE;
+var Cpu = loadCjsModule('cpu').Cpu;
+var loadElf = loadCjsModule('elf').loadElf;
 
-let cpu = null;
-let uart = null;
-let running = false;
+var cpu = null;
+var uart = null;
+var running = false;
 
 /* Batches output bytes and flushes on a timer rather than one
  * postMessage per byte -- printing a whole kernel boot banner
  * character-by-character across worker->main messages would be
  * needless overhead for no benefit (xterm.js is equally happy with a
  * batch). */
-let outBuf = [];
+var outBuf = [];
 function flushOutput() {
 	if (outBuf.length) {
 		postMessage({ type: 'output', bytes: outBuf });
@@ -48,13 +51,13 @@ function runChunk() {
 	 * so the worker's own event loop gets a chance to process incoming
 	 * postMessages (e.g. a future stop/reset command) between chunks --
 	 * same reasoning as any cooperative-yielding loop. */
-	const CHUNK = 200000;
+	var CHUNK = 200000;
 	try {
 		cpu.run(CHUNK, 100); /* time-advance=100, matches test-js's tuning -- see kernel/Makefile */
-	} catch (e) {
+	} catch (runError) {
 		running = false;
 		flushOutput();
-		postMessage({ type: 'error', message: e.message + '\n' + (e.stack || '') });
+		postMessage({ type: 'error', message: runError.message + '\n' + (runError.stack || '') });
 		return;
 	}
 	flushOutput();
@@ -62,15 +65,17 @@ function runChunk() {
 }
 
 onmessage = function (ev) {
-	const msg = ev.data;
+	var msg = ev.data;
 	if (msg.type === 'boot') {
-		const mem = new Memory();
-		uart = new Uart16550((byte) => outBuf.push(byte));
-		mem.addDevice(UART_BASE, 8n, uart);
+		var mem = new Memory(), elf, i, seg;
+		uart = new Uart16550(function(byte) { outBuf.push(byte); });
+		mem.addDevice(UART_BASE, 8, uart);
 
-		const elf = loadElf(new Uint8Array(msg.elfBytes));
-		for (const seg of elf.segments)
+		elf = loadElf(new Uint8Array(msg.elfBytes));
+		for (i = 0; i < elf.segments.length; i++) {
+			seg = elf.segments[i];
 			mem.loadBytes(seg.vaddr, seg.data);
+		}
 
 		cpu = new Cpu(mem);
 		cpu.pc = Number(elf.entry);

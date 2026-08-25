@@ -7,9 +7,25 @@ bringing each phase up: `../docs/emulator-p1-findings.md` (headless
 Node, the core CPU/MMU/UART) and `../docs/emulator-p3-findings.md`
 (the browser/`xterm.js`/Worker wrapper).
 
-`js/` is a from-scratch RV64IM + Zicsr + privileged-subset interpreter
-in plain JavaScript (jor1k -- https://github.com/s-macke/jor1k/wiki/Technical-details
--- as reference for technique, not a fork base or dependency).
+`js/` is a from-scratch RV64IM + the required F/D, Zicsr, and
+privileged-subset interpreter in plain JavaScript (jor1k --
+https://github.com/s-macke/jor1k/wiki/Technical-details -- as reference
+for technique, not a fork base or dependency). RV64 registers, CSRs,
+floating-point bits, and PTEs use paired 32-bit typed arrays; the hot
+path contains no `BigInt`, `DataView`, classes, arrow functions, or
+other syntax outside MQuickJS's strict subset. Every `js/*.js` file is
+accepted by the official MQuickJS compiler.
+
+The performance regression target is the real scripted BusyBox shell,
+not a synthetic instruction loop:
+```
+cd ../kernel && make ARCH=riscv64 shell-js
+```
+On the development Node/V8 host, the paired-word core executes the
+100.78-million-instruction shell scenario in about 6.4 seconds and the
+225.11-million-instruction full checkpoint suite in about 15 seconds.
+The exact rate is host-dependent; `shell-js` enforces a conservative
+30-second ceiling.
 
 **Headless (Node), matching `kernel/test/boot_test.py`'s own checkpoints:**
 ```
@@ -50,10 +66,6 @@ way.
 
 `docs/emulator-ecosystem-blueprint.md` is the raw external input that
 prompted `docs/emulator-plan.md`, kept for reference.
-
-Next up: P4 (F/D instruction support, needed for real userspace
-binaries like the self-hosted compiler, beyond what the kernel itself
-uses).
 
 `../docs/self-hosting-system-plan.md`'s original emulator design
 (P1/P2 phases: CPU core, then differential testing against QEMU

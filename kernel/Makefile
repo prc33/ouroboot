@@ -297,13 +297,13 @@ kernel-shell.elf: $(SHELL_OBJS)
 # runs and produces "hello ash" + a real ls listing + a clean
 # process-table drain, not just a prompt appearing -- reaching
 # "built-in shell (ash)" alone doesn't prove typed input is ever read)
-# and speed (--max-seconds 45, generous over an uncontended ~18s for
+# and speed (--max-seconds 30, generous over the paired-word core's
 # this smaller ~100M-instruction direct-shell path -- see test-js's
 # own comment on the flag and the budget-sizing rationale).
 shell-js: kernel-shell.elf
 	node ../emulator/js/boot.js kernel-shell.elf \
 		--max-instructions 200000000 \
-		--max-seconds 45 \
+		--max-seconds 30 \
 		--time-advance 100 \
 		--input "$(RISCV64_INTERACTIVE_INPUT)" \
 		--must-contain "built-in shell (ash)" \

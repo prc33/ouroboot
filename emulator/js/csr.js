@@ -5,7 +5,7 @@
  * privileged spec's CSR list -- see docs/emulator-plan.md's E4: no
  * M-mode CSRs at all, since the kernel never touches any). */
 
-const CSR = {
+var CSR = {
 	SSTATUS: 0x100,
 	SIE: 0x104,
 	STVEC: 0x105,
@@ -19,12 +19,14 @@ const CSR = {
 	STIMECMP: 0x14d, /* Sstc */
 };
 
-const SSTATUS_SIE  = 1n << 1n;
-const SSTATUS_SPIE = 1n << 5n;
-const SSTATUS_SPP  = 1n << 8n;
-const SSTATUS_SUM  = 1n << 18n;
+var SSTATUS_SIE  = 1 << 1;
+var SSTATUS_SPIE = 1 << 5;
+var SSTATUS_SPP  = 1 << 8;
+var SSTATUS_SUM  = 1 << 18;
 
-const SIE_STIE = 1n << 5n; /* supervisor timer interrupt enable */
-const SIP_STIP = 1n << 5n; /* supervisor timer interrupt pending */
+var SIE_STIE = 1 << 5; /* supervisor timer interrupt enable */
+var SIP_STIP = 1 << 5; /* supervisor timer interrupt pending */
 
-module.exports = { CSR, SSTATUS_SIE, SSTATUS_SPIE, SSTATUS_SPP, SSTATUS_SUM, SIE_STIE, SIP_STIP };
+module.exports = { CSR: CSR, SSTATUS_SIE: SSTATUS_SIE,
+	SSTATUS_SPIE: SSTATUS_SPIE, SSTATUS_SPP: SSTATUS_SPP,
+	SSTATUS_SUM: SSTATUS_SUM, SIE_STIE: SIE_STIE, SIP_STIP: SIP_STIP };
