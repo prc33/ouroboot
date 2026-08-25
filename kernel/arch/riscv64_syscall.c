@@ -62,6 +62,10 @@
 #define SYS_getegid                                                                                 177
 #define SYS_getpid                                                                           172
 #define SYS_getdents64                                                                          61
+#define SYS_lseek                                                                                   62
+#define SYS_unlinkat                                                                                   35
+#define SYS_dup3                                                                                           24
+#define SYS_faccessat                                                                                          48
 
 #define F_DUPFD 0
 #define F_GETFD 1
@@ -71,6 +75,18 @@
 #define F_DUPFD_CLOEXEC 1030
 
 #define AT_FDCWD (-100)
+
+/* checkpoint 12: real values from musl's own headers, same "confirm
+ * against the real ABI, don't guess" methodology as every syscall
+ * number in this file -- octal in musl's own fcntl.h, not decimal. */
+#define O_WRONLY 01
+#define O_RDWR   02
+#define O_CREAT  0100
+#define O_TRUNC  01000
+
+#define SEEK_SET 0
+#define SEEK_CUR 1
+#define SEEK_END 2
 
 #define MAP_FIXED  0x10
 #define MAP_ANON   0x20
@@ -103,14 +119,56 @@ static void sys_write_impl(unsigned long fd, const char *buf, unsigned long coun
 	}
 }
 
+/* checkpoint 12: shared by sys_write's fd 0/1/2 (only when
+ * redirected -- see process.h's own stdio_override comment) and
+ * fd>=3 paths -- both end up writing through the same kind of
+ * dynamic-file fd_entry, so this is the one real place that does it.
+ * Returns 0 on success, -EBADF (a fixed, read-only file -- no
+ * O_WRONLY path ever hands one of these back with a real dynfile) or
+ * -ENOMEM (pmm_alloc_contiguous() couldn't grow it -- real
+ * fragmentation/OOM, not a bug) as a *negative errno*, not a plain
+ * -1, so callers can just store it straight into r->a0. */
+static long write_to_dynfile(struct fd_entry *entry, const char *buf, unsigned long count) {
+	if (!entry->dynfile)
+		return -EBADF;
+	if (ramfs_dynamic_write(entry->dynfile, entry->pos, (const unsigned char *)buf, count) < 0)
+		return -ENOMEM;
+	entry->pos += count;
+	return 0;
+}
+
 static void sys_write(struct regs *r) {
 	unsigned long fd = r->a0;
-	if (fd != 1 && fd != 2) {
+	unsigned long count = r->a2;
+
+	if (fd <= 2) {
+		struct fd_entry *ov = process_stdio_get((int)fd);
+		if (ov) {
+			/* real shell redirection (`echo x > file`) -- ash dup3()'d
+			 * a real writable file onto this fd (see sys_dup3's own
+			 * comment); write through it exactly like any fd>=3 write. */
+			long ret = write_to_dynfile(ov, (const char *)r->a1, count);
+			r->a0 = ret < 0 ? (unsigned long)ret : count;
+			return;
+		}
+		if (fd == 0) {
+			r->a0 = (unsigned long)-EBADF; /* stdin, not redirected -- not writable */
+			return;
+		}
+		sys_write_impl(fd, (const char *)r->a1, count);
+		r->a0 = count;
+		return;
+	}
+
+	/* checkpoint 12: real file writes -- the actual point of a
+	 * writable ramfs. */
+	struct fd_entry *entry = process_fd_get((int)fd - 3);
+	if (!entry) {
 		r->a0 = (unsigned long)-EBADF;
 		return;
 	}
-	sys_write_impl(fd, (const char *)r->a1, r->a2);
-	r->a0 = r->a2;
+	long ret = write_to_dynfile(entry, (const char *)r->a1, count);
+	r->a0 = ret < 0 ? (unsigned long)ret : count;
 }
 
 /* struct iovec { void *iov_base; size_t iov_len; } -- 16 bytes on riscv64 */
@@ -358,10 +416,12 @@ static int copy_path_from_user(char *dst, const char *user_src) {
 static void sys_openat(struct regs *r) {
 	/* a0=dirfd, a1=path, a2=flags, a3=mode -- dirfd is ignored (only
 	 * AT_FDCWD/absolute paths make sense with no real cwd concept
-	 * yet), flags/mode too (this ramfs is read-only, nothing to
-	 * create or truncate). */
+	 * yet); mode too (mm/ramfs.c's dynamic files are always 0644-ish
+	 * in spirit, real permission bits aren't modeled). flags *are*
+	 * honored now -- checkpoint 12, see below. */
 	char path[PATH_MAX_LOCAL];
 	copy_path_from_user(path, (const char *)r->a1);
+	unsigned long flags = r->a2;
 
 	/* checkpoint 11: opendir(".") -- musl's own opendir() (src/dirent/
 	 * opendir.c) is just open(name, O_DIRECTORY|...), so this is the
@@ -383,6 +443,60 @@ static void sys_openat(struct regs *r) {
 		fd->size = 0;
 		fd->pos = 0; /* which root-directory entry sys_getdents64 hands out next */
 		fd->is_dir = 1;
+		fd->dynfile = 0;
+		r->a0 = (unsigned long)(idx + 3);
+		return;
+	}
+
+	/* checkpoint 12: O_CREAT -- a real writable file, dynamically
+	 * created (or, with O_TRUNC, freshly emptied) in mm/ramfs.c rather
+	 * than looked up in the fixed table. Checked *before* the fixed-
+	 * table lookup below: a caller passing O_CREAT is asking for a
+	 * file it can write, not whatever fixed (read-only) entry happens
+	 * to share its name -- e.g. tcc_write_elf_file's own real
+	 * unlink()-then-open(O_CREAT|O_TRUNC|O_WRONLY) pattern (compiler/
+	 * tccelf.c) needs a genuinely fresh, writable file every time,
+	 * not a silent reopen of something else. */
+	if (flags & O_CREAT) {
+		struct ramfs_dynamic_file *dyn = ramfs_dynamic_open_or_create(path);
+		if (!dyn) {
+			r->a0 = (unsigned long)-ENOMEM; /* every dynamic-file slot in use */
+			return;
+		}
+		if (flags & O_TRUNC)
+			ramfs_dynamic_truncate(dyn);
+		int idx = process_fd_alloc();
+		if (idx < 0) {
+			r->a0 = (unsigned long)-ENOMEM;
+			return;
+		}
+		struct fd_entry *fd = process_fd_get(idx);
+		fd->data = 0;
+		fd->size = 0;
+		fd->pos = 0;
+		fd->is_dir = 0;
+		fd->dynfile = dyn;
+		r->a0 = (unsigned long)(idx + 3);
+		return;
+	}
+
+	/* No O_CREAT: must already exist. Dynamic files take priority over
+	 * the fixed table -- once something has been written, later opens
+	 * (for reading or writing) should see that fresh content, not
+	 * silently fall back to a same-named fixed entry. */
+	struct ramfs_dynamic_file *dyn = ramfs_dynamic_lookup(path);
+	if (dyn) {
+		int idx = process_fd_alloc();
+		if (idx < 0) {
+			r->a0 = (unsigned long)-ENOMEM;
+			return;
+		}
+		struct fd_entry *fd = process_fd_get(idx);
+		fd->data = 0;
+		fd->size = 0;
+		fd->pos = 0;
+		fd->is_dir = 0;
+		fd->dynfile = dyn;
 		r->a0 = (unsigned long)(idx + 3);
 		return;
 	}
@@ -402,13 +516,21 @@ static void sys_openat(struct regs *r) {
 	fd->size = file->size;
 	fd->pos = 0;
 	fd->is_dir = 0;
+	fd->dynfile = 0;
 	r->a0 = (unsigned long)(idx + 3);
 }
 
 static void sys_close(struct regs *r) {
 	unsigned long fd = r->a0;
 	if (fd == 0 || fd == 1 || fd == 2) {
-		r->a0 = 0; /* no-op close of the console -- honest enough, nothing to release */
+		/* checkpoint 12: if this fd is currently redirected (real
+		 * shell I/O redirection -- process.h's own stdio_override
+		 * comment), closing it reverts to the plain console; a no-op
+		 * otherwise, same as before -- either way "honest enough,
+		 * nothing real to release" (this kernel's fd 0/1/2 are always
+		 * valid, there's no genuine closed state to model). */
+		process_stdio_clear((int)fd);
+		r->a0 = 0;
 		return;
 	}
 	if (fd < 3 || !process_fd_get((int)fd - 3)) {
@@ -428,6 +550,24 @@ static void sys_close(struct regs *r) {
  * honest, documented gap, not a bug: whatever's on the other end of
  * the UART is responsible for its own local echo for now). fd>=3
  * reads from mm/ramfs.h via this process's own fd table instead. */
+/* checkpoint 12: shared by sys_read's redirected-fd-0 and fd>=3
+ * paths -- both read from the same kind of fd_entry (a dynamic file's
+ * real content lives in its own struct ramfs_dynamic_file, not
+ * entry->data/size, which sys_openat leaves at 0/0 for these; a fixed
+ * file's lives in entry->data/size directly). Returns the number of
+ * bytes actually copied. */
+static unsigned long read_from_fd_entry(struct fd_entry *entry, unsigned char *buf, unsigned long count) {
+	const unsigned char *src = entry->dynfile ? entry->dynfile->data : entry->data;
+	unsigned long src_size = entry->dynfile ? entry->dynfile->size : entry->size;
+	unsigned long remaining = src_size - entry->pos;
+	unsigned long n = count < remaining ? count : remaining;
+	paging_ensure_writable((unsigned long)buf, n);
+	for (unsigned long i = 0; i < n; i++)
+		buf[i] = src[entry->pos + i];
+	entry->pos += n;
+	return n;
+}
+
 static void sys_read(struct regs *r) {
 	unsigned long fd = r->a0;
 	unsigned char *buf = (unsigned char *)r->a1;
@@ -436,6 +576,14 @@ static void sys_read(struct regs *r) {
 	if (fd == 0) {
 		if (count == 0) {
 			r->a0 = 0;
+			return;
+		}
+		/* real shell input redirection (`command < file`) -- ash
+		 * dup3()'d a real file onto fd 0 (see sys_dup3's own comment);
+		 * read through it instead of ever touching the UART. */
+		struct fd_entry *ov = process_stdio_get(0);
+		if (ov) {
+			r->a0 = read_from_fd_entry(ov, buf, count);
 			return;
 		}
 		while (!serial_rx_ready())
@@ -488,18 +636,124 @@ static void sys_read(struct regs *r) {
 		return;
 	}
 
+	struct fd_entry *entry = process_fd_get((int)fd - 3);
+	if (!entry) {
+		r->a0 = (unsigned long)-EBADF;
+		return;
+	}
+	r->a0 = read_from_fd_entry(entry, buf, count);
+}
+
+/* checkpoint 12: real seeking -- needed for real file writes, not
+ * just reads: compiler/tccelf.c's own ELF writer lays out sections at
+ * their real file offsets via repeated lseek()+write() pairs, not
+ * strictly-increasing sequential writes (confirmed by reading it, not
+ * assumed -- see mm/ramfs.c's own ramfs_dynamic_write() comment on the
+ * sparse-file "hole" this implies). Works the same for a read-only
+ * fixed-table fd too (entry->dynfile is 0 there, entry->size is
+ * already correct), no separate case needed. */
+static void sys_lseek(struct regs *r) {
+	unsigned long fd = r->a0;
+	long offset = (long)r->a1;
+	unsigned long whence = r->a2;
+
 	struct fd_entry *entry = fd >= 3 ? process_fd_get((int)fd - 3) : 0;
 	if (!entry) {
 		r->a0 = (unsigned long)-EBADF;
 		return;
 	}
-	unsigned long remaining = entry->size - entry->pos;
-	unsigned long n = count < remaining ? count : remaining;
-	paging_ensure_writable((unsigned long)buf, n);
-	for (unsigned long i = 0; i < n; i++)
-		buf[i] = entry->data[entry->pos + i];
-	entry->pos += n;
-	r->a0 = n;
+	unsigned long size = entry->dynfile ? entry->dynfile->size : entry->size;
+	long new_pos;
+	switch (whence) {
+		case SEEK_SET: new_pos = offset; break;
+		case SEEK_CUR: new_pos = (long)entry->pos + offset; break;
+		case SEEK_END: new_pos = (long)size + offset; break;
+		default: r->a0 = (unsigned long)-EINVAL; return;
+	}
+	if (new_pos < 0) {
+		r->a0 = (unsigned long)-EINVAL;
+		return;
+	}
+	entry->pos = (unsigned long)new_pos;
+	r->a0 = entry->pos;
+}
+
+/* checkpoint 12: real unlink -- riscv64 has no plain SYS_unlink, only
+ * SYS_unlinkat (musl's own src/unistd/unlink.c: unlink(path) is just
+ * unlinkat(AT_FDCWD, path, 0) when SYS_unlink isn't defined for this
+ * arch, confirmed by reading it). a0=dirfd, a1=path, a2=flags --
+ * dirfd/flags ignored, same "no real cwd" reasoning as sys_openat.
+ * Best-effort by design (see mm/ramfs.h's own comment on
+ * ramfs_dynamic_unlink()): a no-op, not an error, if no dynamic file
+ * by that name exists -- exactly what compiler/tccelf.c's own
+ * unlink()-before-create pattern needs (it never checks the return
+ * value either way). */
+static void sys_unlinkat(struct regs *r) {
+	char path[PATH_MAX_LOCAL];
+	copy_path_from_user(path, (const char *)r->a1);
+	ramfs_dynamic_unlink(path);
+	r->a0 = 0;
+}
+
+/* checkpoint 12: found running real `rm` (busybox coreutils, checking
+ * a target actually exists before removing it) -- a0=dirfd, a1=path,
+ * a2=mode, a3=flags, all ignored (same "no real cwd/permissions
+ * model" reasoning as sys_openat/sys_newfstatat: this ramfs doesn't
+ * model real permission bits, so the only thing access() can honestly
+ * answer here is "does this path exist at all", which is what every
+ * caller in this codebase actually needs it for). Dynamic files take
+ * priority over the fixed table, same reasoning as everywhere else. */
+static void sys_faccessat(struct regs *r) {
+	char path[PATH_MAX_LOCAL];
+	copy_path_from_user(path, (const char *)r->a1);
+	if ((path[0] == '.' && path[1] == 0) || (path[0] == '/' && path[1] == 0)) {
+		r->a0 = 0;
+		return;
+	}
+	if (ramfs_dynamic_lookup(path) || ramfs_lookup(path)) {
+		r->a0 = 0;
+		return;
+	}
+	r->a0 = (unsigned long)-ENOENT;
+}
+
+/* checkpoint 12: real shell I/O redirection (`echo x > file`) --
+ * ash forks, opens the target file (a real fd >= 3), dup3()s it onto
+ * fd 1, closes the original, *then* runs the actual command, which
+ * just writes to fd 1 as always. Confirmed via musl's own
+ * src/unistd/dup2.c: dup2(old,new) is exactly dup3(old,new,0)
+ * whenever old != new on an arch with no legacy SYS_dup2, which
+ * riscv64 is. See process.h's own stdio_override comment for the
+ * real simplification this makes (copies fd state into the target
+ * slot rather than making the two fds genuinely share one open-file
+ * position -- correct for this dominant open-dup-close pattern). */
+static void sys_dup3(struct regs *r) {
+	unsigned long oldfd = r->a0;
+	unsigned long newfd = r->a1;
+	/* r->a2 (flags, O_CLOEXEC) ignored -- no real fd-flags model */
+
+	if (oldfd == newfd) {
+		r->a0 = (unsigned long)-EINVAL; /* real dup3's own rule; dup2 never reaches here when old==new (see musl's own dup2.c) */
+		return;
+	}
+
+	struct fd_entry *src = oldfd <= 2 ? process_stdio_get((int)oldfd) : process_fd_get((int)oldfd - 3);
+	if (!src) {
+		r->a0 = (unsigned long)-EBADF; /* oldfd is the plain (non-redirected) console, or genuinely invalid -- nothing to duplicate */
+		return;
+	}
+
+	if (newfd <= 2) {
+		process_stdio_set((int)newfd, src);
+	} else {
+		int idx = (int)newfd - 3;
+		if (idx >= MAX_FDS) {
+			r->a0 = (unsigned long)-EBADF;
+			return;
+		}
+		process_fd_set(idx, src);
+	}
+	r->a0 = newfd;
 }
 
 /* checkpoint 11: real ls -- musl's readdir() (src/dirent/readdir.c) is
@@ -551,20 +805,29 @@ static void sys_getdents64(struct regs *r) {
 	}
 
 	/* fd->pos indexes a virtual entry list: ".", "..", then
-	 * mm/ramfs.c's own root directory (ramfs_root_entry_*()) --
-	 * synthesized here rather than stored anywhere, since there both
-	 * are exactly two fixed extra entries every real directory has. */
-	unsigned int total = 2 + ramfs_root_entry_count();
+	 * mm/ramfs.c's own fixed root directory (ramfs_root_entry_*()),
+	 * then (checkpoint 12) every dynamic (writable, created-at-
+	 * runtime) file -- so something `tcc -o out.elf ...` just wrote
+	 * actually shows up in `ls`, not just fixed/embedded content.
+	 * Synthesized here rather than stored anywhere, since there are
+	 * always exactly two fixed extra entries every real directory
+	 * has. */
+	unsigned int num_fixed = ramfs_root_entry_count();
+	unsigned int total = 2 + num_fixed + ramfs_dynamic_entry_count();
 	unsigned long written = 0;
 	while (fd->pos < total) {
 		const char *name;
 		unsigned char d_type;
 		if (fd->pos == 0) { name = "."; d_type = DT_DIR; }
 		else if (fd->pos == 1) { name = ".."; d_type = DT_DIR; }
-		else {
+		else if (fd->pos - 2 < num_fixed) {
 			unsigned int i = (unsigned int)(fd->pos - 2);
 			name = ramfs_root_entry_name(i);
 			d_type = ramfs_root_entry_is_symlink(i) ? DT_LNK : DT_REG;
+		} else {
+			unsigned int i = (unsigned int)(fd->pos - 2 - num_fixed);
+			name = ramfs_dynamic_entry_name(i);
+			d_type = DT_REG;
 		}
 
 		unsigned int namelen = 0;
@@ -663,6 +926,17 @@ static void sys_newfstatat(struct regs *r) {
 	 * there's only ever the one directory. */
 	if ((path[0] == '.' && path[1] == 0) || (path[0] == '/' && path[1] == 0)) {
 		fill_stat(sb, S_IFDIR | 0755, 0);
+		r->a0 = 0;
+		return;
+	}
+
+	/* checkpoint 12: dynamic files take priority over the fixed table,
+	 * same reasoning as sys_openat's own lookup order -- a freshly
+	 * written file should stat() as itself, not (if it happens to
+	 * share a name) whatever fixed entry existed first. */
+	struct ramfs_dynamic_file *dyn = ramfs_dynamic_lookup(path);
+	if (dyn) {
+		fill_stat(sb, S_IFREG | 0755, dyn->size);
 		r->a0 = 0;
 		return;
 	}
@@ -842,6 +1116,10 @@ static void syscall_dispatch(struct regs *r) {
 	case SYS_getpid:                                                                                 sys_getpid(r); return;
 	case SYS_fcntl:                                                                                     sys_fcntl(r); return;
 	case SYS_getdents64:                                                                                   sys_getdents64(r); return;
+	case SYS_lseek:                                                                                           sys_lseek(r); return;
+	case SYS_unlinkat:                                                                                           sys_unlinkat(r); return;
+	case SYS_dup3:                                                                                                  sys_dup3(r); return;
+	case SYS_faccessat:                                                                                               sys_faccessat(r); return;
 	default:
 		kprintf("FATAL: unimplemented syscall %lu\n", r->a7);
 		r->a0 = (unsigned long)-ENOSYS;
@@ -854,5 +1132,5 @@ void syscall_init(void) {
 		"brk, mmap, munmap, ioctl, sched_yield, set_tid_address, "
 		"clone, wait4, rt_sigprocmask, gettid, openat, close, read, execve, "
 		"getcwd, chdir, newfstatat, rt_sigaction, getppid, geteuid, "
-		"getpid, fcntl, getdents64)\n");
+		"getpid, fcntl, getdents64, lseek, unlinkat, dup3, faccessat)\n");
 }

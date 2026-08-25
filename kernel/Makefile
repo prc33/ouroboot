@@ -187,6 +187,7 @@ RISCV64_TEST_ASSERTIONS := \
 	--must-contain "hello ash" \
 	--must-contain "greeting" \
 	--must-contain "exec_target" \
+	--must-contain "wtest" \
 	--must-contain "process: all processes exited" \
 	--must-contain "P10 checkpoint OK" \
 	--must-not-contain "FATAL" \
@@ -247,7 +248,20 @@ RISCV64_TEST_ASSERTIONS := \
 # directory listing, not (unlike "busybox") also produced some other
 # way (the boot banner prints "BusyBox", capital B, a different
 # string).
-RISCV64_INTERACTIVE_INPUT := \r\recho hello ash\rls\rexit 7\r
+#
+# `echo writable-fs-works > wtest` then a second `ls`: the writable-
+# ramfs regression test (checkpoint 12) -- real shell I/O redirection
+# (open(O_CREAT|O_TRUNC|O_WRONLY), dup3() onto fd 1, write()), not
+# faked. "wtest" below is checked the same rigorous way as "greeting"/
+# "exec_target" above: it can only appear in this transcript via the
+# *second* ls's own real getdents64 listing (a directory entry it
+# creates at runtime, not embedded anywhere) -- the typed command line
+# itself, echoed back character-by-character, would put "wtest" right
+# after a literal ">" with no line break, a different, distinguishable
+# context grep/--must-contain doesn't need to tell apart here because
+# only the bare-word ls listing occurrence proves the file (and thus
+# the write) is real.
+RISCV64_INTERACTIVE_INPUT := \r\recho hello ash\rls\recho writable-fs-works > wtest\rls\rexit 7\r
 
 test: kernel.elf
 	python3 test/boot_test.py kernel.elf \
@@ -266,17 +280,18 @@ test: kernel.elf
 # unoptimized interpreter (the full suite runs in ~10-20s as of P2).
 #
 # --max-seconds: a speed *regression* test, not just a correctness one
-# -- see boot.js's own comment on the flag. 120s is generous headroom
-# over an uncontended ~67s (225M instructions, this exact checkpoint
-# sequence, including the `ls` RISCV64_INTERACTIVE_INPUT now runs) so
-# a loaded CI box doesn't flake, while still catching the real
-# regression this guards: reverting cpu.js's TLBs took this exact run
-# from under a minute to multiple *minutes* (git history/commit
-# f0180da). --max-instructions has matching headroom over that 225M.
+# -- see boot.js's own comment on the flag. 150s is generous headroom
+# over an uncontended ~86s (286M instructions, this exact checkpoint
+# sequence, including the `ls`/writable-file round trip
+# RISCV64_INTERACTIVE_INPUT now runs) so a loaded CI box doesn't
+# flake, while still catching the real regression this guards:
+# reverting cpu.js's TLBs took this exact run from under a minute to
+# multiple *minutes* (git history/commit f0180da). --max-instructions
+# has matching headroom over that 286M.
 test-js: kernel.elf
 	node ../emulator/js/boot.js kernel.elf \
-		--max-instructions 260000000 \
-		--max-seconds 120 \
+		--max-instructions 340000000 \
+		--max-seconds 150 \
 		--time-advance 100 \
 		--input "$(RISCV64_INTERACTIVE_INPUT)" \
 		$(RISCV64_TEST_ASSERTIONS)
@@ -293,13 +308,14 @@ kernel-shell.elf: $(SHELL_OBJS)
 	$(TCC) $(LDFLAGS) -o $@ $(SHELL_OBJS)
 
 # Covers both properties this target exists for: real interactive use
-# (RISCV64_INTERACTIVE_INPUT's `echo`/`ls`/`exit` round-trip actually
-# runs and produces "hello ash" + a real ls listing + a clean
-# process-table drain, not just a prompt appearing -- reaching
-# "built-in shell (ash)" alone doesn't prove typed input is ever read)
-# and speed (--max-seconds 45, generous over an uncontended ~18s for
-# this smaller ~100M-instruction direct-shell path -- see test-js's
-# own comment on the flag and the budget-sizing rationale).
+# (RISCV64_INTERACTIVE_INPUT's `echo`/`ls`/writable-file/`exit` round
+# trip actually runs and produces "hello ash" + a real ls listing + a
+# real created-and-read-back file + a clean process-table drain, not
+# just a prompt appearing -- reaching "built-in shell (ash)" alone
+# doesn't prove typed input is ever read) and speed (--max-seconds 45,
+# generous over an uncontended ~29s for this smaller ~161M-instruction
+# direct-shell path -- see test-js's own comment on the flag and the
+# budget-sizing rationale).
 shell-js: kernel-shell.elf
 	node ../emulator/js/boot.js kernel-shell.elf \
 		--max-instructions 200000000 \

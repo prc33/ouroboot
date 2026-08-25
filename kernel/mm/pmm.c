@@ -100,6 +100,35 @@ unsigned int pmm_alloc_page(void) {
 	return 0; /* out of memory */
 }
 
+/* Straight scan from page 0, not next_free_hint -- unlike
+ * pmm_alloc_page()'s single-page case, this isn't a hot path (called
+ * O(log(file size)) times per file, on growth, not once per byte), so
+ * there's no need for its amortized-O(1) trick; starting from 0 finds
+ * the lowest-addressed run rather than risking missing one below
+ * next_free_hint entirely. */
+unsigned int pmm_alloc_contiguous(unsigned int count) {
+	if (count == 0 || count > total_pages)
+		return 0;
+	unsigned int run_start = 0;
+	unsigned int run_len = 0;
+	for (unsigned int p = 0; p < total_pages; p++) {
+		if (!bitmap_test(p)) {
+			if (run_len == 0)
+				run_start = p;
+			run_len++;
+			if (run_len == count) {
+				for (unsigned int q = run_start; q < run_start + count; q++)
+					bitmap_set(q);
+				free_pages -= count;
+				return phys_base + run_start * PAGE_SIZE;
+			}
+		} else {
+			run_len = 0;
+		}
+	}
+	return 0; /* no run of `count` contiguous free pages -- real fragmentation, not a bug */
+}
+
 void pmm_free_page(unsigned int addr) {
 	unsigned int p = (addr - phys_base) / PAGE_SIZE;
 	if (p < total_pages && bitmap_test(p)) {

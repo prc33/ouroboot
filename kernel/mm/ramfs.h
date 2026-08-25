@@ -7,12 +7,14 @@
  * (mm/ramfs.c's own file table). "Real" in the sense every payload
  * in this kernel already is: actual bytes an actual open()+read()+
  * close() from a real musl+TCC binary actually reads, not simulated
- * -- just not backed by an actual block device or a writable/dynamic
- * namespace yet. That's future scope (a real VFS layer, a real ramfs
- * you can create files in, eventually a real block device), tracked
- * but deliberately out of reach of this checkpoint: everything this
- * kernel needs from a filesystem right now is "load busybox and let
- * it open a few files", which a fixed table already does honestly.
+ * -- just not backed by an actual block device.
+ *
+ * checkpoint 12 addition: this table (`files[]`) is still read-only
+ * and compile-time-fixed, but it's no longer the *only* thing a path
+ * can resolve to -- see struct ramfs_dynamic_file and its own
+ * accessors below for the writable half, which is what makes a real
+ * `tcc -o out.elf in.c` (creating and writing a new file at runtime)
+ * possible at all.
  *
  * checkpoint 9 addition: real busybox (user_test/busybox_riscv64.elf,
  * the exact binary demo/build-busybox-riscv64.sh already builds and
@@ -56,5 +58,68 @@ const struct ramfs_file *ramfs_lookup(const char *path);
 unsigned int ramfs_root_entry_count(void);
 const char *ramfs_root_entry_name(unsigned int index); /* index must be < ramfs_root_entry_count() */
 int ramfs_root_entry_is_symlink(unsigned int index);   /* 1 for every busybox alias but the first */
+
+/* checkpoint 12: a real writable file -- created and grown at
+ * runtime (mm/pmm.h's pmm_alloc_contiguous(), not compile-time
+ * embedded data), everything the fixed files[] table above
+ * deliberately isn't. `data` is a physical address that's also a
+ * valid kernel-mode pointer without any extra mapping step, the same
+ * "identity-mapped RAM" property mm/ramfs.c's own fixed entries
+ * already lean on -- see paging_init()'s own comment. NULL/0 until
+ * the first write actually needs backing storage: an empty file
+ * (right after O_CREAT, nothing written yet) costs zero pages, same
+ * as a real filesystem. */
+struct ramfs_dynamic_file {
+	int used;
+	char name[60]; /* no leading slash, matches struct ramfs_file's own convention */
+	unsigned char *data;
+	unsigned long size;     /* logical content length */
+	unsigned long capacity; /* currently-allocated backing size, a multiple of PAGE_SIZE */
+};
+
+/* Basename-matched, same as ramfs_lookup() -- returns 0 if no
+ * dynamic file by that name currently exists. */
+struct ramfs_dynamic_file *ramfs_dynamic_lookup(const char *path);
+
+/* Finds an existing dynamic file by that name, or allocates a fresh
+ * (empty, zero-capacity) slot if none exists -- the O_CREAT half of
+ * openat(). Returns 0 only if every slot is already in use (a real,
+ * if generous, fixed ceiling -- see mm/ramfs.c's own RAMFS_MAX_DYNAMIC_FILES). */
+struct ramfs_dynamic_file *ramfs_dynamic_open_or_create(const char *path);
+
+/* Forgets a dynamic file's content (size back to 0) without freeing
+ * its backing capacity -- the O_TRUNC half of openat(), and (see
+ * sys_openat's own comment) also what a real filesystem's rewrite-in-
+ * place effectively does at the content level. Keeping the capacity
+ * around rather than freeing-then-reallocating is the same "shrink is
+ * accounting-only, no reclaim yet" simplification arch/riscv64_syscall.c's
+ * sys_brk already documents for itself. */
+void ramfs_dynamic_truncate(struct ramfs_dynamic_file *f);
+
+/* Removes a dynamic file outright, freeing its backing pages -- the
+ * real unlink(). A no-op (not an error) if no dynamic file by that
+ * name exists; mirrors the fixed files[]/busybox_applets[] table,
+ * which can never be unlinked at all (real ROM, no backing store to
+ * free) the same way a real filesystem's read-only mount would
+ * reject it -- except this kernel doesn't need to reject it, since
+ * "no matching dynamic file" already makes it silently harmless,
+ * matching how every caller in this codebase treats unlink()'s
+ * return value as best-effort anyway (see arch/riscv64_syscall.c's
+ * own comment on tcc_write_elf_file's unlink-before-create pattern). */
+void ramfs_dynamic_unlink(const char *path);
+
+/* Writes `len` bytes from `src` into `f` starting at byte `offset`,
+ * growing (and zero-filling any real gap left by a write past the
+ * current end, same as a real sparse-file hole) as needed. Returns 0
+ * on success, -1 on failure (pmm_alloc_contiguous() couldn't find
+ * enough contiguous free RAM -- real ENOMEM, not a bug). */
+int ramfs_dynamic_write(struct ramfs_dynamic_file *f, unsigned long offset, const unsigned char *src, unsigned long len);
+
+/* Same index-based shape as ramfs_root_entry_count()/_name() above,
+ * for the same reason (arch/riscv64_syscall.c's sys_getdents64 builds
+ * dirent64 records for these too, appended after the fixed-table
+ * entries, so a freshly created file actually shows up in `ls`). */
+unsigned int ramfs_dynamic_entry_count(void);
+const char *ramfs_dynamic_entry_name(unsigned int index); /* index must be < ramfs_dynamic_entry_count() */
 
 #endif

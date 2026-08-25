@@ -425,6 +425,22 @@ int process_fork(struct regs *r) {
 		child->fds[fd].size = parent->fds[fd].size;
 		child->fds[fd].pos = parent->fds[fd].pos;
 		child->fds[fd].is_dir = parent->fds[fd].is_dir;
+		child->fds[fd].dynfile = parent->fds[fd].dynfile;
+	}
+	/* checkpoint 12: any active stdio redirection (dup3() onto fd
+	 * 0/1/2 -- struct process's own stdio_override comment) survives
+	 * fork() too, same as fds[] above and for the same reason (real
+	 * fd table semantics: fork()'d children share their parent's open
+	 * files, redirected stdio included -- a subshell running inside
+	 * an already-redirected `> file` block needs to keep writing to
+	 * that file, not suddenly see the console again). */
+	for (int fd = 0; fd < 3; fd++) {
+		child->stdio_override[fd].used = parent->stdio_override[fd].used;
+		child->stdio_override[fd].data = parent->stdio_override[fd].data;
+		child->stdio_override[fd].size = parent->stdio_override[fd].size;
+		child->stdio_override[fd].pos = parent->stdio_override[fd].pos;
+		child->stdio_override[fd].is_dir = parent->stdio_override[fd].is_dir;
+		child->stdio_override[fd].dynfile = parent->stdio_override[fd].dynfile;
 	}
 
 	/* Child's saved trapframe: an exact snapshot of the parent's live
@@ -516,6 +532,67 @@ void process_fd_close(int index) {
 		current_process->fds[index].used = 0;
 }
 
+/* checkpoint 12: writes into a *specific* fd slot by index -- unlike
+ * process_fd_alloc() (which picks the first free slot), dup3()'s
+ * target fd is a specific number the caller chose, closing whatever
+ * was there first (real dup2/dup3 semantics). */
+void process_fd_set(int index, const struct fd_entry *src) {
+	if (index < 0 || index >= MAX_FDS)
+		return;
+	struct fd_entry *dst = &current_process->fds[index];
+	dst->data = src->data;
+	dst->size = src->size;
+	dst->pos = src->pos;
+	dst->is_dir = src->is_dir;
+	dst->dynfile = src->dynfile;
+	dst->used = 1;
+}
+
+/* checkpoint 12: real dup2()/dup3() onto fd 0/1/2 -- see process.h's
+ * own comment on stdio_override for why these exist at all instead of
+ * just using fds[]. `fd` must be 0/1/2; out-of-range is a caller bug
+ * (arch/riscv64_syscall.c's sys_dup3/sys_read/sys_write/sys_close are
+ * the only callers, and they all check first), not something these
+ * bother reporting. */
+/* current_process is NULL until a real process has actually been
+ * scheduled (process_init() itself sets it to 0; it's only ever
+ * non-NULL from process_run()/process_schedule() onward) -- but
+ * fd 0/1/2 writes/reads happen from the very first checkpoint 5 ring3
+ * test onward, which runs via enter_usermode() directly and never
+ * touches the process subsystem at all. Real bug, found running this
+ * exact test after adding these functions: the earliest sys_write()
+ * call (checkpoint 5's own "hello from ring3 via ecall") crashed with
+ * a NULL-pointer page fault the instant it reached here. A NULL
+ * current_process legitimately means "no real process context, so
+ * definitely not redirected" -- these three all treat it that way,
+ * consistently. */
+struct fd_entry *process_stdio_get(int fd) {
+	if (!current_process || fd < 0 || fd > 2 || !current_process->stdio_override[fd].used)
+		return 0;
+	return &current_process->stdio_override[fd];
+}
+
+void process_stdio_set(int fd, const struct fd_entry *src) {
+	if (!current_process || fd < 0 || fd > 2)
+		return;
+	/* field-by-field, not a struct assignment -- TCC's codegen would
+	 * ask for memmove() for that, which this freestanding kernel has
+	 * never linked (same reason as process_trampoline's own
+	 * copy_regs(), and process_fork's own fd-copy loop, above). */
+	struct fd_entry *dst = &current_process->stdio_override[fd];
+	dst->data = src->data;
+	dst->size = src->size;
+	dst->pos = src->pos;
+	dst->is_dir = src->is_dir;
+	dst->dynfile = src->dynfile;
+	dst->used = 1;
+}
+
+void process_stdio_clear(int fd) {
+	if (current_process && fd >= 0 && fd <= 2)
+		current_process->stdio_override[fd].used = 0;
+}
+
 /* checkpoint 8: real execve() -- see process.h's own comment for the
  * contract. Same "new address space, elf_load, hand-built stack"
  * shape as process_create_from_elf(), the two real differences being
@@ -530,9 +607,26 @@ int process_execve(struct regs *r, const char *path, char **argv, char **envp) {
 	             * process in this kernel gets an empty one, same
 	             * simplification process_create_from_elf already made */
 
-	const struct ramfs_file *file = ramfs_lookup(path);
-	if (!file)
-		return -1;
+	/* checkpoint 12: a dynamically written file (mm/ramfs.c's own
+	 * writable files -- see its header comment) takes priority over
+	 * the fixed table here too, same reasoning as
+	 * arch/riscv64_syscall.c's sys_openat/sys_newfstatat -- this is
+	 * what actually lets a freshly `tcc -o out.elf`'d binary be *run*,
+	 * not just written: self-hosting.md's exit bar needs both, not
+	 * just the write half. */
+	struct ramfs_dynamic_file *dyn = ramfs_dynamic_lookup(path);
+	const unsigned char *elf_data;
+	unsigned long elf_data_size;
+	if (dyn) {
+		elf_data = dyn->data;
+		elf_data_size = dyn->size;
+	} else {
+		const struct ramfs_file *file = ramfs_lookup(path);
+		if (!file)
+			return -1;
+		elf_data = file->data;
+		elf_data_size = file->size;
+	}
 
 	/* Snapshot argv strings into kernel memory *before* touching the
 	 * address space they live in -- once the new address space is
@@ -556,7 +650,7 @@ int process_execve(struct regs *r, const char *path, char **argv, char **envp) {
 	unsigned long *new_root = paging_new_addrspace();
 	paging_activate(new_root);
 
-	unsigned long entry = elf_load(file->data, file->size);
+	unsigned long entry = elf_load(elf_data, elf_data_size);
 	if (!entry) {
 		paging_activate(prev_root);
 		return -1;

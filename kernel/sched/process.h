@@ -19,13 +19,19 @@ enum process_state {
 	PROC_ZOMBIE,
 };
 
+struct ramfs_dynamic_file; /* mm/ramfs.h -- forward-declared rather than
+                             * #included, process.h doesn't otherwise need it */
+
 /* checkpoint 8: per-process file descriptors, fd numbers 3.. (0/1/2
  * are the UART console, handled specially in arch/riscv64_syscall.c's
- * sys_read/sys_write same as always -- never stored here). Only ever
- * describes an open mm/ramfs.h file: read-only, `data`+`size` point
- * straight at that file's embedded bytes, `pos` is this fd's own
- * cursor into it. No real inode table, no write support -- this
- * checkpoint's ramfs is read-only static data, see mm/ramfs.h. */
+ * sys_read/sys_write same as always -- never stored here). Two shapes,
+ * distinguished by `dynfile`: an open mm/ramfs.h *fixed* file (read-only,
+ * `data`+`size` point straight at that file's embedded bytes, `pos` is
+ * this fd's own cursor into it -- the original, checkpoint-8 shape), or
+ * (checkpoint 12) an open *dynamic* (real, writable, created-at-runtime)
+ * file, `dynfile` non-NULL and `data`/`size` unused -- see
+ * mm/ramfs.h's own struct ramfs_dynamic_file and
+ * arch/riscv64_syscall.c's sys_openat/sys_write/sys_read. */
 #define MAX_FDS 8
 
 struct fd_entry {
@@ -38,6 +44,7 @@ struct fd_entry {
 	             * different: not a byte offset into `data` (there is none --
 	             * a directory fd has no backing bytes), but which
 	             * mm/ramfs.c root-directory entry to hand out next. */
+	struct ramfs_dynamic_file *dynfile; /* checkpoint 12 -- see this struct's own comment above */
 };
 
 struct process {
@@ -50,6 +57,25 @@ struct process {
 	struct regs user_regs;             /* saved U-mode context when this process isn't the one currently running */
 	int exit_code;
 	struct fd_entry fds[MAX_FDS];      /* checkpoint 8 -- see the struct's own comment */
+	/* checkpoint 12: real shell I/O redirection (`echo x > file`) needs
+	 * real dup2()/dup3() -- ash forks, opens the target file, dup3()s
+	 * it onto fd 1, closes the original fd, *then* runs the command,
+	 * which just writes to fd 1 as always. fds[0..2] don't exist (0/1/2
+	 * are permanently the console, a hardcoded special case in
+	 * arch/riscv64_syscall.c's sys_read/sys_write/sys_close, never
+	 * stored in fds[] -- this struct's own comment), so dup3()ing onto
+	 * one of them needs somewhere else to record "fd N is temporarily
+	 * not the console". stdio_override[N].used gates it: sys_read/
+	 * sys_write/sys_close all check this array first for fd 0/1/2,
+	 * falling back to the ordinary console behavior when a slot isn't
+	 * in use. Simplification, not full dup2 semantics: this *copies*
+	 * the source fd's state rather than making the two fds genuinely
+	 * share one open-file position -- correct for the dominant case
+	 * (open, dup, close-the-original, never touch both concurrently
+	 * again), diverges from real POSIX only if a caller keeps both
+	 * fds open and interleaves reads/writes through both, which
+	 * nothing this kernel runs does. */
+	struct fd_entry stdio_override[3];
 };
 
 void process_init(void);
@@ -148,6 +174,13 @@ long process_wait4(int pid, int *status_out, int options);
 int process_fd_alloc(void);                 /* index of the first unused slot, marked used; -1 if the table's full */
 struct fd_entry *process_fd_get(int index); /* 0 if out of range or not currently used */
 void process_fd_close(int index);           /* no-op if already unused/out of range */
+void process_fd_set(int index, const struct fd_entry *src); /* checkpoint 12: dup3()'s target-by-number half */
+
+/* checkpoint 12: real dup2()/dup3() onto fd 0/1/2 -- see struct
+ * process's own stdio_override comment for why these exist. */
+struct fd_entry *process_stdio_get(int fd);              /* fd must be 0/1/2; 0 if not currently overridden */
+void process_stdio_set(int fd, const struct fd_entry *src); /* fd must be 0/1/2 */
+void process_stdio_clear(int fd);                            /* fd must be 0/1/2 */
 
 /* checkpoint 8: real execve(), via SYS_execve. Replaces the
  * *currently running* process's address space with `path` (looked up

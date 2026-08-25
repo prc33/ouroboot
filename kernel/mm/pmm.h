@@ -10,6 +10,16 @@ unsigned int pmm_alloc_page(void); /* returns physical addr, 0 on failure */
 void pmm_free_page(unsigned int addr);
 unsigned int pmm_free_pages(void); /* for test assertions */
 
+/* Like pmm_alloc_page(), but `count` pages guaranteed *contiguous* --
+ * for a caller that wants to treat the result as one plain array
+ * (mm/ramfs.c's own writable-file backing store, which needs simple
+ * byte-offset indexing, not a page-table-style indirect lookup).
+ * Returns 0 (and reserves nothing) if no run of `count` free pages
+ * exists, same failure contract as pmm_alloc_page() -- an ordinary,
+ * expected outcome under real fragmentation, not a fatal one; callers
+ * are expected to propagate it as ENOMEM, not crash. */
+unsigned int pmm_alloc_contiguous(unsigned int count);
+
 /* Marks every page in [lo, hi) used, without anyone having to
  * pmm_alloc_page() them first -- for memory this allocator doesn't
  * itself know is spoken for. riscv64_kmain.c uses this right after
