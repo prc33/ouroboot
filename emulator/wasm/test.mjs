@@ -8,6 +8,7 @@ const { instance } = await WebAssembly.instantiate(bytes);
 assert.equal(instance.exports.add(20, 22), 42);
 assert.equal(instance.exports.factorial(0), 1);
 assert.equal(instance.exports.factorial(6), 720);
+assert.equal(instance.exports.sum_squares(3, 4), 25);
 assert.equal(instance.exports.polynomial(3.5), 20.25);
 assert.equal(instance.exports.mix64(123456789n), 2195603616442482361n);
 assert.equal(instance.exports.divide64(-9000000000n, 3n), -3000000000n);

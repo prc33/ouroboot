@@ -608,13 +608,10 @@ ST_FUNC void gfunc_call(int nb_args)
 
     is_direct = ((vtop->r & (VT_VALMASK | VT_LVAL | VT_SYM)) == (VT_CONST | VT_SYM)
                  && vtop->c.i == 0);
-    if (is_direct) {
-        wo = wasm_emit_op(WASM_OP_CALL);
-        func_reg = VT_CONST;
-    } else {
-        func_reg = gv(RC_INT);
-        wo = wasm_emit_op(WASM_OP_CALL_INDIRECT);
-    }
+    if (!is_direct)
+        wasm_unimp("indirect function call");
+    wo = wasm_emit_op(WASM_OP_CALL);
+    func_reg = VT_CONST;
     if (wo) {
         int bt = func_sym->type.t & VT_BTYPE;
         wo->sym = vtop->sym;

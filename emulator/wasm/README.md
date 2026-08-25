@@ -15,7 +15,9 @@ imports. Its non-static C functions and linear memory are exported.
 The backend currently targets small freestanding code. It supports scalar
 integer and floating-point operations, calls, memory, and ordinary structured
 control flow. It does not provide a libc, operating-system interface, dynamic
-linking, inline assembly, or a WebAssembly object-file format.
+linking, imported functions, function pointers, inline assembly, or a
+WebAssembly object-file format. Calls between functions in the same C input
+are emitted directly.
 
 Wasm32 keeps 32-bit pointers but uses native Wasm `i64` locals for C `long
 long`. The generic compiler exposes this separately from pointer width: i386

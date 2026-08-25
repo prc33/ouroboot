@@ -13,6 +13,16 @@ int factorial(int n)
     return result;
 }
 
+static int square(int x)
+{
+    return x * x;
+}
+
+int sum_squares(int a, int b)
+{
+    return square(a) + square(b);
+}
+
 double polynomial(double x)
 {
     return x * x + 2.0 * x + 1.0;
