@@ -75,13 +75,26 @@ static int streq(const char *a, const char *b) {
 }
 
 /* Last path component -- "/usr/bin/echo" -> "echo", "greeting" ->
- * "greeting" unchanged (no '/' at all). */
+ * "greeting" unchanged (no '/' at all). Used only for the fixed,
+ * read-only table below (files[]/busybox_applets[]) -- see
+ * ramfs_dynamic_lookup's own comment (ramfs.h) for why the writable
+ * half below uses full normalized paths instead. */
 static const char *basename_of(const char *path) {
 	const char *base = path;
 	for (const char *p = path; *p; p++)
 		if (*p == '/')
 			base = p + 1;
 	return base;
+}
+
+/* Strips a single leading '/' if present, otherwise passes `path`
+ * through unchanged -- "/tcc/tcc.c" and "tcc/tcc.c" name the same
+ * dynamic file (see ramfs.h's own comment on struct ramfs_dynamic_file),
+ * matching how sys_openat/execve already treat this ramfs as having
+ * just the one root. Anything after that first character (more slashes
+ * included) is kept verbatim -- real path segments, not stripped. */
+static const char *normalize_path(const char *path) {
+	return (path[0] == '/') ? path + 1 : path;
 }
 
 const struct ramfs_file *ramfs_lookup(const char *path) {
@@ -118,10 +131,20 @@ int ramfs_root_entry_is_symlink(unsigned int index) {
  * struct ramfs_dynamic_file. A fixed table, same shape as files[]
  * above and for the same reason (no dynamic allocation of the
  * *table itself* -- only of each entry's own backing storage, via
- * mm/pmm.h's pmm_alloc_contiguous()); 16 is generous headroom for
- * what a single `tcc -o out.elf a.c b.c c.c`-style invocation
- * actually needs open for writing at once. */
-#define RAMFS_MAX_DYNAMIC_FILES 16
+ * mm/pmm.h's pmm_alloc_contiguous()).
+ *
+ * checkpoint 14: bumped from 16 to 512 -- a real self-hosting TCC
+ * build needs far more than "one invocation's worth of output files"
+ * open at once, since every input file the build reads also lives
+ * here now (the tar-loaded initrd creates a dynamic file per entry,
+ * mm/tar.c's own tar_load_initrd()): TCC's own ~20 source/header
+ * files, musl-riscv64's header tree (~230 files, measured directly --
+ * `find include arch/riscv64 arch/generic obj/include -type f | wc -l`),
+ * crt1.o/crti.o/crtn.o/libc.a/libtcc1.a, the prebuilt riscv64 tcc
+ * binary that does the compiling, plus whatever the build itself
+ * writes out. 512 is real headroom above that measured ~260, not a
+ * guess padded for its own sake. */
+#define RAMFS_MAX_DYNAMIC_FILES 512
 static struct ramfs_dynamic_file dynamic_files[RAMFS_MAX_DYNAMIC_FILES];
 
 static void name_copy(char *dst, const char *src, unsigned int cap) {
@@ -131,9 +154,9 @@ static void name_copy(char *dst, const char *src, unsigned int cap) {
 }
 
 struct ramfs_dynamic_file *ramfs_dynamic_lookup(const char *path) {
-	const char *base = basename_of(path);
+	const char *norm = normalize_path(path);
 	for (unsigned int i = 0; i < RAMFS_MAX_DYNAMIC_FILES; i++)
-		if (dynamic_files[i].used && streq(base, dynamic_files[i].name))
+		if (dynamic_files[i].used && streq(norm, dynamic_files[i].name))
 			return &dynamic_files[i];
 	return 0;
 }
@@ -142,11 +165,11 @@ struct ramfs_dynamic_file *ramfs_dynamic_open_or_create(const char *path) {
 	struct ramfs_dynamic_file *existing = ramfs_dynamic_lookup(path);
 	if (existing)
 		return existing;
-	const char *base = basename_of(path);
+	const char *norm = normalize_path(path);
 	for (unsigned int i = 0; i < RAMFS_MAX_DYNAMIC_FILES; i++) {
 		if (!dynamic_files[i].used) {
 			dynamic_files[i].used = 1;
-			name_copy(dynamic_files[i].name, base, sizeof(dynamic_files[i].name));
+			name_copy(dynamic_files[i].name, norm, sizeof(dynamic_files[i].name));
 			dynamic_files[i].data = 0;
 			dynamic_files[i].size = 0;
 			dynamic_files[i].capacity = 0;

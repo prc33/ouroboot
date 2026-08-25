@@ -71,14 +71,39 @@ int ramfs_root_entry_is_symlink(unsigned int index);   /* 1 for every busybox al
  * as a real filesystem. */
 struct ramfs_dynamic_file {
 	int used;
-	char name[60]; /* no leading slash, matches struct ramfs_file's own convention */
+	char name[128]; /* full normalized path (leading '/' stripped, everything
+	                  * after kept as-is), NOT basename -- see ramfs_dynamic_lookup's
+	                  * own comment for why this differs from the fixed table.
+	                  * 128 is real headroom over the longest path this kernel
+	                  * actually embeds (musl's own arch/riscv64/bits/*.h.in
+	                  * paths top out in the 30s), not a tight fit. */
 	unsigned char *data;
 	unsigned long size;     /* logical content length */
 	unsigned long capacity; /* currently-allocated backing size, a multiple of PAGE_SIZE */
 };
 
-/* Basename-matched, same as ramfs_lookup() -- returns 0 if no
- * dynamic file by that name currently exists. */
+/* checkpoint 14: full-path-matched, deliberately *not* basename-matched
+ * like ramfs_lookup() above. The fixed table's basename matching is
+ * correct there because it's modeling a symlink farm (every busybox
+ * applet name really does resolve to the same one binary, regardless
+ * of which PATH directory found it) -- but a real multi-directory
+ * build environment (musl's own header tree: `include/`, `arch/riscv64/`,
+ * `arch/generic/`, searched via multiple -I flags with real override-by-
+ * priority semantics) genuinely has *different* files sharing the same
+ * basename (confirmed empirically: bits/fenv.h, errno.h, fcntl.h,
+ * dirent.h, ioctl.h, and more, all present under more than one of those
+ * directories with different content). Collapsing those to basename-only
+ * would silently make the wrong one win. So a dynamic file's identity is
+ * its full path (normalized: a single leading '/' stripped, so "/tcc/tcc.c"
+ * and "tcc/tcc.c" name the same file, matching how sys_openat/execve
+ * already treat a leading '/' as "the one root this ramfs has" rather
+ * than something meaningfully different from no leading '/' at all) --
+ * this ramfs still has no real directory *inodes* (no mkdir, no
+ * per-directory readdir, no '.'/'..'), just path strings used as opaque
+ * lookup keys, which is all a real `-I dir` + `#include "file.h"` build
+ * actually needs (open()/stat() by constructed path, never readdir() on
+ * one of these subdirectories). Returns 0 if no dynamic file by that
+ * path currently exists. */
 struct ramfs_dynamic_file *ramfs_dynamic_lookup(const char *path);
 
 /* Finds an existing dynamic file by that name, or allocates a fresh

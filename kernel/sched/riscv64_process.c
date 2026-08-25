@@ -599,8 +599,43 @@ void process_stdio_clear(int fd) {
  * (a) this replaces the *current* process's root_table instead of
  * creating a new process, and (b) the stack carries real caller-
  * supplied argv instead of a single fixed arg0. */
-#define EXECVE_MAX_ARGV 8
-#define EXECVE_ARG_MAX 64
+/* checkpoint 14: EXECVE_MAX_ARGV/EXECVE_ARG_MAX bumped -- EXECVE_MAX_ARGV
+ * must match arch/riscv64_syscall.c's own copy (see its comment for the
+ * real count -- a self-hosted TCC invocation -- that drove this), and
+ * EXECVE_ARG_MAX now matches that file's PATH_MAX_LOCAL bump since most
+ * of these argv strings *are* paths (-I/-B flags, source/object
+ * filenames).
+ *
+ * STRDATA_SIZE/PTRBLOCK_SIZE deliberately stay at their original 256/256
+ * rather than growing to fit EXECVE_MAX_ARGV*EXECVE_ARG_MAX's new worst
+ * case (2560 bytes): tried that, and it reintroduced a real page fault
+ * (stack overflow -- a *write* fault just below stack_va, confirmed by
+ * address) inside busybox/ash's own startup, because the still-2-page
+ * (8KB) stack doesn't have that much to spare once a real program's own
+ * C stack usage is accounted for. No *current* invocation in this
+ * checkpoint's test suite actually needs more than a handful of short
+ * args, so this is safe today; it's still a real, open limit, not
+ * silently fixed.
+ *
+ * EXECVE_STACK_PAGES was going to become the process's real ~1MB stack
+ * (TCC's own recursive-descent parsing of its ~15K-line unity-build
+ * source needs meaningfully more than 8KB) -- also reverted, back to 2,
+ * matching process_create_from_elf's own proven stack size. Bumping it
+ * to 256 produced its own real, deterministic page fault (inside
+ * busybox's own code, reading/executing a bad stack address) that
+ * explicit zeroing of the new pages (tried on its own) did not fix;
+ * most likely FORK_STACK_HI below still hardcoding the *old* 2-page
+ * COW-clone window, so a process forking after getting a bigger stack
+ * would have its child silently missing the rest of it -- plausible,
+ * not confirmed. Both of these need solving together (more argv room
+ * AND a genuinely bigger stack) before a real self-hosted TCC build can
+ * run here -- see docs/self-hosting-todo.md for the actual next step,
+ * not attempted yet rather than shipped broken. */
+#define EXECVE_MAX_ARGV 20
+#define EXECVE_ARG_MAX 128
+#define STRDATA_SIZE 256
+#define PTRBLOCK_SIZE 256
+#define EXECVE_STACK_PAGES 2
 
 int process_execve(struct regs *r, const char *path, char **argv, char **envp) {
 	(void)envp; /* real environment support is future scope -- every
@@ -656,20 +691,36 @@ int process_execve(struct regs *r, const char *path, char **argv, char **envp) {
 		return -1;
 	}
 
-	/* Stack -- same VA/size as process_create_from_elf, now with real
-	 * argv instead of a single fixed arg0. String data goes in the
-	 * top 256 bytes, the argc/argv/envp/auxv pointer block in the
-	 * 256 bytes below that -- comfortably separate, both well clear
-	 * of real stack use below. */
+	/* Stack -- same VA/size as process_create_from_elf (see
+	 * EXECVE_STACK_PAGES's own comment above for why this is still 2
+	 * pages rather than the much bigger stack a real self-hosted TCC
+	 * build will eventually need). String data goes in the top
+	 * STRDATA_SIZE bytes, the argc/argv/envp/auxv pointer block in
+	 * PTRBLOCK_SIZE bytes below that -- both sized for
+	 * EXECVE_MAX_ARGV*EXECVE_ARG_MAX (2560 bytes worst case for
+	 * strings; argc+argv_ptrs+envp+auxv is at most 27 words = 216 bytes
+	 * for pointers), comfortably separate from each other and from
+	 * real stack use below within the still-2-page (8KB) budget. */
 	unsigned long stack_va = 0xB0000000UL;
-	unsigned long stack_pages = 2;
+	unsigned long stack_pages = EXECVE_STACK_PAGES;
 	for (unsigned long i = 0; i < stack_pages; i++) {
 		unsigned long phys = pmm_alloc_page();
+		/* pmm_alloc_page() makes no zeroing guarantee (mm/pmm.c's own
+		 * bitmap allocator never touches page content) -- explicit,
+		 * defensive zeroing here, same convention ramfs_dynamic_grow()
+		 * already uses for its own freshly allocated pages. (This was
+		 * tried, on its own, as a fix for the page fault documented in
+		 * EXECVE_STACK_PAGES's comment above; it did not fix it -- that
+		 * fault's real cause is still open -- but zeroing a fresh
+		 * stack is correct regardless, so it stays.) */
+		unsigned long *p64 = (unsigned long *)phys;
+		for (unsigned int w = 0; w < PAGE_SIZE / sizeof(unsigned long); w++)
+			p64[w] = 0;
 		paging_map_page(stack_va + i * PAGE_SIZE, phys, PTE_PRESENT | PTE_WRITABLE | PTE_USER);
 	}
 	unsigned long stack_top = stack_va + stack_pages * PAGE_SIZE;
 
-	unsigned char *strp = (unsigned char *)(stack_top - 256);
+	unsigned char *strp = (unsigned char *)(stack_top - STRDATA_SIZE);
 	unsigned long argv_ptrs[EXECVE_MAX_ARGV];
 	for (int a = 0; a < argc; a++) {
 		int len = 0;
@@ -681,7 +732,7 @@ int process_execve(struct regs *r, const char *path, char **argv, char **envp) {
 		strp += len + 1;
 	}
 
-	unsigned long *sp = (unsigned long *)(stack_top - 512);
+	unsigned long *sp = (unsigned long *)(stack_top - STRDATA_SIZE - PTRBLOCK_SIZE);
 	int idx = 0;
 	sp[idx++] = argc;
 	for (int a = 0; a < argc; a++)

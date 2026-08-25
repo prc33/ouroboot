@@ -124,13 +124,21 @@
  * the scratch region above) so nothing else can be handed this memory
  * by pmm_alloc_page()/pmm_alloc_contiguous() before mm/tar.c's own
  * tar_load_initrd() gets to read it -- real bytes actually sitting in
- * real RAM at boot, not a value anything computes. 4MB is a generous
- * ceiling over what any archive this project currently loads actually
- * needs; the tar format's own two-all-zero-block end marker (mm/tar.c's
- * own comment) means the *real* archive can be far smaller than this
- * without anything needing to know its exact size in advance -- this
- * is just how far tar_load_initrd() is willing to keep scanning before
- * giving up, a safety bound, not a size QEMU/boot.js need to match. */
-#define RV64_INITRD_MAX_SIZE   0x400000UL /* 4MB */
+ * real RAM at boot, not a value anything computes. The tar format's own
+ * two-all-zero-block end marker (mm/tar.c's own comment) means the
+ * *real* archive can be far smaller than this without anything needing
+ * to know its exact size in advance -- this is just how far
+ * tar_load_initrd() is willing to keep scanning before giving up, a
+ * safety bound, not a size QEMU/boot.js need to match.
+ *
+ * checkpoint 14: bumped from 4MB to 16MB -- a self-hosting TCC payload
+ * (its own source + musl-riscv64's headers/libc.a/crt objects + a
+ * prebuilt riscv64 tcc binary) measures ~5-6MB; 16MB is real headroom
+ * above that measured size, not a guess. Leaves [0x84000000, 0x85000000)
+ * reserved, comfortably under RV64_MEM_TOP (0x88000000) with plenty
+ * left for the kernel's own use (dynamic-file backing storage included --
+ * mm/ramfs.c's tar-loaded files are copied into pmm_alloc_contiguous()'d
+ * pages elsewhere, not read in place from this reserved region). */
+#define RV64_INITRD_MAX_SIZE   0x1000000UL /* 16MB */
 
 #endif

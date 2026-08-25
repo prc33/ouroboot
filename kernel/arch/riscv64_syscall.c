@@ -401,7 +401,11 @@ static void sys_gettid(struct regs *r) {
  * namespace yet). fd numbers 3.. (0/1/2 stay the UART console,
  * unaffected) -- sched/process.h's process_fd_alloc/get/close index
  * by the raw fds[] slot, this file applies the +3 offset. */
-#define PATH_MAX_LOCAL 64
+/* checkpoint 14: bumped from 64 -- the tar-loaded initrd's real
+ * musl-header/TCC-source paths (mm/ramfs.h's now-full-path-matched
+ * dynamic files) top out in the 30s ("musl/arch/riscv64/bits/alltypes.h.in"),
+ * so 128 is real headroom, not a tight fit driven by a specific path. */
+#define PATH_MAX_LOCAL 128
 
 static int copy_path_from_user(char *dst, const char *user_src) {
 	int i = 0;
@@ -852,7 +856,14 @@ static void sys_getdents64(struct regs *r) {
  * that function's own signature can just be "two NUL-terminated
  * char* arrays", arch-neutral in spirit even though nothing else
  * uses it yet). */
-#define EXECVE_MAX_ARGV 8
+/* checkpoint 14: bumped from 8 -- must match sched/riscv64_process.c's
+ * own copy (duplicated rather than shared via a header, same
+ * convention as that file's own FORK_MMAP_HI comment). A real
+ * self-hosted `tcc -B... -I... -I... -I... -I... -nostdinc -c -o out.o in.c`
+ * invocation (see compiler/Makefile's own stage1 recipe, the proven
+ * command line this mirrors) needs 13 argv entries; 20 is headroom
+ * above that measured count. */
+#define EXECVE_MAX_ARGV 20
 
 static void sys_execve(struct regs *r) {
 	char path[PATH_MAX_LOCAL];

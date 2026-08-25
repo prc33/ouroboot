@@ -40,6 +40,19 @@ reasoning). For RISC-V64:
   is untouched; see `docs/riscv-port-findings.md`'s kernel-port
   section for the design (raw machine code where TCC's assembler has
   no relocation support at all, real bugs found booting each stage).
+  A writable ramfs (real `open(O_CREAT)`/`write`/`unlink`) and a real
+  tar-loading initrd (`make ARCH=riscv64 test-initrd`) followed.
+
+- **Not yet done: TCC running *inside* this kernel** (as opposed to
+  under `qemu-riscv64-static`'s Linux user-mode emulation, which
+  `make TARGET=riscv64 selfcheck` above already proves). This is the
+  project's actual closure condition — see
+  `docs/self-hosting-todo.md` for exactly what's been ruled out, the
+  one open bug blocking it (a real, deterministic page fault giving a
+  process a bigger stack), and the concrete next steps. Read that
+  file before touching `mm/ramfs.*`'s dynamic-file matching,
+  `sched/riscv64_process.c`'s `execve()` stack layout, or
+  `arch/riscv64_memmap.h`'s initrd size constants.
 
 ## Layout
 
