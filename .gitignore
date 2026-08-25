@@ -1,7 +1,9 @@
 *.o
 *.a
 *.elf
+*.wasm
 tcc
+wasm32-tcc
 stage1/
 kernel.elf
 musl-i386/

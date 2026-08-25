@@ -145,11 +145,13 @@ extern long double strtold (const char *__nptr, char **__endptr);
 /* #define TCC_TARGET_ARM64  *//* ARMv8 code generator */
 /* #define TCC_TARGET_C67    *//* TMS320C67xx code generator */
 /* #define TCC_TARGET_RISCV64 *//* risc-v code generator */
+/* #define TCC_TARGET_WASM32 *//* WebAssembly code generator */
 
 /* default target is I386 */
 #if !defined(TCC_TARGET_I386) && !defined(TCC_TARGET_ARM) && \
     !defined(TCC_TARGET_ARM64) && !defined(TCC_TARGET_C67) && \
-    !defined(TCC_TARGET_X86_64) && !defined(TCC_TARGET_RISCV64)
+    !defined(TCC_TARGET_X86_64) && !defined(TCC_TARGET_RISCV64) && \
+    !defined(TCC_TARGET_WASM32)
 # if defined __x86_64__
 #  define TCC_TARGET_X86_64
 # elif defined __arm__
@@ -161,6 +163,8 @@ extern long double strtold (const char *__nptr, char **__endptr);
 #  define TCC_TARGET_ARM64
 # elif defined __riscv
 #  define TCC_TARGET_RISCV64
+# elif defined __wasm32__
+#  define TCC_TARGET_WASM32
 # else
 #  define TCC_TARGET_I386
 # endif
@@ -378,6 +382,9 @@ extern long double strtold (const char *__nptr, char **__endptr);
 # include "riscv64-gen.c"
 # include "riscv64-link.c"
 # include "riscv64-asm.c"
+#elif defined(TCC_TARGET_WASM32)
+# include "wasm-gen.c"
+# include "wasm-link.c"
 #else
 #error unknown target
 #endif
@@ -1441,7 +1448,7 @@ ST_FUNC void vpush_global_sym(CType *type, int v);
 ST_FUNC void vrote(SValue *e, int n);
 ST_FUNC void vrott(int n);
 ST_FUNC void vrotb(int n);
-#if PTR_SIZE == 4
+#if PTR_SIZE == 4 && !defined TCC_NATIVE_I64
 ST_FUNC void lexpand(void);
 #endif
 #ifdef TCC_TARGET_ARM
@@ -1483,6 +1490,7 @@ ST_DATA int func_bound_add_epilog;
 #define TCC_OUTPUT_FORMAT_ELF    0 /* default output format: ELF */
 #define TCC_OUTPUT_FORMAT_BINARY 1 /* binary image output */
 #define TCC_OUTPUT_FORMAT_COFF   2 /* COFF */
+#define TCC_OUTPUT_FORMAT_WASM   3 /* WebAssembly module */
 
 #define ARMAG  "!<arch>\012"    /* For COFF and a.out archives */
 
@@ -1696,6 +1704,11 @@ ST_FUNC void gen_va_start(void);
 ST_FUNC void arch_transfer_ret_regs(int);
 ST_FUNC void gen_cvt_sxtw(void);
 #endif
+#ifdef TCC_NATIVE_I64
+ST_FUNC void gen_opl(int op);
+ST_FUNC void gen_cvt_i32_i64(int is_unsigned);
+ST_FUNC void gen_cvt_i64_i32(void);
+#endif
 
 /* ------------ c67-gen.c ------------ */
 #ifdef TCC_TARGET_C67
@@ -1706,6 +1719,10 @@ ST_FUNC void gen_cvt_sxtw(void);
 #ifdef TCC_TARGET_COFF
 ST_FUNC int tcc_output_coff(TCCState *s1, FILE *f);
 ST_FUNC int tcc_load_coff(TCCState * s1, int fd);
+#endif
+#ifdef TCC_TARGET_WASM32
+ST_FUNC int tcc_output_wasm(TCCState *s1, const char *filename);
+ST_FUNC void tcc_wasm_reset(void);
 #endif
 
 /* ------------ tccasm.c ------------ */

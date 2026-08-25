@@ -269,6 +269,10 @@ static int btype_size(int bt)
 /* returns function return register from type */
 static int R_RET(int t)
 {
+#ifdef TCC_NATIVE_I64
+    if ((t & VT_BTYPE) == VT_LLONG)
+        return REG_LRET;
+#endif
     if (!is_float(t))
         return REG_IRET;
 #ifdef TCC_TARGET_X86_64
@@ -285,7 +289,7 @@ static int R_RET(int t)
 static int R2_RET(int t)
 {
     t &= VT_BTYPE;
-#if PTR_SIZE == 4
+#if PTR_SIZE == 4 && !defined TCC_NATIVE_I64
     if (t == VT_LLONG)
         return REG_IRE2;
 #elif defined TCC_TARGET_X86_64
@@ -312,12 +316,20 @@ static void PUT_R_RET(SValue *sv, int t)
 /* returns function return register class for type t */
 static int RC_RET(int t)
 {
-    return reg_classes[R_RET(t)] & ~(RC_FLOAT | RC_INT);
+    return reg_classes[R_RET(t)] & ~(RC_FLOAT | RC_INT
+#ifdef TCC_NATIVE_I64
+                                      | RC_I64
+#endif
+                                      );
 }
 
 /* returns generic register class for type t */
 static int RC_TYPE(int t)
 {
+#ifdef TCC_NATIVE_I64
+    if ((t & VT_BTYPE) == VT_LLONG)
+        return RC_I64;
+#endif
     if (!is_float(t))
         return RC_INT;
 #ifdef TCC_TARGET_X86_64
@@ -2286,7 +2298,7 @@ ST_FUNC void gv2(int rc1, int rc2)
     }
 }
 
-#if PTR_SIZE == 4
+#if PTR_SIZE == 4 && !defined TCC_NATIVE_I64
 /* expand 64bit on stack in two ints */
 ST_FUNC void lexpand(void)
 {
@@ -2309,7 +2321,7 @@ ST_FUNC void lexpand(void)
 }
 #endif
 
-#if PTR_SIZE == 4
+#if PTR_SIZE == 4 && !defined TCC_NATIVE_I64
 /* build a long long from two ints */
 static void lbuild(int t)
 {
@@ -2327,7 +2339,7 @@ static void gv_dup(void)
     int t, rc, r;
 
     t = vtop->type.t;
-#if PTR_SIZE == 4
+#if PTR_SIZE == 4 && !defined TCC_NATIVE_I64
     if ((t & VT_BTYPE) == VT_LLONG) {
         if (t & VT_BITFIELD) {
             gv(RC_INT);
@@ -2358,7 +2370,7 @@ static void gv_dup(void)
     vtop->r = r;
 }
 
-#if PTR_SIZE == 4
+#if PTR_SIZE == 4 && !defined TCC_NATIVE_I64
 /* generate CPU independent (unsigned) long long operations */
 static void gen_opl(int op)
 {
@@ -3251,7 +3263,7 @@ redo:
                 vswap();
                 t = t1, t1 = t2, t2 = t;
             }
-#if PTR_SIZE == 4
+#if PTR_SIZE == 4 && !defined TCC_NATIVE_I64
             if ((vtop[0].type.t & VT_BTYPE) == VT_LLONG)
                 /* XXX: truncate here because gen_opl can't handle ptr + long long */
                 gen_cast_s(VT_INT);
@@ -3576,10 +3588,14 @@ again:
                 goto done; /* no 64bit envolved */
             }
         }
-        gv(RC_INT);
+        gv(
+#ifdef TCC_NATIVE_I64
+           ss == 8 ? RC_I64 :
+#endif
+           RC_INT);
 
         trunc = 0;
-#if PTR_SIZE == 4
+#if PTR_SIZE == 4 && !defined TCC_NATIVE_I64
         if (ds == 8) {
             /* generate high word */
             if (sbt & VT_UNSIGNED) {
@@ -3598,11 +3614,21 @@ again:
         }
         ss = 4;
 
+#elif defined TCC_NATIVE_I64 && PTR_SIZE == 4
+        if (ds == 8 && ss <= 4) {
+            gen_cvt_i32_i64(!!(sbt & VT_UNSIGNED));
+            goto done;
+        } else if (ss == 8 && ds <= 4) {
+            gen_cvt_i64_i32();
+            ss = 4;
+        } else {
+            ss = 4;
+        }
 #elif PTR_SIZE == 8
         if (ds == 8) {
             /* need to convert from 32bit to 64bit */
             if (sbt & VT_UNSIGNED) {
-#if defined(TCC_TARGET_RISCV64)
+#ifdef TCC_SIGN_EXTENDS_I32
                 /* RISC-V keeps 32bit vals in registers sign-extended.
                    So here we need a zero-extension.  */
                 trunc = 32;
@@ -3618,7 +3644,7 @@ again:
             /* RISC-V keeps 32bit vals in registers sign-extended.
                So here we need a sign-extension for signed types and
                zero-extension. for unsigned types. */
-#if !defined(TCC_TARGET_RISCV64)
+#ifndef TCC_SIGN_EXTENDS_I32
             trunc = 32; /* zero upper 32 bits for non RISC-V targets */
 #endif
         } else {
