@@ -331,7 +331,7 @@ static void run_init_test(void) {
  * feeds those commands in lives outside the kernel entirely: real
  * QEMU via kernel/test/boot_test.py's --stdin-input (-serial stdio
  * maps straight onto the process's own stdin), and emulator/js/'s own
- * --input (uart.js's pushInput(), there since P3, exercised for real
+ * input argument (the C emulator's UART ring, exercised for real
  * for the first time here) -- see kernel/Makefile for exactly what
  * gets typed. */
 static void run_interactive_test(void) {

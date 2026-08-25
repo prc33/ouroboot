@@ -80,7 +80,7 @@ void pmm_init(unsigned int mem_top, unsigned int base) {
  * sequence's cumulative cost effectively quadratic in how much had
  * been allocated -- fine at P1-P8's scale (never enough allocations
  * for the effect to be visible), bad enough by checkpoint 9's real
- * busybox-sized workload that the JS emulator's own test genuinely
+ * busybox-sized workload that the Wasm emulator's own test genuinely
  * didn't finish in 20 real minutes where QEMU took seconds (QEMU
  * runs the *actual instructions* at native speed regardless of how
  * many extra ones this loop executes; the JS interpreter pays for

@@ -1,7 +1,8 @@
 TCC := ../../compiler/wasm32-tcc
+I386_TCC ?= ../../compiler/tcc
 RV64_WASM := ../js/rv64.wasm
 
-.PHONY: all test test-boot test-shell serve clean
+.PHONY: all native test test-boot test-shell serve clean
 
 all: examples.wasm $(RV64_WASM)
 
@@ -13,6 +14,11 @@ examples.wasm: examples.c $(TCC)
 
 $(RV64_WASM): rv64.c $(TCC)
 	$(TCC) -nostdlib -o $@ $<
+
+native: rv64-run
+
+rv64-run: runner.c rv64.c
+	$(I386_TCC) -O2 -o $@ runner.c
 
 test: examples.wasm
 	node test.mjs
@@ -29,4 +35,4 @@ serve: examples.wasm
 	python3 -m http.server 8000
 
 clean:
-	rm -f examples.wasm $(RV64_WASM)
+	rm -f examples.wasm $(RV64_WASM) rv64-run

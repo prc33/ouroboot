@@ -1,16 +1,12 @@
 <!DOCTYPE html>
 <!--
-  P3 (docs/emulator-plan.md): kernel/kernel.elf running in an actual
-  browser tab, via xterm.js over the same UART byte interface the
-  kernel's own serial console uses. All CPU emulation runs in
-  worker.js (a Web Worker), off the main thread -- this page is only
-  xterm.js setup + the fetch()/postMessage plumbing in app.js.
+  The TCC-built C emulator runs as WebAssembly in worker.js. This page only
+  provides the terminal and fetches the guest kernel.
 
   Serve this directory over HTTP (file:// won't do -- fetch() and
   Worker module loading both need a real origin), e.g.:
-    cd emulator/js && python3 -m http.server 8000
-  then open http://localhost:8000/index.html (kernel/kernel.elf must
-  already be built: cd ../../kernel && make ARCH=riscv64).
+    python3 -m http.server 8000
+  from the repository root, then open /emulator/js/.
 -->
 <html lang="en">
 <head>
