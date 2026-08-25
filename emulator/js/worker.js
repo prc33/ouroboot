@@ -50,9 +50,7 @@ function runChunk() {
 	 * same reasoning as any cooperative-yielding loop. */
 	const CHUNK = 200000;
 	try {
-		for (let i = 0; i < CHUNK; i++) {
-			cpu.step(100n); /* time-advance=100, matches test-js's tuning -- see kernel/Makefile */
-		}
+		cpu.run(CHUNK, 100); /* time-advance=100, matches test-js's tuning -- see kernel/Makefile */
 	} catch (e) {
 		running = false;
 		flushOutput();
@@ -75,7 +73,7 @@ onmessage = function (ev) {
 			mem.loadBytes(seg.vaddr, seg.data);
 
 		cpu = new Cpu(mem);
-		cpu.pc = elf.entry;
+		cpu.pc = Number(elf.entry);
 		running = true;
 		runChunk();
 	} else if (msg.type === 'input') {

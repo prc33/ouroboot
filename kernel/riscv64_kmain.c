@@ -417,6 +417,15 @@ void kmain(unsigned long hartid, unsigned long dtb) {
 	run_pmm_reserve_test();
 	paging_init(RV64_MEM_TOP);
 
+#ifdef KERNEL_DIRECT_SHELL
+	/* Product/performance boot: the checkpoint chain remains the default test
+	 * build, but a user waiting for ash should not have to execute every
+	 * historical milestone first. Use the same process and exec path as P10. */
+	syscall_init();
+	process_init();
+	run_interactive_test();
+#endif
+
 	run_cow_test();
 	run_cow_user_test();
 

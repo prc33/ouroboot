@@ -68,7 +68,7 @@ else
 $(error unknown ARCH '$(ARCH)' -- expected i386 or riscv64)
 endif
 
-.PHONY: all test test-js clean
+.PHONY: all test test-js shell-js clean
 
 all: kernel.elf
 
@@ -256,7 +256,29 @@ test-js: kernel.elf
 		--time-advance 100 \
 		--input "$(RISCV64_INTERACTIVE_INPUT)" \
 		$(RISCV64_TEST_ASSERTIONS)
+
+# Direct product boot used for interactive development and the emulator's
+# startup-time budget. It runs the exact same P10 process/BusyBox path while
+# leaving the full historical checkpoint sequence in `test-js` untouched.
+SHELL_OBJS := $(patsubst riscv64_kmain.o,riscv64_kmain_shell.o,$(OBJS))
+
+riscv64_kmain_shell.o: riscv64_kmain.c kernel.h
+	$(TCC) $(CFLAGS) -DKERNEL_DIRECT_SHELL -c -o $@ $<
+
+kernel-shell.elf: $(SHELL_OBJS)
+	$(TCC) $(LDFLAGS) -o $@ $(SHELL_OBJS)
+
+shell-js: kernel-shell.elf
+	node ../emulator/js/boot.js kernel-shell.elf \
+		--max-instructions 200000000 \
+		--time-advance 100 \
+		--input "$(RISCV64_INTERACTIVE_INPUT)" \
+		--must-contain "built-in shell (ash)" \
+		--must-not-contain "FATAL" \
+		--must-not-contain "UNHANDLED EXCEPTION" \
+		--must-not-contain "UNHANDLED INTERRUPT" \
+		--must-not-contain "PAGE FAULT"
 endif
 
 clean:
-	rm -f kernel.elf $(OBJS)
+	rm -f kernel.elf kernel-shell.elf riscv64_kmain_shell.o $(OBJS)

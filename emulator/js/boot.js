@@ -26,14 +26,14 @@ const { Cpu } = require('./cpu');
 const { loadElf } = require('./elf');
 
 function parseArgs(argv) {
-	const args = { mustContain: [], mustNotContain: [], maxInstructions: 200_000_000, timeAdvance: 1n, input: '' };
+	const args = { mustContain: [], mustNotContain: [], maxInstructions: 200_000_000, timeAdvance: 1, input: '' };
 	let kernel = null;
 	for (let i = 0; i < argv.length; i++) {
 		const a = argv[i];
 		if (a === '--must-contain') args.mustContain.push(argv[++i]);
 		else if (a === '--must-not-contain') args.mustNotContain.push(argv[++i]);
 		else if (a === '--max-instructions') args.maxInstructions = Number(argv[++i]);
-		else if (a === '--time-advance') args.timeAdvance = BigInt(argv[++i]);
+		else if (a === '--time-advance') args.timeAdvance = Number(argv[++i]);
 		else if (a === '--input') args.input = argv[++i].replace(/\\n/g, '\n').replace(/\\r/g, '\r'); /* literal \n/\r -> real newline/CR, same convention as test/boot_test.py's --stdin-input */
 		else if (!kernel) kernel = a;
 		else throw new Error(`unexpected arg: ${a}`);
@@ -57,32 +57,28 @@ function boot(args) {
 		mem.loadBytes(seg.vaddr, seg.data);
 
 	const cpu = new Cpu(mem);
-	cpu.pc = elf.entry;
+	cpu.pc = Number(elf.entry);
 	/* Real hardware/QEMU leaves sp garbage at reset -- boot/riscv64_boot.S
 	 * is responsible for setting it itself (see kernel/arch/riscv64_memmap.h).
 	 * We deliberately do NOT set x2 here, so a bug in that assumption
 	 * would surface the same way it would on real hardware. */
 
-	/* Checking every --must-contain string against the whole captured
-	 * output is real work (checkpoint 10's own test has ~40 of them,
-	 * against an output string that grows past 10KB by the time it's
-	 * done) -- doing it after literally every single instruction, as
-	 * this loop did through checkpoint 9, is O(instructions x
-	 * assertions x output length) for no benefit: the loop doesn't
-	 * need to notice the exact instruction everything showed up on,
-	 * just notice *soon enough*. Checkpoint 9's instruction counts
-	 * never made this matter; checkpoint 10's real interactive read()
-	 * loop (spin-polling the UART, arch/riscv64_syscall.c's sys_read)
-	 * runs tens of millions of extra instructions past what checkpoint
-	 * 9 needed, and checking this often made that alone take minutes
-	 * longer than the CPU emulation itself did -- found by timing
-	 * `make ARCH=riscv64 test-js` against this exact checkpoint. */
-	const CHECK_EVERY = 10000;
 	let n = 0;
-	for (; n < args.maxInstructions; n++) {
-		cpu.step(args.timeAdvance);
-		if (n % CHECK_EVERY === 0 && args.mustContain.every((s) => output.includes(s)))
-			break; /* early exit once everything we're waiting for has shown up */
+	let checkedOutputLength = -1;
+	const batchSize = 10_000;
+	for (; n < args.maxInstructions;) {
+		const batch = Math.min(batchSize, args.maxInstructions - n);
+		cpu.run(batch, args.timeAdvance);
+		n += batch;
+		/* Required strings can only become true when the UART emits output.
+		 * BusyBox executes millions of instructions between characters, so
+		 * rescanning the whole transcript after every instruction was pure
+		 * harness overhead. */
+		if (output.length !== checkedOutputLength) {
+			checkedOutputLength = output.length;
+			if (args.mustContain.every((s) => output.includes(s)))
+				break; /* early exit once everything we're waiting for has shown up */
+		}
 	}
 
 	return { output, instructionsRun: n, cpu };

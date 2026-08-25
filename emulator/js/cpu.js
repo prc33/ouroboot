@@ -38,7 +38,7 @@
 
 const { CSR, SSTATUS_SIE, SSTATUS_SPIE, SSTATUS_SPP, SSTATUS_SUM, SIE_STIE, SIP_STIP } = require('./csr');
 const { translate, PageFault } = require('./mmu');
-const { BusError } = require('./memory');
+const { BusError, RAM_BASE } = require('./memory');
 
 const MASK64 = (1n << 64n) - 1n;
 
@@ -70,7 +70,13 @@ const fConvView = new DataView(fConvBuf);
 class Cpu {
 	constructor(mem) {
 		this.mem = mem;
-		this.x = new Array(32).fill(0n);
+		/* Typed storage applies RV64's modulo-2^64 register semantics on
+		 * assignment, avoiding an explicit BigInt mask after every write. */
+		this.x = new BigUint64Array(32);
+		/* Exact Number mirror for address generation. Ouroboot maps all RAM,
+		 * userspace, stacks, and MMIO below 4GB; full-width arithmetic still
+		 * uses x above. */
+		this.xNumber = new Float64Array(32);
 		/* 32 float/double registers, stored as raw 64-bit bit patterns
 		 * (BigUint64Array) -- the single source of truth, same as real
 		 * hardware. Single-precision values are NaN-boxed (upper 32 bits
@@ -78,18 +84,53 @@ class Cpu {
 		 * that, getF64/setF64 the plain double case, getFBits/setFBits
 		 * the raw-move case fmv.x.d/fld/fsd/etc. need. */
 		this.f = new BigUint64Array(32);
-		this.pc = 0n;
+		/* Every executable mapping in this machine is below 4GB, where a JS
+		 * Number is exact. GPRs remain full RV64 BigInts. */
+		this.pc = 0;
 		this.priv = 'S'; /* E4: start directly in S-mode, no OpenSBI/M-mode */
 		this.csr = new Map();
 		for (const addr of Object.values(CSR))
 			this.csr.set(addr, 0n);
-		this.time = 0n;
+		/* Hot CSR mirrors. Fetch and interrupt checks touch these on every
+		 * instruction; the Map remains the canonical interface for the rare
+		 * guest CSR instructions. setCsr keeps both representations together. */
+		this.satp = 0n;
+		this.sstatus = 0n;
+		this.sum = false;
+		/* The modeled time cannot approach Number's exact-integer limit in a
+		 * boot run. Keep the hot per-instruction clock as a Number and convert
+		 * only when the guest explicitly reads the 64-bit TIME CSR. */
+		this.time = 0;
+		this.timecmp = 0;
 		this.halted = false; /* set by wfi; cleared when an interrupt becomes pending */
-		this.instret = 0n;
+		/* One last-page translation for each access kind. Instruction fetches
+		 * normally stay on one 4KB page for thousands of instructions; walking
+		 * all three Sv39 levels for every one dominated runtime. This deliberately
+		 * tiny TLB captures that locality without a replacement policy or a
+		 * general cache. satp and the permission-relevant privilege state are
+		 * part of the tag, and sfence.vma invalidates all three entries. */
+		this.tlbVpage = [-1n, -1n, -1n];
+		this.tlbPpage = [0n, 0n, 0n];
+		this.tlbRamOffset = [-1, -1, -1];
+		this.tlbSatp = [0n, 0n, 0n];
+		this.tlbContext = [-1, -1, -1];
+		/* Loads and stores range across many pages, so each gets a tiny
+		 * direct-mapped 256-page cache. The indexing rule is the replacement
+		 * policy; there is no list, allocation, or search on the hot path. */
+		this.dataTlbVpage = new Float64Array(512);
+		this.dataTlbVpage.fill(-1);
+		this.dataTlbPpage = new Array(512).fill(0n);
+		this.dataTlbSatp = new Array(512).fill(0n);
+		this.dataTlbContext = new Int8Array(512);
 	}
 
 	getX(i) { return i === 0 ? 0n : this.x[i]; }
-	setX(i, v) { if (i !== 0) this.x[i] = v & MASK64; }
+	setX(i, v) {
+		if (i !== 0) {
+			this.x[i] = v;
+			this.xNumber[i] = Number(this.x[i]);
+		}
+	}
 
 	getFBits(i) { return this.f[i]; }
 	setFBits(i, bits) { this.f[i] = BigInt.asUintN(64, bits); }
@@ -139,24 +180,75 @@ class Cpu {
 	}
 
 	getCsr(addr) {
-		if (addr === CSR.TIME) return this.time;
+		if (addr === CSR.TIME) return BigInt(this.time);
+		if (addr === CSR.SATP) return this.satp;
+		if (addr === CSR.SSTATUS) return this.sstatus;
 		return this.csr.get(addr) ?? 0n;
 	}
 	setCsr(addr, v) {
-		this.csr.set(addr, v & MASK64);
+		v &= MASK64;
+		this.csr.set(addr, v);
+		if (addr === CSR.SATP) this.satp = v;
+		if (addr === CSR.SSTATUS) {
+			this.sstatus = v;
+			this.sum = (v & SSTATUS_SUM) !== 0n;
+		}
+		if (addr === CSR.STIMECMP) {
+			this.timecmp = Number(v);
+			if (this.timecmp === 0 || this.time < this.timecmp)
+				this.csr.set(CSR.SIP, (this.csr.get(CSR.SIP) ?? 0n) & ~SIP_STIP);
+		}
 	}
 
 	/* --- memory access, MMU + fault translation --- */
 
 	translateAddr(vaddr, access) {
-		const satp = this.getCsr(CSR.SATP);
-		const sum = (this.getCsr(CSR.SSTATUS) & SSTATUS_SUM) !== 0n;
-		return translate(this.mem, satp, vaddr, access, this.priv, sum);
+		const satp = this.satp;
+		const sum = this.sum;
+		const vpage = Math.floor(vaddr / 4096);
+		const context = (this.priv === 'U' ? 1 : 0) | (sum ? 2 : 0);
+		const slot = (vpage & 0xff) + (access === 'w' ? 256 : 0);
+		if (this.dataTlbVpage[slot] === vpage &&
+		    this.dataTlbSatp[slot] === satp &&
+		    this.dataTlbContext[slot] === context)
+			return this.dataTlbPpage[slot] | BigInt(vaddr & 0xfff);
+
+		const paddr = translate(this.mem, satp, BigInt(vaddr), access, this.priv, sum);
+		this.dataTlbVpage[slot] = vpage;
+		this.dataTlbPpage[slot] = paddr & ~0xfffn;
+		this.dataTlbSatp[slot] = satp;
+		this.dataTlbContext[slot] = context;
+		return paddr;
+	}
+
+	flushTlb() {
+		this.tlbVpage[0] = this.tlbVpage[1] = this.tlbVpage[2] = -1n;
+		this.dataTlbVpage.fill(-1);
 	}
 
 	fetch32(vaddr) {
-		const paddr = this.translateAddr(vaddr, 'x');
-		return this.mem.read(paddr, 4);
+		const satp = this.satp;
+		const sum = this.sum;
+		const vpage = Math.floor(vaddr / 4096);
+		const context = (this.priv === 'U' ? 1 : 0) | (sum ? 2 : 0);
+		if (this.tlbVpage[0] === vpage &&
+		    this.tlbSatp[0] === satp &&
+		    this.tlbContext[0] === context &&
+		    this.tlbRamOffset[0] >= 0)
+			return this.mem.ram.getUint32(this.tlbRamOffset[0] + (vaddr & 0xfff), true);
+
+		const paddr = translate(this.mem, satp, BigInt(vaddr), 'x', this.priv, sum);
+		this.tlbVpage[0] = vpage;
+		this.tlbPpage[0] = paddr & ~0xfffn;
+		this.tlbSatp[0] = satp;
+		this.tlbContext[0] = context;
+		const off = paddr - RAM_BASE;
+		if (off < 0n || off + 4n > this.mem.ramSize) {
+			this.tlbRamOffset[0] = -1;
+			return Number(this.mem.read(paddr, 4));
+		}
+		this.tlbRamOffset[0] = Number((paddr & ~0xfffn) - RAM_BASE);
+		return this.mem.ram.getUint32(Number(off), true);
 	}
 
 	load(vaddr, size, access = 'r') {
@@ -173,7 +265,7 @@ class Cpu {
 
 	raiseTrap(cause, tval, isInterrupt) {
 		const causeVal = isInterrupt ? (cause | (1n << 63n)) : cause;
-		this.setCsr(CSR.SEPC, this.pc);
+		this.setCsr(CSR.SEPC, BigInt(this.pc));
 		this.setCsr(CSR.SCAUSE, causeVal);
 		this.setCsr(CSR.STVAL, tval);
 
@@ -185,7 +277,7 @@ class Cpu {
 		this.setCsr(CSR.SSTATUS, sstatus);
 
 		this.priv = 'S';
-		this.pc = this.getCsr(CSR.STVEC) & ~0x3n; /* direct mode only -- low 2 bits are the mode field, kernel always uses 0 */
+		this.pc = Number(this.getCsr(CSR.STVEC) & ~0x3n); /* direct mode only -- low 2 bits are the mode field, kernel always uses 0 */
 		this.halted = false;
 	}
 
@@ -212,10 +304,9 @@ class Cpu {
 	}
 
 	checkInterrupts() {
-		if (this.time >= this.getCsr(CSR.STIMECMP))
-			this.setCsr(CSR.SIP, this.getCsr(CSR.SIP) | SIP_STIP);
-		else
-			this.setCsr(CSR.SIP, this.getCsr(CSR.SIP) & ~SIP_STIP);
+		if (this.timecmp === 0 || this.time < this.timecmp)
+			return false;
+		this.setCsr(CSR.SIP, this.getCsr(CSR.SIP) | SIP_STIP);
 
 		const sstatus = this.getCsr(CSR.SSTATUS);
 		const globallyEnabled = this.priv === 'U' || (this.priv === 'S' && (sstatus & SSTATUS_SIE));
@@ -231,28 +322,39 @@ class Cpu {
 	/* --- main loop --- */
 
 	step(timeAdvance) {
-		this.time += timeAdvance;
-		if (this.checkInterrupts())
-			return;
-		if (this.halted)
-			return;
+		this.run(1, timeAdvance);
+	}
 
-		let inst;
-		try {
-			inst = this.fetch32(this.pc);
-		} catch (e) {
-			if (this.handleAccessFault(e, 'x')) return;
-			throw e;
-		}
+	/* Run a host-side batch without paying one JS method call per guest
+	 * instruction. Interrupts and time still advance instruction by
+	 * instruction inside the loop. */
+	run(count, timeAdvance) {
+		for (let i = 0; i < count; i++) {
+			this.time += timeAdvance;
+			if (this.timecmp !== 0 && this.time >= this.timecmp && this.checkInterrupts())
+				continue;
+			if (this.halted)
+				continue;
 
-		try {
-			this.execute(Number(inst));
-		} catch (e) {
-			if (e instanceof IllegalInstruction) { this.raiseTrap(2n, inst, false); return; }
-			if (this.handleAccessFault(e, e.accessKind || 'r')) return;
-			throw e;
+			let inst;
+			try {
+				inst = this.fetch32(this.pc);
+			} catch (e) {
+				if (this.handleAccessFault(e, 'x')) continue;
+				throw e;
+			}
+
+			try {
+				this.execute(inst);
+			} catch (e) {
+				if (e instanceof IllegalInstruction) {
+					this.raiseTrap(2n, BigInt(inst), false);
+					continue;
+				}
+				if (this.handleAccessFault(e, e.accessKind || 'r')) continue;
+				throw e;
+			}
 		}
-		this.instret++;
 	}
 
 	/* --- decode + execute --- */
@@ -266,63 +368,57 @@ class Cpu {
 		const funct7 = (inst >>> 25) & 0x7f;
 
 		const pc = this.pc;
-		let nextPc = pc + 4n;
+		let nextPc = pc + 4;
 
 		switch (opcode) {
 			case 0x37: { /* LUI */
-				this.setX(rd, sext(BigInt(inst & 0xfffff000) & 0xffffffffn, 32));
+				this.setX(rd, BigInt((inst & 0xfffff000) | 0));
 				break;
 			}
 			case 0x17: { /* AUIPC */
-				const imm = sext(BigInt(inst & 0xfffff000) & 0xffffffffn, 32);
-				this.setX(rd, (pc + imm) & MASK64);
+				const imm = BigInt((inst & 0xfffff000) | 0);
+				this.setX(rd, BigInt(pc) + imm);
 				break;
 			}
 			case 0x6f: { /* JAL */
-				const imm = sext(
-					(BigInt((inst >>> 21) & 0x3ff) << 1n) |
-					(BigInt((inst >>> 20) & 0x1) << 11n) |
-					(BigInt((inst >>> 12) & 0xff) << 12n) |
-					(BigInt((inst >>> 31) & 0x1) << 20n),
-					21
-				);
-				this.setX(rd, nextPc);
-				nextPc = (pc + imm) & MASK64;
+				let imm = (((inst >>> 21) & 0x3ff) << 1) |
+				          (((inst >>> 20) & 0x1) << 11) |
+				          (((inst >>> 12) & 0xff) << 12) |
+				          (((inst >>> 31) & 0x1) << 20);
+				if (imm & 0x100000) imm -= 0x200000;
+				this.setX(rd, BigInt(nextPc));
+				nextPc = pc + imm;
 				break;
 			}
 			case 0x67: { /* JALR */
-				const imm = sext(BigInt(inst >>> 20), 12);
+				const imm = BigInt(inst >> 20);
 				const target = (this.getX(rs1) + imm) & ~1n & MASK64;
-				this.setX(rd, nextPc);
-				nextPc = target;
+				this.setX(rd, BigInt(nextPc));
+				nextPc = Number(target);
 				break;
 			}
 			case 0x63: { /* BRANCH */
-				const imm = sext(
-					(BigInt((inst >>> 8) & 0xf) << 1n) |
-					(BigInt((inst >>> 25) & 0x3f) << 5n) |
-					(BigInt((inst >>> 7) & 0x1) << 11n) |
-					(BigInt((inst >>> 31) & 0x1) << 12n),
-					13
-				);
+				let imm = (((inst >>> 8) & 0xf) << 1) |
+				          (((inst >>> 25) & 0x3f) << 5) |
+				          (((inst >>> 7) & 0x1) << 11) |
+				          (((inst >>> 31) & 0x1) << 12);
+				if (imm & 0x1000) imm -= 0x2000;
 				const a = this.getX(rs1), b = this.getX(rs2);
-				const as = BigInt.asIntN(64, a), bs = BigInt.asIntN(64, b);
 				let taken;
 				switch (funct3) {
 					case 0: taken = a === b; break;          /* beq */
 					case 1: taken = a !== b; break;           /* bne */
-					case 4: taken = as < bs; break;            /* blt */
-					case 5: taken = as >= bs; break;            /* bge */
+					case 4: taken = BigInt.asIntN(64, a) < BigInt.asIntN(64, b); break; /* blt */
+					case 5: taken = BigInt.asIntN(64, a) >= BigInt.asIntN(64, b); break; /* bge */
 					case 6: taken = a < b; break;                /* bltu */
 					case 7: taken = a >= b; break;                /* bgeu */
 					default: throw new IllegalInstruction(inst);
 				}
-				if (taken) nextPc = (pc + imm) & MASK64;
+				if (taken) nextPc = pc + imm;
 				break;
 			}
 			case 0x03: { /* LOAD */
-				const imm = sext(BigInt(inst >>> 20), 12);
-				const addr = (this.getX(rs1) + imm) & MASK64;
+				const addr = this.xNumber[rs1] + (inst >> 20);
 				let v;
 				try {
 					switch (funct3) {
@@ -340,8 +436,7 @@ class Cpu {
 				break;
 			}
 			case 0x23: { /* STORE */
-				const imm = sext((BigInt((inst >>> 7) & 0x1f)) | (BigInt((inst >>> 25) & 0x7f) << 5n), 12);
-				const addr = (this.getX(rs1) + imm) & MASK64;
+				const addr = this.xNumber[rs1] + (((inst >> 25) << 5) | ((inst >>> 7) & 0x1f));
 				const v = this.getX(rs2);
 				try {
 					switch (funct3) {
@@ -355,16 +450,16 @@ class Cpu {
 				break;
 			}
 			case 0x13: { /* OP-IMM */
-				const imm = sext(BigInt(inst >>> 20), 12);
+				const imm = BigInt(inst >> 20);
 				const a = this.getX(rs1);
-				const shamt = BigInt(inst >>> 20) & 0x3fn;
+				const shamt = BigInt((inst >>> 20) & 0x3f);
 				let v;
 				switch (funct3) {
-					case 0: v = (a + imm) & MASK64; break;                       /* addi */
-					case 1: v = (a << shamt) & MASK64; break;                     /* slli */
+					case 0: v = a + imm; break; /* addi */
+					case 1: v = a << shamt; break;                                /* slli */
 					case 2: v = BigInt.asIntN(64, a) < BigInt.asIntN(64, imm) ? 1n : 0n; break; /* slti */
-					case 3: v = a < (imm & MASK64) ? 1n : 0n; break;               /* sltiu */
-					case 4: v = a ^ imm; break;                                     /* xori */
+					case 3: v = a < (imm & MASK64) ? 1n : 0n; break; /* sltiu */
+					case 4: v = a ^ imm; break; /* xori */
 					case 5: {
 						if (((inst >>> 25) & 0x7f) & 0x20) /* srai */
 							v = BigInt.asUintN(64, BigInt.asIntN(64, a) >> shamt);
@@ -380,49 +475,55 @@ class Cpu {
 				break;
 			}
 			case 0x1b: { /* OP-IMM-32 */
-				const a32 = BigInt.asIntN(32, this.getX(rs1) & 0xffffffffn);
-				const shamt = BigInt(inst >>> 20) & 0x1fn;
+				const a32 = Number(this.getX(rs1) & 0xffffffffn) | 0;
+				const shamt = (inst >>> 20) & 0x1f;
 				let v32;
 				switch (funct3) {
-					case 0: v32 = BigInt.asIntN(32, a32 + sext(BigInt(inst >>> 20), 12)); break; /* addiw */
-					case 1: v32 = BigInt.asIntN(32, BigInt.asUintN(32, a32) << shamt); break;      /* slliw */
+					case 0: v32 = (a32 + (inst >> 20)) | 0; break; /* addiw */
+					case 1: v32 = a32 << shamt; break;                /* slliw */
 					case 5: {
-						const u32 = BigInt.asUintN(32, a32);
 						if (((inst >>> 25) & 0x7f) & 0x20)
-							v32 = BigInt.asIntN(32, a32 >> shamt); /* sraiw */
+							v32 = a32 >> shamt; /* sraiw */
 						else
-							v32 = BigInt.asIntN(32, u32 >> shamt);  /* srliw */
+							v32 = (a32 >>> shamt) | 0; /* srliw */
 						break;
 					}
 					default: throw new IllegalInstruction(inst);
 				}
-				this.setX(rd, sext(BigInt.asUintN(32, v32), 32));
+				this.setX(rd, BigInt(v32));
 				break;
 			}
 			case 0x33: { /* OP (incl. M extension when funct7=1) */
 				const a = this.getX(rs1), b = this.getX(rs2);
-				const as = BigInt.asIntN(64, a), bs = BigInt.asIntN(64, b);
 				let v;
 				if (funct7 === 0x01) {
 					switch (funct3) {
-						case 0: v = (a * b) & MASK64; break;                                    /* mul */
-						case 1: v = BigInt.asUintN(64, (as * bs) >> 64n); break;                  /* mulh */
-						case 2: v = BigInt.asUintN(64, (as * b) >> 64n); break;                     /* mulhsu (b treated unsigned) */
+						case 0: v = a * b; break;                                             /* mul */
+						case 1: v = BigInt.asUintN(64, (BigInt.asIntN(64, a) * BigInt.asIntN(64, b)) >> 64n); break; /* mulh */
+						case 2: v = BigInt.asUintN(64, (BigInt.asIntN(64, a) * b) >> 64n); break; /* mulhsu */
 						case 3: v = BigInt.asUintN(64, (a * b) >> 64n); break;                        /* mulhu */
-						case 4: v = bs === 0n ? MASK64 : (bs === -1n && as === -(1n << 63n) ? as & MASK64 : BigInt.asUintN(64, as / bs)); break; /* div */
+						case 4: {
+							const as = BigInt.asIntN(64, a), bs = BigInt.asIntN(64, b);
+							v = bs === 0n ? MASK64 : (bs === -1n && as === -(1n << 63n) ? as & MASK64 : BigInt.asUintN(64, as / bs));
+							break;
+						}
 						case 5: v = b === 0n ? MASK64 : a / b; break;                                     /* divu */
-						case 6: v = bs === 0n ? a : (bs === -1n && as === -(1n << 63n) ? 0n : BigInt.asUintN(64, as % bs)); break; /* rem */
+						case 6: {
+							const as = BigInt.asIntN(64, a), bs = BigInt.asIntN(64, b);
+							v = bs === 0n ? a : (bs === -1n && as === -(1n << 63n) ? 0n : BigInt.asUintN(64, as % bs));
+							break;
+						}
 						case 7: v = b === 0n ? a : a % b; break;                                            /* remu */
 						default: throw new IllegalInstruction(inst);
 					}
 				} else {
 					switch (funct3) {
-						case 0: v = funct7 & 0x20 ? (a - b) & MASK64 : (a + b) & MASK64; break; /* sub/add */
-						case 1: v = (a << (b & 0x3fn)) & MASK64; break;                           /* sll */
-						case 2: v = as < bs ? 1n : 0n; break;                                       /* slt */
+						case 0: v = funct7 & 0x20 ? a - b : a + b; break; /* sub/add */
+						case 1: v = a << (b & 0x3fn); break;             /* sll */
+						case 2: v = BigInt.asIntN(64, a) < BigInt.asIntN(64, b) ? 1n : 0n; break; /* slt */
 						case 3: v = a < b ? 1n : 0n; break;                                           /* sltu */
 						case 4: v = a ^ b; break;                                                       /* xor */
-						case 5: v = funct7 & 0x20 ? BigInt.asUintN(64, as >> (b & 0x3fn)) : a >> (b & 0x3fn); break; /* sra/srl */
+						case 5: v = funct7 & 0x20 ? BigInt.asUintN(64, BigInt.asIntN(64, a) >> (b & 0x3fn)) : a >> (b & 0x3fn); break; /* sra/srl */
 						case 6: v = a | b; break;                                                          /* or */
 						case 7: v = a & b; break;                                                           /* and */
 						default: throw new IllegalInstruction(inst);
@@ -432,35 +533,34 @@ class Cpu {
 				break;
 			}
 			case 0x3b: { /* OP-32 (incl. M extension when funct7=1) */
-				const a32 = BigInt.asIntN(32, this.getX(rs1) & 0xffffffffn);
-				const b32 = BigInt.asIntN(32, this.getX(rs2) & 0xffffffffn);
-				const bshamt = this.getX(rs2) & 0x1fn;
+				const a32 = Number(this.getX(rs1) & 0xffffffffn) | 0;
+				const b32 = Number(this.getX(rs2) & 0xffffffffn) | 0;
+				const bshamt = b32 & 0x1f;
 				let v32;
 				if (funct7 === 0x01) {
 					switch (funct3) {
-						case 0: v32 = BigInt.asIntN(32, a32 * b32); break; /* mulw */
-						case 4: v32 = b32 === 0n ? -1n : (b32 === -1n && a32 === -(1n << 31n) ? a32 : a32 / b32); break; /* divw */
-						case 5: v32 = b32 === 0n ? -1n : BigInt.asIntN(32, BigInt.asUintN(32, a32) / BigInt.asUintN(32, b32)); break; /* divuw */
-						case 6: v32 = b32 === 0n ? a32 : (b32 === -1n && a32 === -(1n << 31n) ? 0n : a32 % b32); break; /* remw */
-						case 7: v32 = b32 === 0n ? a32 : BigInt.asIntN(32, BigInt.asUintN(32, a32) % BigInt.asUintN(32, b32)); break; /* remuw */
+						case 0: v32 = Math.imul(a32, b32); break; /* mulw */
+						case 4: v32 = b32 === 0 ? -1 : (b32 === -1 && a32 === -2147483648 ? a32 : Math.trunc(a32 / b32) | 0); break; /* divw */
+						case 5: v32 = b32 === 0 ? -1 : (Math.trunc((a32 >>> 0) / (b32 >>> 0)) | 0); break; /* divuw */
+						case 6: v32 = b32 === 0 ? a32 : (b32 === -1 && a32 === -2147483648 ? 0 : (a32 % b32) | 0); break; /* remw */
+						case 7: v32 = b32 === 0 ? a32 : (((a32 >>> 0) % (b32 >>> 0)) | 0); break; /* remuw */
 						default: throw new IllegalInstruction(inst);
 					}
 				} else {
 					switch (funct3) {
-						case 0: v32 = funct7 & 0x20 ? BigInt.asIntN(32, a32 - b32) : BigInt.asIntN(32, a32 + b32); break; /* subw/addw */
-						case 1: v32 = BigInt.asIntN(32, BigInt.asUintN(32, a32) << bshamt); break;                          /* sllw */
-						case 5: v32 = funct7 & 0x20 ? BigInt.asIntN(32, a32 >> bshamt) : BigInt.asIntN(32, BigInt.asUintN(32, a32) >> bshamt); break; /* sraw/srlw */
+						case 0: v32 = funct7 & 0x20 ? (a32 - b32) | 0 : (a32 + b32) | 0; break; /* subw/addw */
+						case 1: v32 = a32 << bshamt; break; /* sllw */
+						case 5: v32 = funct7 & 0x20 ? a32 >> bshamt : (a32 >>> bshamt) | 0; break; /* sraw/srlw */
 						default: throw new IllegalInstruction(inst);
 					}
 				}
-				this.setX(rd, sext(BigInt.asUintN(32, v32), 32));
+				this.setX(rd, BigInt(v32));
 				break;
 			}
 			case 0x0f: /* MISC-MEM: fence, fence.i -- no-op (single-hart, no cache model) */
 				break;
 			case 0x07: { /* LOAD-FP: flw/fld -- only these two appear in the histogram */
-				const imm = sext(BigInt(inst >>> 20), 12);
-				const addr = (this.getX(rs1) + imm) & MASK64;
+				const addr = this.xNumber[rs1] + (inst >> 20);
 				try {
 					switch (funct3) {
 						case 2: /* flw -- raw 32-bit load, NaN-boxed into the 64-bit f-reg */
@@ -475,8 +575,7 @@ class Cpu {
 				break;
 			}
 			case 0x27: { /* STORE-FP: fsw/fsd */
-				const imm = sext((BigInt((inst >>> 7) & 0x1f)) | (BigInt((inst >>> 25) & 0x7f) << 5n), 12);
-				const addr = (this.getX(rs1) + imm) & MASK64;
+				const addr = this.xNumber[rs1] + (((inst >> 25) << 5) | ((inst >>> 7) & 0x1f));
 				try {
 					switch (funct3) {
 						case 2: this.store(addr, 4, this.getFBits(rs2) & 0xffffffffn); break; /* fsw */
@@ -539,7 +638,7 @@ class Cpu {
 				return this.pc; /* raiseTrap already set pc to stvec */
 			}
 			if (imm12 === 0x001) { /* ebreak */
-				this.raiseTrap(3n, pc, false);
+				this.raiseTrap(3n, BigInt(pc), false);
 				return this.pc;
 			}
 			if (imm12 === 0x102) { /* sret */
@@ -549,14 +648,15 @@ class Cpu {
 				newStatus |= SSTATUS_SPIE; /* SPIE set to 1 per spec */
 				newStatus &= ~SSTATUS_SPP; /* SPP reset to U (least privileged) */
 				this.setCsr(CSR.SSTATUS, newStatus);
-				return this.getCsr(CSR.SEPC);
+				return Number(this.getCsr(CSR.SEPC));
 			}
 			if (imm12 === 0x105) { /* wfi */
 				this.halted = true;
 				return nextPc;
 			}
 			if ((inst >>> 25) === 0x09) { /* sfence.vma rs1,rs2 */
-				return nextPc; /* no TLB modeled -- always a no-op is trivially correct */
+				this.flushTlb();
+				return nextPc;
 			}
 			throw new IllegalInstruction(inst);
 		}

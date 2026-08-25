@@ -49,6 +49,17 @@ class Memory {
 	 * bytes" from "then sign- or zero-extend", not conflating the two
 	 * here. */
 	read(addr, size) {
+		const off = this._ramOffset(addr);
+		if (off >= 0) {
+			switch (size) {
+				case 1: return BigInt(this.ram.getUint8(off));
+				case 2: return BigInt(this.ram.getUint16(off, true));
+				case 4: return BigInt(this.ram.getUint32(off, true));
+				case 8: return this.ram.getBigUint64(off, true);
+				default: throw new Error(`bad load size ${size}`);
+			}
+		}
+
 		const dev = this._findDevice(addr);
 		if (dev)
 			/* Number(), not the raw BigInt offset: device register
@@ -64,35 +75,28 @@ class Memory {
 			 * this. */
 			return BigInt(dev.dev.read(Number(addr - dev.base), size)) & mask(size);
 
-		const off = this._ramOffset(addr);
-		if (off < 0)
-			throw new BusError(addr, false);
-		switch (size) {
-			case 1: return BigInt(this.ram.getUint8(off));
-			case 2: return BigInt(this.ram.getUint16(off, true));
-			case 4: return BigInt(this.ram.getUint32(off, true));
-			case 8: return this.ram.getBigUint64(off, true);
-			default: throw new Error(`bad load size ${size}`);
-		}
+		throw new BusError(addr, false);
 	}
 
 	write(addr, size, value /* BigInt */) {
+		const off = this._ramOffset(addr);
+		if (off >= 0) {
+			switch (size) {
+				case 1: this.ram.setUint8(off, Number(value & 0xffn)); break;
+				case 2: this.ram.setUint16(off, Number(value & 0xffffn), true); break;
+				case 4: this.ram.setUint32(off, Number(value & 0xffffffffn), true); break;
+				case 8: this.ram.setBigUint64(off, value & 0xffffffffffffffffn, true); break;
+				default: throw new Error(`bad store size ${size}`);
+			}
+			return;
+		}
+
 		const dev = this._findDevice(addr);
 		if (dev) {
 			dev.dev.write(Number(addr - dev.base), size, Number(value & mask(size)));
 			return;
 		}
-
-		const off = this._ramOffset(addr);
-		if (off < 0)
-			throw new BusError(addr, true);
-		switch (size) {
-			case 1: this.ram.setUint8(off, Number(value & 0xffn)); break;
-			case 2: this.ram.setUint16(off, Number(value & 0xffffn), true); break;
-			case 4: this.ram.setUint32(off, Number(value & 0xffffffffn), true); break;
-			case 8: this.ram.setBigUint64(off, value & 0xffffffffffffffffn, true); break;
-			default: throw new Error(`bad store size ${size}`);
-		}
+		throw new BusError(addr, true);
 	}
 
 	/* Load raw bytes at a physical address -- used by the ELF loader,
