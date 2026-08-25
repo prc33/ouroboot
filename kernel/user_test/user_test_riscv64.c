@@ -8,13 +8,9 @@
  * places the first 8 args in a0-a7, which is exactly the Linux
  * syscall convention -- args first, syscall number last).
  *
- * Compiled freestanding (-nostdlib), then objcopy -O binary'd to a
- * flat image and embedded via gen_user_test_header.py, same as
- * user_test.bin -- no ELF loader involved yet, that's the next
- * checkpoint. Must be position-independent-by-construction (no
- * global data pointers baked at compile time beyond what PC-relative
- * addressing already gives us for free) since it's loaded at a fixed
- * physical/virtual address chosen by the kernel, not linked at 0.
+ * Compiled as a freestanding ELF at 0x800000 and loaded from the initrd.
+ * It remains independent of libc; the ELF container merely avoids turning
+ * the resulting machine code into a generated C header.
  */
 void _start(void) {
 	static const char msg[] = "hello from ring3 via ecall\n";

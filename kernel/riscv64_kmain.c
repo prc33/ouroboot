@@ -4,18 +4,19 @@
 #include "mm/pmm.h"
 #include "mm/paging.h"
 #include "mm/elf.h"
+#include "mm/ramfs.h"
 #include "mm/tar.h"
 #include "sched/task.h"
 #include "sched/process.h"
-#include "user_test_riscv64_payload.h"
-#include "hello_elf_riscv64_payload.h"
-#include "proc_test_elf_riscv64_payload.h"
-#include "proc_fork_test_elf_riscv64_payload.h"
-#include "proc_exec_test_elf_riscv64_payload.h"
-#include "init_test_elf_riscv64_payload.h"
-#include "interactive_test_elf_riscv64_payload.h"
 
 static volatile int g_breakpoint_hit = 0;
+
+static struct ramfs_dynamic_file *required_initrd_file(const char *name) {
+	struct ramfs_dynamic_file *f = ramfs_dynamic_lookup(name);
+	if (!f)
+		kprintf("FATAL: initrd is missing %s\n", name);
+	return f;
+}
 
 static void breakpoint_handler(struct regs *r) {
 	g_breakpoint_hit = 1;
@@ -166,27 +167,19 @@ static unsigned char kernel_stack[4096] __attribute__((aligned(16)));
 static void run_ring3_test(void) {
 	(void)kernel_stack; /* no per-task kernel stack needed -- see comment above; kept for shape parity with kmain.c */
 	syscall_init();
-
-	unsigned int npages = (USER_TEST_RISCV64_SIZE + PAGE_SIZE - 1) / PAGE_SIZE;
-	for (unsigned int i = 0; i < npages; i++) {
-		unsigned long phys = pmm_alloc_page();
-		paging_map_page(USER_TEST_RISCV64_LOAD_ADDR + i * PAGE_SIZE, phys,
-			PTE_PRESENT | PTE_WRITABLE | PTE_USER);
-		unsigned char *dst = (unsigned char *)phys;
-		for (unsigned int j = 0; j < PAGE_SIZE; j++) {
-			unsigned int off = i * PAGE_SIZE + j;
-			dst[j] = off < USER_TEST_RISCV64_SIZE ? user_test_riscv64_payload[off] : 0;
-		}
-	}
+	struct ramfs_dynamic_file *file = required_initrd_file("user_test");
+	unsigned long entry = file ? elf_load(file->data, file->size) : 0;
+	if (!entry)
+		for (;;) __builtin_riscv_wfi();
 
 	unsigned long stack_phys = pmm_alloc_page();
 	unsigned long user_stack_va = 0x900000UL;
 	paging_map_page(user_stack_va, stack_phys, PTE_PRESENT | PTE_WRITABLE | PTE_USER);
 
-	kprintf("ring3: entering userspace at %p...\n", (void *)USER_TEST_RISCV64_ENTRY);
-	enter_usermode(USER_TEST_RISCV64_ENTRY, user_stack_va + PAGE_SIZE);
+	kprintf("ring3: entering userspace at %p...\n", (void *)entry);
+	enter_usermode(entry, user_stack_va + PAGE_SIZE);
 	/* never reached: enter_usermode transitions permanently to U-mode;
-	 * the payload's exit syscall is what concludes the whole test run */
+	 * the program's exit syscall is what concludes the whole test run */
 }
 
 /* --- P5 checkpoint 2: real ELF loader + real musl binary --------------
@@ -205,7 +198,8 @@ static void run_ring3_test(void) {
  * placed near the top of a 2-page stack, same proportions as i386's
  * version, just 8-byte slots instead of 4-byte ones. */
 void run_elf_test(void) {
-	unsigned long entry = elf_load(hello_elf_riscv64_payload, HELLO_ELF_RISCV64_SIZE);
+	struct ramfs_dynamic_file *file = required_initrd_file("hello");
+	unsigned long entry = file ? elf_load(file->data, file->size) : 0;
 	if (!entry) {
 		kprintf("FATAL: elf_load failed\n");
 		for (;;) __builtin_riscv_wfi();
@@ -274,10 +268,15 @@ static void run_exec_test(void);
 static void run_init_test(void);
 static void run_interactive_test(void);
 
+static struct process *process_from_initrd(const char *file_name, const char *process_name) {
+	struct ramfs_dynamic_file *file = required_initrd_file(file_name);
+	return file ? process_create_from_elf(file->data, file->size, process_name) : 0;
+}
+
 static void run_fork_test(void) {
 	kprintf("P6 checkpoint OK\n");
 	process_set_drain_hook(run_exec_test);
-	struct process *p = process_create_from_elf(proc_fork_test_elf_riscv64_payload, PROC_FORK_TEST_ELF_RISCV64_SIZE, "fork_test");
+	struct process *p = process_from_initrd("proc_fork_test", "fork_test");
 	if (!p) {
 		kprintf("FATAL: process_create_from_elf failed\n");
 		for (;;) __builtin_riscv_wfi();
@@ -296,7 +295,7 @@ static void run_fork_test(void) {
 static void run_exec_test(void) {
 	kprintf("P7 checkpoint OK\n");
 	process_set_drain_hook(run_init_test);
-	struct process *p = process_create_from_elf(proc_exec_test_elf_riscv64_payload, PROC_EXEC_TEST_ELF_RISCV64_SIZE, "exec_test");
+	struct process *p = process_from_initrd("proc_exec_test", "exec_test");
 	if (!p) {
 		kprintf("FATAL: process_create_from_elf failed\n");
 		for (;;) __builtin_riscv_wfi();
@@ -315,7 +314,7 @@ static void run_exec_test(void) {
 static void run_init_test(void) {
 	kprintf("P8 checkpoint OK\n");
 	process_set_drain_hook(run_interactive_test);
-	struct process *p = process_create_from_elf(init_test_elf_riscv64_payload, INIT_TEST_ELF_RISCV64_SIZE, "init_test");
+	struct process *p = process_from_initrd("init_test", "init_test");
 	if (!p) {
 		kprintf("FATAL: process_create_from_elf failed\n");
 		for (;;) __builtin_riscv_wfi();
@@ -337,7 +336,7 @@ static void run_init_test(void) {
  * gets typed. */
 static void run_interactive_test(void) {
 	kprintf("P9 checkpoint OK\n");
-	struct process *p = process_create_from_elf(interactive_test_elf_riscv64_payload, INTERACTIVE_TEST_ELF_RISCV64_SIZE, "interactive_test");
+	struct process *p = process_from_initrd("interactive_test", "interactive_test");
 	if (!p) {
 		kprintf("FATAL: process_create_from_elf failed\n");
 		for (;;) __builtin_riscv_wfi();
@@ -350,8 +349,8 @@ static void run_interactive_test(void) {
 void run_process_test(void) {
 	process_init();
 	process_set_drain_hook(run_fork_test);
-	struct process *a = process_create_from_elf(proc_test_elf_riscv64_payload, PROC_TEST_ELF_RISCV64_SIZE, "A");
-	struct process *b = process_create_from_elf(proc_test_elf_riscv64_payload, PROC_TEST_ELF_RISCV64_SIZE, "B");
+	struct process *a = process_from_initrd("proc_test", "A");
+	struct process *b = process_from_initrd("proc_test", "B");
 	if (!a || !b) {
 		kprintf("FATAL: process_create_from_elf failed\n");
 		for (;;) __builtin_riscv_wfi();

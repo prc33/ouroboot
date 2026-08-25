@@ -2,7 +2,7 @@
  * execve()s into. Proves three things at once: argv really did
  * survive execve() (not just fork()'s COW, which this doesn't touch
  * at all -- this is a brand new address space), and open()+read()+
- * close() against mm/ramfs.h's embedded "/greeting" file work end to
+ * close() against the initrd's "/greeting" file work end to
  * end. */
 #include <fcntl.h>
 #include <unistd.h>

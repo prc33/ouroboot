@@ -31,6 +31,11 @@ TCC     := ../compiler/tcc
 TCCDIR  := ../compiler
 TCCINC  := $(TCCDIR)/include
 
+RISCV64_USER_PROGRAMS := hello proc_test proc_fork_test proc_exec_test \
+	init_test interactive_test exec_target
+RISCV64_USER_ELFS := $(addprefix user_test/,$(addsuffix _riscv64.elf,$(RISCV64_USER_PROGRAMS)))
+MUSL_DIR := ../musl-riscv64
+
 CFLAGS  := -B$(TCCDIR) -I$(TCCINC) -I. -Wall -nostdinc -fno-stack-protector -ffreestanding
 
 ifeq ($(ARCH),i386)
@@ -111,6 +116,18 @@ arch/riscv64_trap_entry.o: arch/riscv64_trap_entry.S
 
 kernel.elf: $(OBJS)
 	$(TCC) $(LDFLAGS) -o $@ $(OBJS)
+
+# Ordinary initrd executables, built by the same compiler and musl used by the
+# rest of the project. They are files, not generated C source in kernel.elf.
+$(RISCV64_USER_ELFS): user_test/%_riscv64.elf: user_test/%_riscv64.c
+	$(TCC) -B$(TCCDIR) -I$(TCCINC) -I$(MUSL_DIR)/obj/include \
+		-I$(MUSL_DIR)/include -I$(MUSL_DIR)/arch/riscv64 \
+		-I$(MUSL_DIR)/arch/generic -nostdinc -static -nostdlib -o $@ \
+		$(MUSL_DIR)/lib/crt1.o $(MUSL_DIR)/lib/crti.o $< \
+		$(MUSL_DIR)/lib/libc.a $(TCCDIR)/libtcc1.a $(MUSL_DIR)/lib/crtn.o
+
+user_test/user_test_riscv64.elf: user_test/user_test_riscv64.c
+	$(TCC) -B$(TCCDIR) -nostdinc -nostdlib -static -Wl,-Ttext=0x800000 -o $@ $<
 
 ifeq ($(ARCH),i386)
 test: kernel.elf
@@ -323,7 +340,8 @@ shell-wasm: kernel-shell.elf initrd.tar
 # it at RV64_INITRD_BASE. The kernel contains no file payload bytes.
 initrd.tar: test/build-initrd.sh test/initrd-fixture/from-initrd.txt \
 		test/initrd-fixture/greeting test/initrd-fixture/test.sh \
-		user_test/busybox_riscv64.elf user_test/exec_target_riscv64.elf
+		user_test/busybox_riscv64.elf user_test/user_test_riscv64.elf \
+		$(RISCV64_USER_ELFS)
 	sh test/build-initrd.sh .. $@
 
 test-initrd: kernel.elf initrd.tar
@@ -335,7 +353,7 @@ test-initrd: kernel.elf initrd.tar
 		--qemu-arg=-device --qemu-arg=loader,file=initrd.tar,addr=0x84000000 \
 		--mem 128 \
 		--stdin-input "\r\rcat from-initrd.txt\rexit 7\r" \
-		--must-contain "initrd: 5 file(s) loaded" \
+		--must-contain "initrd: 12 file(s) loaded" \
 		--must-contain "hello from a real initrd tar" \
 		--must-contain "process: all processes exited" \
 		--must-contain "P10 checkpoint OK" \
@@ -350,13 +368,13 @@ test-initrd-wasm: kernel.elf initrd.tar
 	$(MAKE) -C ../emulator web/rv64.wasm
 	node ../emulator/test/boot.mjs kernel.elf 200000000 \
 		"\r\rcat from-initrd.txt\rexit 7\r" \
-		'initrd: 5 file(s) loaded\nhello from a real initrd tar\nP10 checkpoint OK' \
+		'initrd: 12 file(s) loaded\nhello from a real initrd tar\nP10 checkpoint OK' \
 		initrd.tar
 
 # Full closure test: build a riscv64 TCC with this repository's TCC, place
 # that compiler, its own sources, and its musl build environment in the real
 # tar initrd, then have it compile and link TCC again inside this kernel.
-selfhost-initrd tcc-initrd:
+selfhost-initrd tcc-initrd: user_test/user_test_riscv64.elf $(RISCV64_USER_ELFS)
 	$(MAKE) -C ../compiler clean
 	$(MAKE) -C ../compiler TARGET=riscv64 stage1
 	sh test/build-selfhost-initrd.sh .. $@.tar
@@ -386,4 +404,5 @@ endif
 
 clean:
 	rm -f kernel.elf kernel-shell.elf riscv64_kmain_shell.o initrd.tar \
-		tcc-initrd.tar selfhost-initrd.tar $(OBJS)
+		tcc-initrd.tar selfhost-initrd.tar $(RISCV64_USER_ELFS) \
+		user_test/user_test_riscv64.elf $(OBJS)

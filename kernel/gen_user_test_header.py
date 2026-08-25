@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 """
-Converts a flat binary or an ELF file into a checked-in C header the
-kernel embeds directly.
+Converts an i386 test binary into a C header the legacy i386 kernel embeds.
 
-This is a stand-in for "load a program from a filesystem" -- there is
-no ramfs/VFS yet (that's a later checkpoint), so the kernel just
-carries whatever test payload as static data for now.
+RISC-V programs are ordinary ELF files in its required initrd and do not use
+this script. The i386 boot path predates that filesystem.
 
 Usage: gen_user_test_header.py <input-file> <output-var-name> <load-addr-or-blank>
 
