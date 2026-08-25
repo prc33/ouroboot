@@ -106,9 +106,9 @@ cd kernel && make ARCH=riscv64           # build kernel.elf
 cd ..                                    # repo root -- index.html
                                           # fetches ../../kernel/kernel.elf,
                                           # so the server has to be rooted
-                                          # here, not in emulator/js/
+                                          # here, not in emulator/web/
 python3 -m http.server 8000
-# open http://localhost:8000/emulator/js/index.html
+# open http://localhost:8000/emulator/web/index.html
 ```
 (Any static HTTP server works -- `fetch()` and Worker script loading
 both need a real origin, not `file://`.)
@@ -130,5 +130,5 @@ drift apart): `cd kernel && make ARCH=riscv64 test-wasm`. See
 
 The same emulator also has a C command-line front end, so Wasm and a browser
 are optional. On an i386 machine or VM containing this project's TCC, run
-`cd emulator/wasm && tcc -O2 -o rv64-run runner.c`, then
-`./rv64-run ../../kernel/kernel-shell.elf`.
+`cd emulator && tcc -O2 -o rv64-run runner.c`, then
+`./rv64-run ../kernel/kernel-shell.elf`.

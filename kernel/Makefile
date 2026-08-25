@@ -199,7 +199,7 @@ RISCV64_TEST_ASSERTIONS := \
 # stdin (kernel/riscv64_kmain.c's run_interactive_test) -- exactly
 # what a person typing at the browser terminal would produce, just
 # delivered all at once instead of paced by real keystrokes (see
-# test/boot_test.py's and emulator/wasm/boot.mjs's own comments on their
+# test/boot_test.py's and emulator/test/boot.mjs's own comments on their
 # respective --stdin-input/--input flags for why that's still a
 # faithful correctness check). `exit 7`'s specific code isn't asserted
 # here (no wait4() catches it -- run_interactive_test doesn't fork,
@@ -209,7 +209,7 @@ RISCV64_TEST_ASSERTIONS := \
 # and "P10 checkpoint OK" would simply never print.
 #
 # Literal two-character "\n"/"\r" here, not real newline/CR bytes --
-# both test/boot_test.py and emulator/wasm/boot.mjs
+# both test/boot_test.py and emulator/test/boot.mjs
 # --input decode those escapes themselves, deliberately sidestepping
 # the make-variable/shell-recipe/subprocess-argv quoting stack a real
 # embedded byte would have to survive unmangled through all three.
@@ -274,8 +274,8 @@ test: kernel.elf
 # TCC-built C/Wasm emulator instead of QEMU. Reaching P10 implies that all
 # earlier boot, process, filesystem, and interactive-shell work completed.
 test-wasm: kernel.elf
-	$(MAKE) -C ../emulator/wasm ../js/rv64.wasm
-	node ../emulator/wasm/boot.mjs kernel.elf 340000000 \
+	$(MAKE) -C ../emulator web/rv64.wasm
+	node ../emulator/test/boot.mjs kernel.elf 340000000 \
 		"$(RISCV64_INTERACTIVE_INPUT)" 'P10 checkpoint OK'
 
 # Direct product boot used for interactive development and the emulator's
@@ -296,7 +296,7 @@ kernel-shell.elf: $(SHELL_OBJS)
 # just a prompt appearing -- reaching "built-in shell (ash)" alone
 # doesn't prove typed input is ever read).
 shell-wasm: kernel-shell.elf
-	$(MAKE) -C ../emulator/wasm test-shell
+	$(MAKE) -C ../emulator test-shell
 endif
 
 clean:

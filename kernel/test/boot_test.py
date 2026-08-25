@@ -44,7 +44,7 @@ def boot_and_capture(kernel_path, timeout, mem_mb, extra_qemu_args=None, qemu_bi
 	# at a real terminal would produce, same UART byte protocol
 	# either way. Passed as one shot (not paced against wall time) --
 	# same "correctness over realistic typing speed" reasoning as
-	# emulator/wasm/boot.mjs's input argument.
+	# emulator/test/boot.mjs's input argument.
 	proc = subprocess.run(cmd, capture_output=True, text=True, input=stdin_input)
 	# exit code 124 from `timeout` means we hit the wall clock, which is
 	# EXPECTED for any kernel that halts forever after printing (no

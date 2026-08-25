@@ -1,12 +1,14 @@
 # TCC WebAssembly example
 
-This directory exercises Ouroboot's `wasm32` TCC target with small examples
-and builds the C RV64 emulator used by the terminal demo.
+This directory exercises Ouroboot's `wasm32` TCC target with small examples.
 
 ```sh
 make test
-make ../js/rv64.wasm
 ```
+
+Run `make serve` and open <http://localhost:8000/> for the matching browser
+demo. This test project belongs to the compiler backend; the RV64 emulator is
+kept separately under `emulator/`.
 
 The generated modules have no WASI or JavaScript imports. Their non-static C
 functions and linear memory are exported.

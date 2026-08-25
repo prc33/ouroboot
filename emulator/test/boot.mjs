@@ -22,11 +22,11 @@ function loadElf(bytes, memory, ramBase) {
     return entry;
 }
 
-const kernelPath = process.argv[2] || '../../kernel/kernel.elf';
+const kernelPath = process.argv[2] || '../kernel/kernel.elf';
 const maxInstructions = Number(process.argv[3] || 200_000_000);
 const input = (process.argv[4] || '').replaceAll('\\r', '\r').replaceAll('\\n', '\n');
 const expected = process.argv[5] || 'P5 checkpoint 2 OK';
-const wasmPath = new URL('../js/rv64.wasm', import.meta.url);
+const wasmPath = new URL('../web/rv64.wasm', import.meta.url);
 const [{ instance }, kernel] = await Promise.all([
     WebAssembly.instantiate(await readFile(wasmPath)),
     readFile(kernelPath),

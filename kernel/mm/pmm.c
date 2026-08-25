@@ -74,7 +74,7 @@ void pmm_init(unsigned int mem_top, unsigned int base) {
  * free page that exists) instead of always restarting at page 0 --
  * real bug in the original always-from-0 version, found running
  * checkpoint 9's much larger, more allocation-heavy kernel image
- * under emulator/js/: every call re-scanned however many already-
+ * under emulator/web/: every call re-scanned however many already-
  * permanently-used low pages had accumulated so far, an O(total
  * allocations so far) cost *per call* that made the whole boot
  * sequence's cumulative cost effectively quadratic in how much had
