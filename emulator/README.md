@@ -1,63 +1,105 @@
-# emulator/ — P1+P2+P3 done: boots kernel/kernel.elf, in a real browser tab, full test parity with QEMU; checkpoint 10's real interactive busybox ash accepts real typed input, in the browser too
+# Ouroboot RV64 emulator
 
-See `../docs/emulator-plan.md` for the plan (locked decisions, phased
-exit criteria, the ISA subset derived from this repo's own build
-output) and the findings docs for what's built and the real bugs found
-bringing each phase up: `../docs/emulator-p1-findings.md` (headless
-Node, the core CPU/MMU/UART) and `../docs/emulator-p3-findings.md`
-(the browser/`xterm.js`/Worker wrapper).
+This directory is a complete RV64 emulator with two front ends:
 
-`js/` is a from-scratch RV64IM + Zicsr + privileged-subset interpreter
-in plain JavaScript (jor1k -- https://github.com/s-macke/jor1k/wiki/Technical-details
--- as reference for technique, not a fork base or dependency).
+- a browser terminal, with the C core compiled to WebAssembly;
+- a native command-line program, with the same core compiled for i386.
 
-**Headless (Node), matching `kernel/test/boot_test.py`'s own checkpoints:**
+The core is the standard C file `rv64.c`. It implements the RV64IM
+instructions, Sv39, supervisor mode, Sstc, a 16550-style UART, and the small
+F/D subset needed by Ouroboot. Both front ends load the same RISC-V ELF kernel
+and use the same UART interface; neither contains another CPU implementation.
+
+## Build the guest
+
+From the repository root, build the RISC-V compiler and the kernel that boots
+directly into BusyBox `ash`:
+
+```sh
+make -C compiler clean
+make -C compiler TARGET=riscv64
+make -C kernel ARCH=riscv64 kernel-shell.elf
 ```
-cd ../kernel && make ARCH=riscv64        # build kernel.elf
-make ARCH=riscv64 test-js                # boot it under this emulator
+
+Use `kernel/kernel.elf` instead if you want the longer boot containing every
+historical test checkpoint before the shell. The compiler build must be
+cleaned when changing targets because its targets share generated filenames.
+
+## Browser demo
+
+Build the freestanding Wasm module with this repository's wasm32 TCC backend:
+
+```sh
+make -C compiler clean
+make -C compiler TARGET=wasm32
+make -C emulator web/rv64.wasm
 ```
 
-**In an actual browser tab:**
-```
-cd ../kernel && make ARCH=riscv64        # build kernel.elf (must be riscv64 --
-                                          # kernel.elf is a shared build-artifact
-                                          # filename across ARCH= targets, see
-                                          # kernel/Makefile's own top comment)
-cd ..    # repo root -- index.html fetches ../../kernel/kernel.elf,
-         # so the server's root has to be the repo root, not
-         # emulator/js/ itself (a server rooted at emulator/js/ 404s
-         # on that fetch -- python3 -m http.server won't serve a path
-         # that escapes its own root)
+Then serve the repository root and open the terminal page:
+
+```sh
 python3 -m http.server 8000
-# open http://localhost:8000/emulator/js/index.html
 ```
-(Any static HTTP server works -- `fetch()` and Worker script loading
-both need a real origin, not `file://`.)
 
-Once the kernel finishes booting (P4 through P10's checkpoints, then a
-real busybox ash prompt), the terminal is live: click into it and type
--- real keystrokes go through `app.js`'s `term.onData` handler, into
-the Worker via `postMessage`, into the kernel's own UART RX exactly as
-a real serial keyboard would, and back out as real shell output.
-Verified end-to-end with Puppeteer (real headless Chromium, real
-simulated per-character keystrokes, not just simulated in Node) -- see
-this repo's own git history (commits `6932c25` and `4e21ca4`) for how
-that was confirmed and the two real bugs it found along the way: a
-nested-trap COW bug (a page fault mid-syscall corrupting this kernel's
-single shared trapframe), and `sys_read` needing its own ICRNL
-translation by hand, since there's no tty layer to do it the usual
-way.
+Open <http://localhost:8000/emulator/web/?kernel=../../kernel/kernel-shell.elf>.
+The page obtains xterm.js from a CDN, so that first load needs network access.
+It starts the emulator in a Web Worker, leaving the terminal responsive while
+the guest runs. `fetch()` and Worker loading require HTTP; opening the HTML as
+a `file://` URL will not work.
 
-`docs/emulator-ecosystem-blueprint.md` is the raw external input that
-prompted `docs/emulator-plan.md`, kept for reference.
+Without the `kernel` query parameter, the page loads `kernel/kernel.elf`. The
+generated `web/rv64.wasm` is freestanding and has no WASI or JavaScript imports.
 
-Next up: P4 (F/D instruction support, needed for real userspace
-binaries like the self-hosted compiler, beyond what the kernel itself
-uses).
+## Native command-line demo
 
-`../docs/self-hosting-system-plan.md`'s original emulator design
-(P1/P2 phases: CPU core, then differential testing against QEMU
-instruction-by-instruction) predates both the RISC-V pivot and
-`docs/emulator-plan.md` -- the phased *approach* still holds and
-shaped this plan; the specific instruction-set target and
-implementation language do not.
+The 119-line `runner.c` front end loads ELF segments and bridges the
+emulated UART to standard input and output. Inside an i386 POSIX VM containing
+this project's TCC, a libc such as musl, and the repository, build and run it
+with:
+
+```sh
+cd emulator
+tcc -O2 -o rv64-run runner.c
+./rv64-run ../kernel/kernel-shell.elf
+```
+
+From the repository root, the equivalent build is `make -C emulator
+native`; it uses `compiler/tcc`, which must have been built with `TARGET=i386`
+and must have an i386 libc available for linking. A normal host C compiler can
+also build the runner for quick development (`cc -O2 -o rv64-run runner.c`).
+
+The runner stays attached to the terminal until interrupted. An optional
+second argument limits executed instructions, for example
+`./rv64-run ../kernel/kernel.elf 100000000`.
+
+## Automated checks
+
+With Node.js installed, the emulator checks are:
+
+```sh
+make -C emulator test-boot   # boot kernel/kernel.elf
+make -C emulator test-shell  # scripted BusyBox shell session
+make -C emulator test        # run both
+```
+
+`test-boot` and `test-shell` expect their respective kernel ELF files to have
+already been built. The repository-level regression test is:
+
+```sh
+make -C kernel ARCH=riscv64 test-wasm
+```
+
+It boots through every kernel checkpoint, drives `ash`, checks filesystem
+writes, and requires the P10 completion marker.
+
+## Layout
+
+- `rv64.c` — shared emulator core and UART queues.
+- `runner.c` — native ELF loader and terminal front end.
+- `test/boot.mjs` — headless Node.js ELF loader and test runner.
+- `web/worker.js` — browser ELF loader and execution worker.
+- `web/app.js`, `web/index.html` — xterm.js terminal page.
+
+Generated files (`web/rv64.wasm` and `rv64-run`) are removed by
+`make -C emulator clean`. The independent wasm32 compiler examples and tests
+live in `compiler/tests/wasm32`.

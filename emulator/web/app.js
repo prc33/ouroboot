@@ -1,7 +1,5 @@
 'use strict';
-/* Main-thread glue: xterm.js terminal <-> Worker running the CPU
- * (worker.js). No CPU emulation code runs here at all -- everything
- * in this file is I/O plumbing (docs/emulator-plan.md's P3). */
+/* Main-thread glue between xterm.js and the C/Wasm emulator worker. */
 
 const term = new Terminal({
 	cursorBlink: true,
@@ -27,13 +25,7 @@ worker.onmessage = function (ev) {
 	}
 };
 
-/* Keyboard input -> UART RX. Wired up since P3 for a future that
- * checkpoint 10 (kernel/arch/riscv64_syscall.c's sys_read) has now
- * arrived at: a real interactive busybox ash reading real stdin.
- * Verified end-to-end via Puppeteer -- typed keystrokes reaching this
- * handler, going out over worker.postMessage, landing in the kernel's
- * own UART RX FIFO (uart.js's pushInput()), and coming back out the
- * other side as real shell output. */
+/* Keyboard input becomes bytes in the C emulator's UART RX ring. */
 term.onData((data) => {
 	for (let i = 0; i < data.length; i++)
 		worker.postMessage({ type: 'input', byte: data.charCodeAt(i) });

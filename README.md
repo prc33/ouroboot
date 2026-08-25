@@ -85,14 +85,10 @@ reasoning). For RISC-V64:
   why (a few files changed against tens of thousands of lines of
   upstream).
 
-- **`emulator/`** — a from-scratch RISC-V emulator (plain JS, jor1k as
-  reference not a fork base). `emulator/js/` boots `kernel/kernel.elf`
-  both headlessly (`make ARCH=riscv64 test-js`, passing every
-  checkpoint `make ARCH=riscv64 test`/QEMU does) and in an actual
-  browser tab (`xterm.js` + a Web Worker, verified against real
-  headless Chromium). Real userspace binaries (needs float/double
-  support) are next. See `emulator/README.md` and
-  `docs/emulator-plan.md`.
+- **`emulator/`** — a compact standard-C RV64 emulator compiled to
+  WebAssembly by this repository's own TCC backend. It boots the kernel and
+  BusyBox ash headlessly (`make ARCH=riscv64 test-wasm`) and in a browser
+  (`xterm.js` plus a small Web Worker). See `emulator/README.md`.
 
 - **`cpu/`** — not started (FPGA implementation, future work). See
   `cpu/README.md`.
@@ -113,8 +109,8 @@ cd ../kernel && make test            # or make ARCH=riscv64 test
 
 ## Current all-in demo: a real interactive shell, in a real browser tab
 
-The riscv64 kernel, running under the from-scratch JS emulator
-(`emulator/`), in an actual browser tab -- not just Node or QEMU --
+The riscv64 kernel, running under the C/Wasm emulator in an actual browser
+tab -- not just Node or QEMU --
 boots all the way to a real busybox ash prompt that accepts real
 typed input:
 
@@ -123,9 +119,9 @@ cd kernel && make ARCH=riscv64           # build kernel.elf
 cd ..                                    # repo root -- index.html
                                           # fetches ../../kernel/kernel.elf,
                                           # so the server has to be rooted
-                                          # here, not in emulator/js/
+                                          # here, not in emulator/web/
 python3 -m http.server 8000
-# open http://localhost:8000/emulator/js/index.html
+# open http://localhost:8000/emulator/web/index.html
 ```
 (Any static HTTP server works -- `fetch()` and Worker script loading
 both need a real origin, not `file://`.)
@@ -137,12 +133,15 @@ finally hand off to a real embedded busybox `ash` -- all inside
 `xterm.js`, with the CPU running in a Web Worker so it never blocks
 the UI. Once you see the `#` prompt, click into the terminal and
 type: real keystrokes go out over the same UART byte interface the
-kernel's own serial console uses. (The boot sequence itself is CPU-
-bound JS interpretation of the whole checkpoint 1-10 test suite, so
-reaching that prompt takes real wall-clock minutes, not seconds --
-patience, not a hang.)
+kernel's own serial console uses. The direct BusyBox shell reaches its prompt
+in about five seconds on a typical desktop V8 engine.
 
 Headless equivalent (same checkpoints, including a scripted shell
 session, asserted against QEMU's own output so the two can't silently
-drift apart): `cd kernel && make ARCH=riscv64 test-js`. See
+drift apart): `cd kernel && make ARCH=riscv64 test-wasm`. See
 `emulator/README.md` for both in more detail.
+
+The same emulator also has a C command-line front end, so Wasm and a browser
+are optional. On an i386 machine or VM containing this project's TCC, run
+`cd emulator && tcc -O2 -o rv64-run runner.c`, then
+`./rv64-run ../kernel/kernel-shell.elf`.

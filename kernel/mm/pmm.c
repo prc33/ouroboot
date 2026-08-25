@@ -74,13 +74,13 @@ void pmm_init(unsigned int mem_top, unsigned int base) {
  * free page that exists) instead of always restarting at page 0 --
  * real bug in the original always-from-0 version, found running
  * checkpoint 9's much larger, more allocation-heavy kernel image
- * under emulator/js/: every call re-scanned however many already-
+ * under emulator/web/: every call re-scanned however many already-
  * permanently-used low pages had accumulated so far, an O(total
  * allocations so far) cost *per call* that made the whole boot
  * sequence's cumulative cost effectively quadratic in how much had
  * been allocated -- fine at P1-P8's scale (never enough allocations
  * for the effect to be visible), bad enough by checkpoint 9's real
- * busybox-sized workload that the JS emulator's own test genuinely
+ * busybox-sized workload that the Wasm emulator's own test genuinely
  * didn't finish in 20 real minutes where QEMU took seconds (QEMU
  * runs the *actual instructions* at native speed regardless of how
  * many extra ones this loop executes; the JS interpreter pays for

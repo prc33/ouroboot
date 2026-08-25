@@ -11,6 +11,7 @@
 // Register classes sorted from more general to more precise:
 #define RC_INT (1 << 0)
 #define RC_FLOAT (1 << 1)
+#define RC_I64 RC_INT
 #define RC_R(x) (1 << (2 + (x))) // x = 0..7
 #define RC_F(x) (1 << (10 + (x))) // x = 0..7
 
@@ -19,6 +20,7 @@
 #define RC_FRET (RC_F(0)) // float return register class
 
 #define REG_IRET (TREG_R(0)) // int return register number
+#define REG_LRET REG_IRET
 #define REG_IRE2 (TREG_R(1)) // int 2nd return register number
 #define REG_FRET (TREG_F(0)) // float return register number
 
@@ -30,6 +32,12 @@
 #define MAX_ALIGN 16
 
 #define CHAR_IS_UNSIGNED
+
+/* Register width and pointer width happen to match on RV64, but keeping the
+   capabilities explicit lets wasm32 share the native long-long path without
+   pretending its pointers are 64-bit. */
+#define TCC_NATIVE_I64
+#define TCC_SIGN_EXTENDS_I32
 
 #else
 #define USING_GLOBALS

@@ -52,6 +52,9 @@ struct sym_version {
 ST_FUNC void tccelf_new(TCCState *s)
 {
     TCCState *s1 = s;
+#ifdef TCC_TARGET_WASM32
+    tcc_wasm_reset();
+#endif
     /* no section zero */
     dynarray_add(&s->sections, &s->nb_sections, NULL);
 
@@ -2583,6 +2586,9 @@ static int elf_output_file(TCCState *s1, const char *filename)
 LIBTCCAPI int tcc_output_file(TCCState *s, const char *filename)
 {
     int ret;
+#ifdef TCC_TARGET_WASM32
+    ret = tcc_output_wasm(s, filename);
+#else
 #ifdef TCC_TARGET_PE
     if (s->output_type != TCC_OUTPUT_OBJ) {
         ret = pe_output_file(s, filename);
@@ -2593,6 +2599,7 @@ LIBTCCAPI int tcc_output_file(TCCState *s, const char *filename)
     } else
 #endif
         ret = elf_output_file(s, filename);
+#endif
     return ret;
 }
 

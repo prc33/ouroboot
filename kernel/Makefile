@@ -68,7 +68,7 @@ else
 $(error unknown ARCH '$(ARCH)' -- expected i386 or riscv64)
 endif
 
-.PHONY: all test test-js shell-js test-initrd test-initrd-js clean
+.PHONY: all test test-wasm shell-wasm test-initrd test-initrd-wasm clean
 
 all: kernel.elf
 
@@ -143,7 +143,7 @@ test: kernel.elf
 		--must-not-contain "UNHANDLED EXCEPTION" \
 		--must-not-contain "PAGE FAULT"
 else
-# Shared between `test` (QEMU) and `test-js` (our own emulator/js/ --
+# Shared between `test` (QEMU) and `test-wasm` (our C/Wasm emulator --
 # see docs/emulator-plan.md's P2) so the two never silently drift
 # apart -- both are asserting the exact same checkpoints, just under
 # two different implementations of the same ISA.
@@ -199,7 +199,7 @@ RISCV64_TEST_ASSERTIONS := \
 # stdin (kernel/riscv64_kmain.c's run_interactive_test) -- exactly
 # what a person typing at the browser terminal would produce, just
 # delivered all at once instead of paced by real keystrokes (see
-# test/boot_test.py's and emulator/js/boot.js's own comments on their
+# test/boot_test.py's and emulator/test/boot.mjs's own comments on their
 # respective --stdin-input/--input flags for why that's still a
 # faithful correctness check). `exit 7`'s specific code isn't asserted
 # here (no wait4() catches it -- run_interactive_test doesn't fork,
@@ -209,7 +209,7 @@ RISCV64_TEST_ASSERTIONS := \
 # and "P10 checkpoint OK" would simply never print.
 #
 # Literal two-character "\n"/"\r" here, not real newline/CR bytes --
-# both test/boot_test.py's --stdin-input and emulator/js/boot.js's
+# both test/boot_test.py and emulator/test/boot.mjs
 # --input decode those escapes themselves, deliberately sidestepping
 # the make-variable/shell-recipe/subprocess-argv quoting stack a real
 # embedded byte would have to survive unmangled through all three.
@@ -233,8 +233,7 @@ RISCV64_TEST_ASSERTIONS := \
 # mechanism). Two throwaway blank lines absorb it losslessly: ash
 # treats an empty line as a no-op, and losing exactly 2 of the 2 bytes
 # that make them up leaves the real commands after them untouched
-# either way. A no-op for emulator/js/boot.js's own --input too (it
-# never loses anything -- see uart.js's own comment), just two extra
+# either way. A no-op for the Wasm emulator too (it loses no bytes), just two
 # harmless empty prompts.
 #
 # `ls` in the middle: the real regression test for a real bug (a user
@@ -290,33 +289,16 @@ test: kernel.elf
 		--stdin-input "$(RISCV64_INTERACTIVE_INPUT)" \
 		$(RISCV64_TEST_ASSERTIONS)
 
-# Our own from-scratch emulator (emulator/js/) instead of QEMU -- see
-# docs/emulator-plan.md. --time-advance speeds up the virtual Sstc
-# clock relative to real instructions retired, so the scheduler test's
-# wfi-spin-wait doesn't need tens of millions of idle steps to see 10
-# ticks; --max-instructions is generous headroom for a first-pass
-# unoptimized interpreter (the full suite runs in ~10-20s as of P2).
-#
-# --max-seconds: a speed *regression* test, not just a correctness one
-# -- see boot.js's own comment on the flag. 150s is generous headroom
-# over an uncontended ~86s (286M instructions, this exact checkpoint
-# sequence, including the `ls`/writable-file round trip
-# RISCV64_INTERACTIVE_INPUT now runs) so a loaded CI box doesn't
-# flake, while still catching the real regression this guards:
-# reverting cpu.js's TLBs took this exact run from under a minute to
-# multiple *minutes* (git history/commit f0180da). --max-instructions
-# has matching headroom over that 286M.
-test-js: kernel.elf
-	node ../emulator/js/boot.js kernel.elf \
-		--max-instructions 340000000 \
-		--max-seconds 150 \
-		--time-advance 100 \
-		--input "$(RISCV64_INTERACTIVE_INPUT)" \
-		$(RISCV64_TEST_ASSERTIONS)
+# TCC-built C/Wasm emulator instead of QEMU. Reaching P10 implies that all
+# earlier boot, process, filesystem, and interactive-shell work completed.
+test-wasm: kernel.elf
+	$(MAKE) -C ../emulator web/rv64.wasm
+	node ../emulator/test/boot.mjs kernel.elf 340000000 \
+		"$(RISCV64_INTERACTIVE_INPUT)" 'P10 checkpoint OK'
 
 # Direct product boot used for interactive development and the emulator's
 # startup-time budget. It runs the exact same P10 process/BusyBox path while
-# leaving the full historical checkpoint sequence in `test-js` untouched.
+# leaving the full historical checkpoint sequence in `test-wasm` untouched.
 SHELL_OBJS := $(patsubst riscv64_kmain.o,riscv64_kmain_shell.o,$(OBJS))
 
 riscv64_kmain_shell.o: riscv64_kmain.c kernel.h
@@ -330,24 +312,9 @@ kernel-shell.elf: $(SHELL_OBJS)
 # trip actually runs and produces "hello ash" + a real ls listing + a
 # real created-and-read-back file + a clean process-table drain, not
 # just a prompt appearing -- reaching "built-in shell (ash)" alone
-# doesn't prove typed input is ever read) and speed (--max-seconds 45,
-# generous over an uncontended ~29s for this smaller ~161M-instruction
-# direct-shell path -- see test-js's own comment on the flag and the
-# budget-sizing rationale).
-shell-js: kernel-shell.elf
-	node ../emulator/js/boot.js kernel-shell.elf \
-		--max-instructions 200000000 \
-		--max-seconds 45 \
-		--time-advance 100 \
-		--input "$(RISCV64_INTERACTIVE_INPUT)" \
-		--must-contain "built-in shell (ash)" \
-		--must-contain "hello ash" \
-		--must-contain "process: all processes exited" \
-		--must-contain "P10 checkpoint OK" \
-		--must-not-contain "FATAL" \
-		--must-not-contain "UNHANDLED EXCEPTION" \
-		--must-not-contain "UNHANDLED INTERRUPT" \
-		--must-not-contain "PAGE FAULT"
+# doesn't prove typed input is ever read).
+shell-wasm: kernel-shell.elf
+	$(MAKE) -C ../emulator test-shell
 
 # checkpoint 13: the actual point of mm/tar.c -- a real, separate
 # tar archive (test/initrd-fixture/, one small real file, tarred by
@@ -385,24 +352,14 @@ test-initrd: kernel.elf initrd.tar
 		--must-not-contain "UNHANDLED INTERRUPT" \
 		--must-not-contain "PAGE FAULT"
 
-# Same test, same real tar file, this emulator's own --initrd
-# (emulator/js/boot.js's own comment) instead of QEMU's `-device
-# loader` -- test-js/shell-js's own parity-with-QEMU reasoning applies
-# here too, not just to the checkpoint sequence itself.
-test-initrd-js: kernel.elf initrd.tar
-	node ../emulator/js/boot.js kernel.elf \
-		--max-instructions 200000000 \
-		--time-advance 100 \
-		--initrd initrd.tar \
-		--input "\r\rcat from-initrd.txt\rexit 7\r" \
-		--must-contain "initrd: 1 file(s) loaded" \
-		--must-contain "hello from a real initrd tar" \
-		--must-contain "process: all processes exited" \
-		--must-contain "P10 checkpoint OK" \
-		--must-not-contain "FATAL" \
-		--must-not-contain "UNHANDLED EXCEPTION" \
-		--must-not-contain "UNHANDLED INTERRUPT" \
-		--must-not-contain "PAGE FAULT"
+# Same test with the C/Wasm emulator loading the tar at the kernel's fixed
+# initrd address.
+test-initrd-wasm: kernel.elf initrd.tar
+	$(MAKE) -C ../emulator web/rv64.wasm
+	node ../emulator/test/boot.mjs kernel.elf 200000000 \
+		"\r\rcat from-initrd.txt\rexit 7\r" \
+		'initrd: 1 file(s) loaded\nhello from a real initrd tar\nP10 checkpoint OK' \
+		initrd.tar
 endif
 
 clean:

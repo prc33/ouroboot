@@ -21,6 +21,9 @@
 #if !defined ONE_SOURCE || ONE_SOURCE
 #include "tccpp.c"
 #include "tccgen.c"
+#ifdef TCC_TARGET_I386
+#include "i386-pair.c"
+#endif
 #include "tccelf.c"
 /* tccrun.c (the -run JIT-execute-in-memory mode) deliberately removed
  * from this fork -- unused by every build this project does (always
@@ -55,6 +58,10 @@
 #include "riscv64-gen.c"
 #include "riscv64-link.c"
 #include "riscv64-asm.c"
+#elif defined(TCC_TARGET_WASM32)
+#include "wasm-gen.c"
+#include "wasm-link.c"
+#include "tccwasm.c"
 #else
 #error unknown target
 #endif
@@ -1047,9 +1054,14 @@ LIBTCCAPI int tcc_set_output_type(TCCState *s, int output_type)
 {
     s->output_type = output_type;
 
-    /* always elf for objects */
+    /* wasm is a final module even when the driver uses its ordinary
+       compile-only path; native targets continue to produce ELF objects. */
+#ifdef TCC_TARGET_WASM32
+    s->output_format = TCC_OUTPUT_FORMAT_WASM;
+#else
     if (output_type == TCC_OUTPUT_OBJ)
         s->output_format = TCC_OUTPUT_FORMAT_ELF;
+#endif
 
     if (s->char_is_unsigned)
         tcc_define_symbol(s, "__CHAR_UNSIGNED__", NULL);

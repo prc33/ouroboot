@@ -30,8 +30,11 @@ TARGET ?= riscv64
 
 CC      ?= gcc
 CFLAGS  ?= -O2 -Wall -Wno-unused -fno-strict-aliasing -Wno-pointer-sign
-DEFS    = -DTCC_TARGET_$(shell echo $(TARGET) | tr a-z A-Z) -DCONFIG_TCC_ASM \
+DEFS    = -DTCC_TARGET_$(shell echo $(TARGET) | tr a-z A-Z) \
           -DCONFIG_TRIPLET=\"$(TARGET)-linux-musl\"
+ifneq ($(TARGET),wasm32)
+DEFS    += -DCONFIG_TCC_ASM
+endif
 
 .PHONY: all clean selfcheck stage1
 
@@ -41,7 +44,11 @@ DEFS    = -DTCC_TARGET_$(shell echo $(TARGET) | tr a-z A-Z) -DCONFIG_TCC_ASM \
 # rebuilding it entirely (confirmed the hard way while verifying this
 # repo). A real gotcha, not a hypothetical one.
 
+ifeq ($(TARGET),wasm32)
+all: wasm32-tcc
+else
 all: tcc libtcc1.a
+endif
 
 # ONE_SOURCE mode (tcc.h defaults it to 1): tcc.c textually includes
 # libtcc.c, which includes tccpp.c/tccgen.c/tccelf.c/tccasm.c and the
@@ -54,7 +61,12 @@ all: tcc libtcc1.a
 tcc: tcc.c tcc.h libtcc.c libtcc.h tccpp.c tccgen.c tccelf.c \
      tccasm.c tcctools.c \
      i386-gen.c i386-link.c i386-asm.c \
-     riscv64-gen.c riscv64-link.c riscv64-asm.c
+     riscv64-gen.c riscv64-link.c riscv64-asm.c \
+     wasm-gen.c wasm-link.c wasm-backend.h tccwasm.c
+	$(CC) $(CFLAGS) $(DEFS) -o $@ tcc.c -lm -lpthread -ldl
+
+wasm32-tcc: tcc.c tcc.h libtcc.c libtcc.h tccpp.c tccgen.c tccelf.c \
+     tccasm.c tcctools.c wasm-gen.c wasm-link.c wasm-backend.h tccwasm.c
 	$(CC) $(CFLAGS) $(DEFS) -o $@ tcc.c -lm -lpthread -ldl
 
 # --- runtime helper archive ---
@@ -174,5 +186,5 @@ ifeq ($(TARGET),riscv64)
 endif
 
 clean:
-	rm -f tcc lib/*.o libtcc1.a
+	rm -f tcc wasm32-tcc lib/*.o libtcc1.a
 	rm -rf stage1
