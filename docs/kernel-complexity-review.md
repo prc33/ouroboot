@@ -344,6 +344,13 @@ still describes the old broken design as current.
 
 ## 11. The i386 asymmetry is now the clearest remaining inconsistency
 
+> **Corrected 2026-08-25, after empirical testing — read §12 first.**
+> This section's framing ("archive vs. convert vs. freeze") assumed the
+> i386 and riscv64 sides had genuinely diverged in capability. Measurement
+> shows most of the gap is *labelling*, not architecture. The option list
+> below is still valid but incomplete; §12 adds the option that should
+> actually be taken.
+
 The riscv64 side no longer embeds a single payload byte. The i386 side
 still does:
 
@@ -372,6 +379,118 @@ order of preference:
 What should *not* happen is leaving it undecided, because the two targets
 now demonstrate contradictory conventions for the same problem.
 
+## 12. Correction: most "riscv64-only" code is already architecture-neutral
+
+**This supersedes the framing of §11, and partly of §1.**
+
+The original draft of this review inferred the i386/riscv64 gap from the
+two `OBJS` lists in the Makefile and from filenames. That was wrong, and
+the error ran in one direction: it made the two targets look far more
+divergent than they are. Re-checked by compiling and booting rather than
+reading, at commit `15ea1e7`.
+
+**What was verified empirically:**
+
+- `make ARCH=i386 test` — **passes, 25/25 assertions**, clean boot under
+  QEMU through `P5 checkpoint 2 OK`. i386 is not broken.
+- `make TARGET=i386 selfcheck` — **passes**. stage1 is a real
+  `ELF 32-bit LSB executable, Intel 80386, statically linked`, runs under
+  `qemu-i386-static`, correctly compiles and runs all three regression
+  programs. TCC genuinely self-hosts for i386.
+- **`mm/ramfs.c` and `mm/tar.c` compile clean for i386, unmodified** —
+  producing valid `ELF 32-bit LSB relocatable, Intel 80386` objects.
+
+That last point is the correction. The RAM disk is **not** architecture
+dependent:
+
+- Every occurrence of the string `riscv64` in `mm/ramfs.c`, `mm/tar.c`,
+  `mm/ramfs.h` and `mm/tar.h` is **inside a comment**.
+- They already live in the shared `mm/` directory, alongside `mm/pmm.c`
+  and `mm/elf.c`, which *are* compiled into both kernels today.
+- They depend only on `pmm_alloc_contiguous()`, `pmm_free_page()` and
+  `PAGE_SIZE`.
+
+They are missing from the i386 kernel purely because nobody added two
+entries to a Makefile variable. That is ~493 lines wrongly counted as
+"needs porting" in §11's arithmetic.
+
+The same mislabelling runs deeper:
+
+| File | Code lines | Lines touching arch state | Arch-specific |
+|---|---:|---:|---:|
+| `sched/riscv64_process.c` | 444 | 25 | **~6%** |
+| `arch/riscv64_syscall.c` | 828 | 150 (mostly arg marshalling) | ~18% |
+| `mm/ramfs.c` + `mm/tar.c` | 260 | 0 | **0%** |
+
+In `sched/riscv64_process.c`, the genuinely arch-dependent parts are the
+trapframe save/restore, `satp` activation, initial `sstatus`/entry/sp
+construction, `riscv64_trap_return`, and the hand-built context-switch
+frame. Everything else — the process table, `alloc_slot`, round-robin
+scheduling, `wait4`, the entire fd table, brk/mmap accounting, cwd
+tracking, the drain hook — is portable C living in a file with `riscv64`
+in its name.
+
+In `arch/riscv64_syscall.c`, the 150 arch-touching lines are almost
+entirely the boilerplate top-and-tail of each handler
+(`unsigned long fd = r->a0;` … `r->a0 = ret;`). Comparing the two
+implementations shows the entire architectural difference in the syscall
+layer is three things:
+
+| | i386 | riscv64 |
+|---|---|---|
+| syscall number | `r->eax` | `r->a7` |
+| arguments | `r->ebx, ecx, edx, esi, edi, ebp` | `r->a0`–`r->a5` |
+| return value | `r->eax` | `r->a0` |
+
+Plus the syscall *numbers* themselves, which genuinely do differ per
+architecture in the Linux ABI. The handler **bodies** — path resolution,
+ramfs lookup, `dirent64` formatting, fd allocation, iovec walking — are
+arch-neutral already.
+
+Two further facts that change §11's cost estimate: `musl-i386` is built
+and present, and `demo/build-busybox-i386.sh` (165 lines) plus a 45KB
+i386 BusyBox compat patch already exist — an i386 BusyBox was built and
+tested at some point in this project's history. It simply isn't built in
+the current sandbox.
+
+**Why the tree looks more divergent than it is.** Two conventions encode
+"which architecture happened to need this first" as though it were
+"which architecture this depends on":
+
+1. **Filenames.** `riscv64_process.c` for 94%-generic code;
+   `riscv64_syscall.c` for a file whose handler bodies are portable.
+2. **The `OBJS` lists.** Membership is historical, not derived from
+   actual dependencies — which is exactly how `mm/ramfs.o` and `mm/tar.o`
+   ended up excluded from a build they compile fine in.
+
+There is also precedent in-tree for doing this properly: `mm/pmm.c`,
+`mm/elf.c` and `drivers/kprintf.c` are built for **both** targets with
+**zero** `#ifdef`s between them (verified). `mm/elf.c` even handles both
+ELF32 and ELF64 by branching at runtime on `e_ident[EI_CLASS]` rather
+than at compile time. The codebase already knows how to do this; the
+process and syscall layers just never got the same treatment.
+
+**Consequence for §11.** The realistic option list gains a fourth entry,
+which should be preferred over all three of the originals:
+
+4. **Separate architecture from generic properly** — move the genuinely
+   arch-dependent code into `arch/i386/` and `arch/riscv64/` behind a
+   small explicit interface, and let everything else be built once for
+   both. This makes i386's actual gap visible and small instead of
+   apparent and large, and it removes the need to decide "archive or
+   convert" under a false premise. See
+   [`kernel-arch-split-plan.md`](kernel-arch-split-plan.md).
+
+**What i386 still genuinely lacks** (unchanged by this correction, and
+real work regardless of directory layout): a page-fault-driven COW/stack
+growth path equivalent to riscv64's, the arch half of process creation
+and context switching wired to `int 0x80`/`iret`, the ~25 additional
+syscall *numbers*, and an initrd hand-off (QEMU's `-device loader` has no
+Multiboot equivalent — the Multiboot module mechanism is the natural fit,
+and it is a genuinely different mechanism, not just a different address).
+That is a real port. It is just much smaller than 1,500 lines, and none
+of it is the filesystem.
+
 ---
 
 ## Suggested order
@@ -398,9 +517,18 @@ self-hosting work:
 7. **§8 megapage identity map** — isolated and valuable for emulator boot
    time, but it is the one item here that changes real MMU behavior;
    sequence it alone, verified on both QEMU and the Wasm emulator.
-8. **§11 the i386 decision** — a judgement call, not a refactor. Worth
-   settling before anyone invests in option 2's work.
+8. **§12's arch/generic split** — see
+   [`kernel-arch-split-plan.md`](kernel-arch-split-plan.md). Sequence it
+   *after* §1 and §3: those two delete or merge a lot of the code that
+   would otherwise have to be classified and moved, so doing them first
+   makes the split strictly smaller. Its phase 1 (moving `mm/ramfs.o` and
+   `mm/tar.o` into the i386 build, which needs no code changes at all)
+   can be done at any time.
+9. **§11 the i386 decision** — a judgement call, not a refactor, and one
+   that §12 shows was being made on bad information. Settle it *after*
+   the split makes the true remaining gap visible.
 
-Rough total for items 1–7, excluding the i386 decision: **~400 lines
-removed**, no behavior change, and three subsystems (syscall dispatch,
-scheduler, `kernel.h`) stop depending on the test suite.
+Rough total for items 1–7, excluding the arch split and the i386
+decision: **~400 lines removed**, no behavior change, and three
+subsystems (syscall dispatch, scheduler, `kernel.h`) stop depending on
+the test suite.
