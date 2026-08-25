@@ -44,12 +44,14 @@ DEFS    = -DTCC_TARGET_$(shell echo $(TARGET) | tr a-z A-Z) -DCONFIG_TCC_ASM \
 all: tcc libtcc1.a
 
 # ONE_SOURCE mode (tcc.h defaults it to 1): tcc.c textually includes
-# libtcc.c, which includes tccpp.c/tccgen.c/tccelf.c/tccrun.c/tccasm.c
-# and the target-specific *-gen.c/*-asm.c/*-link.c. One file, one
-# compile -- see docs/tcc-spike-findings.md for why this replaced an
-# earlier nine-file separate-compilation build that turned out to be
-# silently linking only one of its own objects.
-tcc: tcc.c tcc.h libtcc.c libtcc.h tccpp.c tccgen.c tccelf.c tccrun.c \
+# libtcc.c, which includes tccpp.c/tccgen.c/tccelf.c/tccasm.c and the
+# target-specific *-gen.c/*-asm.c/*-link.c (tccrun.c -- the -run mode
+# -- deliberately isn't one of them any more: removed from this fork,
+# unused by any build this project does; see libtcc.c's own comment).
+# One file, one compile -- see docs/tcc-spike-findings.md for why this
+# replaced an earlier nine-file separate-compilation build that turned
+# out to be silently linking only one of its own objects.
+tcc: tcc.c tcc.h libtcc.c libtcc.h tccpp.c tccgen.c tccelf.c \
      tccasm.c tcctools.c \
      i386-gen.c i386-link.c i386-asm.c \
      riscv64-gen.c riscv64-link.c riscv64-asm.c

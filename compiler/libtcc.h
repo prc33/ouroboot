@@ -80,22 +80,14 @@ LIBTCCAPI int tcc_add_library(TCCState *s, const char *libraryname);
 /* add a symbol to the compiled program */
 LIBTCCAPI int tcc_add_symbol(TCCState *s, const char *name, const void *val);
 
-/* output an executable, library or object file. DO NOT call
-   tcc_relocate() before. */
+/* output an executable, library or object file. */
 LIBTCCAPI int tcc_output_file(TCCState *s, const char *filename);
 
-/* link and run main() function and return its value. DO NOT call
-   tcc_relocate() before. */
-LIBTCCAPI int tcc_run(TCCState *s, int argc, char **argv);
-
-/* do all relocations (needed before using tcc_get_symbol()) */
-LIBTCCAPI int tcc_relocate(TCCState *s1, void *ptr);
-/* possible values for 'ptr':
-   - TCC_RELOCATE_AUTO : Allocate and manage memory internally
-   - NULL              : return required memory size for the step below
-   - memory address    : copy code to memory passed by the caller
-   returns -1 if error. */
-#define TCC_RELOCATE_AUTO (void*)1
+/* tcc_run()/tcc_relocate()/TCC_RELOCATE_AUTO (tccrun.c's own -run/
+ * in-memory-execution API) removed from this fork -- see tcc.h's own
+ * comment by TCC_IS_NATIVE's definition for why, and
+ * tcc_get_symbol() below for the one piece of that API this fork
+ * keeps (defined in tccelf.c, not tccrun.c -- unaffected). */
 
 /* return symbol value or NULL if not found */
 LIBTCCAPI void *tcc_get_symbol(TCCState *s, const char *name);

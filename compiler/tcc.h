@@ -169,20 +169,22 @@ extern long double strtold (const char *__nptr, char **__endptr);
 # endif
 #endif
 
-/* only native compiler supports -run */
-#if defined _WIN32 == defined TCC_TARGET_PE
-# if defined __i386__ && defined TCC_TARGET_I386
-#  define TCC_IS_NATIVE
-# elif defined __x86_64__ && defined TCC_TARGET_X86_64
-#  define TCC_IS_NATIVE
-# elif defined __arm__ && defined TCC_TARGET_ARM
-#  define TCC_IS_NATIVE
-# elif defined __aarch64__ && defined TCC_TARGET_ARM64
-#  define TCC_IS_NATIVE
-# elif defined __riscv && defined __LP64__ && defined TCC_TARGET_RISCV64
-#  define TCC_IS_NATIVE
-# endif
-#endif
+/* Mainline: only a native compiler (host arch == target arch) supports
+ * -run, so TCC_IS_NATIVE got defined whenever they matched (which, for
+ * this project, only ever happens once self-hosted -- our own stage0
+ * always cross-compiles, host x86_64 targeting i386/riscv64). This
+ * fork deliberately never defines it at all, permanently: -run itself
+ * is removed (tccrun.c deleted; see libtcc.c's own comment), and
+ * everything else TCC_IS_NATIVE used to gate downstream -- runtime
+ * backtraces, bounds-checking (CONFIG_TCC_BCHECK, already out of
+ * scope per docs/self-hosting-system-plan.md's own "Delete: ...
+ * bounds checking"), the runtime_main/runtime_mem TCCState fields,
+ * dlopen -- is -run-adjacent functionality this fork doesn't want
+ * either, whether cross-compiling or (eventually) self-hosted.
+ * Leaving TCC_IS_NATIVE permanently undefined turns off all of that
+ * at once, rather than chasing each `#ifdef TCC_IS_NATIVE` downstream
+ * site individually and risking a stage1 (self-hosted, genuinely
+ * native) build finding one that still references something removed. */
 
 #if defined TCC_IS_NATIVE && !defined CONFIG_TCCBOOT
 # define CONFIG_TCC_BACKTRACE
@@ -902,11 +904,9 @@ struct TCCState {
     Section *verneed_section;
 #endif
 
-#ifdef TCC_IS_NATIVE
-    const char *runtime_main;
-    void **runtime_mem;
-    int nb_runtime_mem;
-#endif
+    /* runtime_main/runtime_mem/nb_runtime_mem (tccrun.c's own -run
+     * bookkeeping, TCC_IS_NATIVE-gated) removed along with tccrun.c --
+     * see tcc.h's own comment by TCC_IS_NATIVE's definition above. */
 
 #ifdef CONFIG_TCC_BACKTRACE
     int rt_num_callers;
@@ -1755,20 +1755,10 @@ ST_FUNC int macho_output_file(TCCState * s1, const char *filename);
 ST_FUNC int macho_load_dll(TCCState *s1, int fd, const char *filename, int lev);
 #endif
 /* ------------ tccrun.c ----------------- */
-#ifdef TCC_IS_NATIVE
-#ifdef CONFIG_TCC_STATIC
-#define RTLD_LAZY       0x001
-#define RTLD_NOW        0x002
-#define RTLD_GLOBAL     0x100
-#define RTLD_DEFAULT    NULL
-/* dummy function for profiling */
-ST_FUNC void *dlopen(const char *filename, int flag);
-ST_FUNC void dlclose(void *p);
-ST_FUNC const char *dlerror(void);
-ST_FUNC void *dlsym(void *handle, const char *symbol);
-#endif
-ST_FUNC void tcc_run_free(TCCState *s1);
-#endif
+/* tccrun.c itself (tcc_run/tcc_run_free/the dummy dlopen family, all
+ * TCC_IS_NATIVE-gated) is removed from this fork -- see tcc.h's own
+ * comment by TCC_IS_NATIVE's definition and libtcc.c's by its
+ * #include block. */
 
 /* ------------ tcctools.c ----------------- */
 #if 0 /* included in tcc.c */

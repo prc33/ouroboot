@@ -285,10 +285,9 @@ redo:
             printf(version);
         if (opt == OPT_AR)
             return tcc_tool_ar(s, argc, argv);
-#ifdef TCC_TARGET_PE
-        if (opt == OPT_IMPDEF)
-            return tcc_tool_impdef(s, argc, argv);
-#endif
+        /* OPT_IMPDEF dispatch removed along with tcc_tool_impdef
+         * itself -- see tcctools.c's own comment (it was always
+         * TCC_TARGET_PE-gated dead code for this fork anyway). */
         if (opt == OPT_V)
             return 0;
         if (opt == OPT_PRINT_DIRS) {
@@ -360,9 +359,15 @@ redo:
         ;
     } else if (0 == ret) {
         if (s->output_type == TCC_OUTPUT_MEMORY) {
-#ifdef TCC_IS_NATIVE
-            ret = tcc_run(s, argc, argv);
-#endif
+            /* Unreachable in practice -- libtcc.c's TCC_OPTION_run
+             * handler now errors out immediately, so output_type never
+             * actually becomes TCC_OUTPUT_MEMORY. No tcc_run() call
+             * here (tccrun.c removed from this fork; see libtcc.c's
+             * own comment) either way, so this can't silently do
+             * nothing the way an `#ifdef TCC_IS_NATIVE`-gated call
+             * would for a hypothetical future self-hosted (native)
+             * build -- it says so. */
+            tcc_error("memory output (-run) is not available in this build");
         } else {
             if (!s->outfile)
                 s->outfile = default_outputfile(s, first_file);

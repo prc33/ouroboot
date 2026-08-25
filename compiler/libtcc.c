@@ -22,7 +22,15 @@
 #include "tccpp.c"
 #include "tccgen.c"
 #include "tccelf.c"
-#include "tccrun.c"
+/* tccrun.c (the -run JIT-execute-in-memory mode) deliberately removed
+ * from this fork -- unused by every build this project does (always
+ * `tcc -c -o x.o x.c` / link to a real file, never -run), and its own
+ * removal is what let self-hosting.md's exit bar ("tcc -o tcc_native
+ * tcc.c") stop needing tccrun.c's mkstemp()/ftruncate() dependencies
+ * this kernel doesn't (and, for -run's own JIT-execute-in-place
+ * model, wouldn't want to) implement. See TCC_OPTION_run's own
+ * comment below and docs/self-hosting-system-plan.md's own
+ * fork-and-strip precedent (PE/COFF, other backends, etc). */
 #ifdef TCC_TARGET_I386
 #include "i386-gen.c"
 #include "i386-link.c"
@@ -1024,10 +1032,9 @@ LIBTCCAPI void tcc_delete(TCCState *s1)
 
     cstr_free(&s1->cmdline_defs);
     cstr_free(&s1->cmdline_incl);
-#ifdef TCC_IS_NATIVE
-    /* free runtime memory */
-    tcc_run_free(s1);
-#endif
+    /* no tcc_run_free() call here -- tccrun.c (the -run mode this
+     * would clean up after) is removed from this fork; see libtcc.c's
+     * own comment by the #include block above. */
 
     tcc_free(s1);
 #ifdef MEM_DEBUG
@@ -1158,11 +1165,13 @@ ST_FUNC int tcc_add_file_internal(TCCState *s1, const char *filename, int flags)
 #ifndef TCC_TARGET_PE
         case AFF_BINTYPE_DYN:
             if (s1->output_type == TCC_OUTPUT_MEMORY) {
-                ret = 0;
-#ifdef TCC_IS_NATIVE
-                if (NULL == dlopen(filename, RTLD_GLOBAL | RTLD_LAZY))
-                    ret = -1;
-#endif
+                /* Only ever reachable via -run (TCC_OUTPUT_MEMORY),
+                 * which this fork doesn't support at all -- see
+                 * TCC_OPTION_run's own comment. No dlopen() here
+                 * (tccrun.c, which used to provide it, is removed)
+                 * to fail into; -1 is correct either way, since this
+                 * fork never links a real shared library dynamically. */
+                ret = -1;
             } else {
 #ifndef TCC_TARGET_MACHO
                 ret = tcc_load_dll(s1, fd, filename,
@@ -1973,12 +1982,16 @@ reparse:
             s->nostdlib = 1;
             break;
         case TCC_OPTION_run:
-#ifndef TCC_IS_NATIVE
-            tcc_error("-run is not available in a cross compiler");
-#endif
-            run = optarg;
-            x = TCC_OUTPUT_MEMORY;
-            goto set_output_type;
+            /* Always an error, not just "in a cross compiler" (mainline's
+             * own #ifndef TCC_IS_NATIVE guard) -- this fork removed
+             * tccrun.c outright (unused by every build this project
+             * does; see libtcc.c's own comment by the #include block
+             * above), so -run has nothing to dispatch to even once
+             * self-hosted (native). `run` (declared above, used by the
+             * "-run @ args..." trailing-argv handling further down)
+             * simply stays NULL forever now -- harmless, that handling
+             * is unreachable dead code along with -run itself. */
+            tcc_error("-run is not available (tccrun.c removed from this fork)");
         case TCC_OPTION_v:
             do ++s->verbose; while (*optarg++ == 'v');
             ++noaction;
