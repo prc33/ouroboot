@@ -6,9 +6,18 @@
  * kernel/test/boot_test.py already uses under QEMU. Node first (fast
  * iteration, no browser needed) -- see docs/emulator-plan.md.
  *
- * Usage: node boot.js <kernel.elf> [--max-instructions N]
+ * Usage: node boot.js <kernel.elf> [--max-instructions N] [--max-seconds N]
  *                      [--must-contain STR ...] [--must-not-contain STR ...]
  *                      [--input STR]
+ *
+ * --max-seconds: a speed *regression* test, not a correctness one --
+ * fails the run if the CPU loop alone (not module load, not ELF
+ * parsing) takes longer than this many wall-clock seconds. Exists
+ * because "still produces the right output" and "still fast" are two
+ * different properties the interpreter can lose independently (see
+ * this repo's own git history for a real case: the TLB-less
+ * interpreter was already correct, just slow enough that checkpoint
+ * 10's interactive read() loop took minutes instead of seconds).
  *
  * --input: bytes queued into the UART's RX side (uart.js's own
  * pushInput(), there since P3 but never exercised until checkpoint 10
@@ -26,13 +35,14 @@ const { Cpu } = require('./cpu');
 const { loadElf } = require('./elf');
 
 function parseArgs(argv) {
-	const args = { mustContain: [], mustNotContain: [], maxInstructions: 200_000_000, timeAdvance: 1, input: '' };
+	const args = { mustContain: [], mustNotContain: [], maxInstructions: 200_000_000, maxSeconds: null, timeAdvance: 1, input: '' };
 	let kernel = null;
 	for (let i = 0; i < argv.length; i++) {
 		const a = argv[i];
 		if (a === '--must-contain') args.mustContain.push(argv[++i]);
 		else if (a === '--must-not-contain') args.mustNotContain.push(argv[++i]);
 		else if (a === '--max-instructions') args.maxInstructions = Number(argv[++i]);
+		else if (a === '--max-seconds') args.maxSeconds = Number(argv[++i]);
 		else if (a === '--time-advance') args.timeAdvance = Number(argv[++i]);
 		else if (a === '--input') args.input = argv[++i].replace(/\\n/g, '\n').replace(/\\r/g, '\r'); /* literal \n/\r -> real newline/CR, same convention as test/boot_test.py's --stdin-input */
 		else if (!kernel) kernel = a;
@@ -66,6 +76,7 @@ function boot(args) {
 	let n = 0;
 	let checkedOutputLength = -1;
 	const batchSize = 10_000;
+	const startedAt = process.hrtime.bigint();
 	for (; n < args.maxInstructions;) {
 		const batch = Math.min(batchSize, args.maxInstructions - n);
 		cpu.run(batch, args.timeAdvance);
@@ -80,19 +91,20 @@ function boot(args) {
 				break; /* early exit once everything we're waiting for has shown up */
 		}
 	}
+	const elapsedSeconds = Number(process.hrtime.bigint() - startedAt) / 1e9;
 
-	return { output, instructionsRun: n, cpu };
+	return { output, instructionsRun: n, elapsedSeconds, cpu };
 }
 
 function main() {
 	const args = parseArgs(process.argv.slice(2));
 	console.error(`--- booting ${args.kernel} under the JS emulator (max ${args.maxInstructions} instructions) ---`);
-	const { output, instructionsRun } = boot(args);
+	const { output, instructionsRun, elapsedSeconds } = boot(args);
 
 	console.error('--- captured UART output ---');
 	console.error(output || '(empty)');
 	console.error('--- end UART output ---');
-	console.error(`(${instructionsRun} instructions executed)`);
+	console.error(`(${instructionsRun} instructions executed in ${elapsedSeconds.toFixed(1)}s)`);
 
 	const failures = [];
 	if (!output.trim())
@@ -103,13 +115,15 @@ function main() {
 	for (const needle of args.mustNotContain)
 		if (output.includes(needle))
 			failures.push(`forbidden string found: ${JSON.stringify(needle)}`);
+	if (args.maxSeconds !== null && elapsedSeconds > args.maxSeconds)
+		failures.push(`speed regression: took ${elapsedSeconds.toFixed(1)}s, budget was ${args.maxSeconds}s`);
 
 	if (failures.length) {
 		console.error(`\nFAIL (${failures.length} assertion(s) failed):`);
 		for (const f of failures) console.error(`  - ${f}`);
 		process.exit(1);
 	}
-	console.error(`\nPASS (${args.mustContain.length} required string(s) found, ${args.mustNotContain.length} forbidden string(s) absent)`);
+	console.error(`\nPASS (${args.mustContain.length} required string(s) found, ${args.mustNotContain.length} forbidden string(s) absent${args.maxSeconds !== null ? `, ${elapsedSeconds.toFixed(1)}s <= ${args.maxSeconds}s budget` : ''})`);
 }
 
 if (require.main === module)

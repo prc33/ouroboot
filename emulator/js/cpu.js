@@ -103,24 +103,30 @@ class Cpu {
 		this.time = 0;
 		this.timecmp = 0;
 		this.halted = false; /* set by wfi; cleared when an interrupt becomes pending */
-		/* One last-page translation for each access kind. Instruction fetches
+		/* Single last-page translation for instruction fetch. Fetches
 		 * normally stay on one 4KB page for thousands of instructions; walking
 		 * all three Sv39 levels for every one dominated runtime. This deliberately
 		 * tiny TLB captures that locality without a replacement policy or a
-		 * general cache. satp and the permission-relevant privilege state are
-		 * part of the tag, and sfence.vma invalidates all three entries. */
-		this.tlbVpage = [-1n, -1n, -1n];
-		this.tlbPpage = [0n, 0n, 0n];
-		this.tlbRamOffset = [-1, -1, -1];
-		this.tlbSatp = [0n, 0n, 0n];
-		this.tlbContext = [-1, -1, -1];
+		 * general cache -- one entry, not one per access kind (loads/stores get
+		 * their own, separate, much bigger cache below, since they actually
+		 * range across many pages). satp and the permission-relevant privilege
+		 * state are part of the tag, and sfence.vma invalidates it. */
+		this.tlbVpage = -1n;
+		this.tlbRamOffset = -1; /* the fetch fast path returns straight from RAM, so the physical
+		                          * page itself is never needed again once this offset is cached */
+		this.tlbSatp = 0n;
+		this.tlbContext = -1;
 		/* Loads and stores range across many pages, so each gets a tiny
 		 * direct-mapped 256-page cache. The indexing rule is the replacement
-		 * policy; there is no list, allocation, or search on the hot path. */
+		 * policy; there is no list, allocation, or search on the hot path.
+		 * Ppage/satp are BigUint64Array, not plain Array-of-BigInt: a plain
+		 * array stores each BigInt as a separate heap-boxed object, so every
+		 * cache-miss fill would allocate; the typed array stores the raw
+		 * 64-bit values inline instead. */
 		this.dataTlbVpage = new Float64Array(512);
 		this.dataTlbVpage.fill(-1);
-		this.dataTlbPpage = new Array(512).fill(0n);
-		this.dataTlbSatp = new Array(512).fill(0n);
+		this.dataTlbPpage = new BigUint64Array(512);
+		this.dataTlbSatp = new BigUint64Array(512);
 		this.dataTlbContext = new Int8Array(512);
 	}
 
@@ -222,7 +228,7 @@ class Cpu {
 	}
 
 	flushTlb() {
-		this.tlbVpage[0] = this.tlbVpage[1] = this.tlbVpage[2] = -1n;
+		this.tlbVpage = -1n;
 		this.dataTlbVpage.fill(-1);
 	}
 
@@ -231,23 +237,22 @@ class Cpu {
 		const sum = this.sum;
 		const vpage = Math.floor(vaddr / 4096);
 		const context = (this.priv === 'U' ? 1 : 0) | (sum ? 2 : 0);
-		if (this.tlbVpage[0] === vpage &&
-		    this.tlbSatp[0] === satp &&
-		    this.tlbContext[0] === context &&
-		    this.tlbRamOffset[0] >= 0)
-			return this.mem.ram.getUint32(this.tlbRamOffset[0] + (vaddr & 0xfff), true);
+		if (this.tlbVpage === vpage &&
+		    this.tlbSatp === satp &&
+		    this.tlbContext === context &&
+		    this.tlbRamOffset >= 0)
+			return this.mem.ram.getUint32(this.tlbRamOffset + (vaddr & 0xfff), true);
 
 		const paddr = translate(this.mem, satp, BigInt(vaddr), 'x', this.priv, sum);
-		this.tlbVpage[0] = vpage;
-		this.tlbPpage[0] = paddr & ~0xfffn;
-		this.tlbSatp[0] = satp;
-		this.tlbContext[0] = context;
+		this.tlbVpage = vpage;
+		this.tlbSatp = satp;
+		this.tlbContext = context;
 		const off = paddr - RAM_BASE;
 		if (off < 0n || off + 4n > this.mem.ramSize) {
-			this.tlbRamOffset[0] = -1;
+			this.tlbRamOffset = -1;
 			return Number(this.mem.read(paddr, 4));
 		}
-		this.tlbRamOffset[0] = Number((paddr & ~0xfffn) - RAM_BASE);
+		this.tlbRamOffset = Number((paddr & ~0xfffn) - RAM_BASE);
 		return this.mem.ram.getUint32(Number(off), true);
 	}
 

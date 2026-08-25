@@ -250,9 +250,17 @@ test: kernel.elf
 # wfi-spin-wait doesn't need tens of millions of idle steps to see 10
 # ticks; --max-instructions is generous headroom for a first-pass
 # unoptimized interpreter (the full suite runs in ~10-20s as of P2).
+#
+# --max-seconds: a speed *regression* test, not just a correctness one
+# -- see boot.js's own comment on the flag. 120s is generous headroom
+# over an uncontended ~60s (194M instructions, this exact checkpoint
+# sequence) so a loaded CI box doesn't flake, while still catching the
+# real regression this guards: reverting cpu.js's TLBs took this exact
+# run from ~60s to multiple *minutes* (git history/commit f0180da).
 test-js: kernel.elf
 	node ../emulator/js/boot.js kernel.elf \
 		--max-instructions 200000000 \
+		--max-seconds 120 \
 		--time-advance 100 \
 		--input "$(RISCV64_INTERACTIVE_INPUT)" \
 		$(RISCV64_TEST_ASSERTIONS)
@@ -268,12 +276,24 @@ riscv64_kmain_shell.o: riscv64_kmain.c kernel.h
 kernel-shell.elf: $(SHELL_OBJS)
 	$(TCC) $(LDFLAGS) -o $@ $(SHELL_OBJS)
 
+# Covers both properties this target exists for: real interactive use
+# (RISCV64_INTERACTIVE_INPUT's `echo`/`exit` round-trip actually runs
+# and produces "hello ash" + a clean process-table drain, not just a
+# prompt appearing -- reaching "built-in shell (ash)" alone doesn't
+# prove typed input is ever read) and speed (--max-seconds 45,
+# generous over an uncontended ~12s for this smaller ~70M-instruction
+# direct-shell path -- see test-js's own comment on the flag and the
+# budget-sizing rationale).
 shell-js: kernel-shell.elf
 	node ../emulator/js/boot.js kernel-shell.elf \
 		--max-instructions 200000000 \
+		--max-seconds 45 \
 		--time-advance 100 \
 		--input "$(RISCV64_INTERACTIVE_INPUT)" \
 		--must-contain "built-in shell (ash)" \
+		--must-contain "hello ash" \
+		--must-contain "process: all processes exited" \
+		--must-contain "P10 checkpoint OK" \
 		--must-not-contain "FATAL" \
 		--must-not-contain "UNHANDLED EXCEPTION" \
 		--must-not-contain "UNHANDLED INTERRUPT" \
