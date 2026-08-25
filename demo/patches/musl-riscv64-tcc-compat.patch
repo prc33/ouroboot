@@ -969,7 +969,7 @@ diff --git a/src/thread/riscv64/syscall_cp.s b/src/thread/riscv64/syscall_cp.s
 index eeef639..1c2d3e4 100644
 --- a/src/thread/riscv64/syscall_cp.s
 +++ b/src/thread/riscv64/syscall_cp.s
-@@ -1,29 +1,23 @@
+@@ -1,29 +1,42 @@
 -.global __cp_begin
 -.hidden __cp_begin
 -.global __cp_end
