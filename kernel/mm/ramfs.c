@@ -59,19 +59,6 @@ const struct ramfs_file *ramfs_lookup(const char *path) {
 	return 0;
 }
 
-unsigned int ramfs_root_entry_count(void) {
-	return NUM_APPLETS;
-}
-
-const char *ramfs_root_entry_name(unsigned int index) {
-	return busybox_applets[index];
-}
-
-int ramfs_root_entry_is_symlink(unsigned int index) {
-	(void)index;
-	return 1;
-}
-
 /* The file table has fixed capacity; file contents use dynamically allocated
  * backing storage.
  *
@@ -217,22 +204,82 @@ int ramfs_dynamic_write(struct ramfs_dynamic_file *f, unsigned long offset, cons
 	return 0;
 }
 
-unsigned int ramfs_dynamic_entry_count(void) {
-	unsigned int n = 0;
-	for (unsigned int i = 0; i < RAMFS_MAX_DYNAMIC_FILES; i++)
-		if (dynamic_files[i].used)
-			n++;
-	return n;
+static int prefix(const char *s, const char *p) {
+	while (*p && *s == *p) { s++; p++; }
+	return *p == 0;
 }
 
-const char *ramfs_dynamic_entry_name(unsigned int index) {
-	unsigned int seen = 0;
-	for (unsigned int i = 0; i < RAMFS_MAX_DYNAMIC_FILES; i++) {
-		if (dynamic_files[i].used) {
-			if (seen == index)
-				return dynamic_files[i].name;
-			seen++;
+static int child_name(const char *dir, const char *path, char *out,
+	unsigned int capacity, int *directory) {
+	const char *p = path;
+	if (dir[0]) {
+		unsigned int n = 0;
+		if (!prefix(path, dir)) return 0;
+		while (dir[n]) n++;
+		p += n;
+		if (*p++ != '/') return 0;
+	}
+	if (!*p) return 0;
+	unsigned int n = 0;
+	while (p[n] && p[n] != '/') n++;
+	if (n + 1 > capacity) return 0;
+	for (unsigned int i = 0; i < n; i++) out[i] = p[i];
+	out[n] = 0;
+	*directory = p[n] == '/';
+	return 1;
+}
+
+static int raw_child(const char *dir, unsigned int raw, char *name,
+	unsigned int capacity, int *directory, int *symlink) {
+	if (raw < NUM_APPLETS) {
+		if (!dir[0]) {
+			name_copy(name, "bin", capacity);
+			*directory = 1;
+			*symlink = 0;
+			return 1;
+		}
+		if (streq(dir, "bin")) {
+			name_copy(name, busybox_applets[raw], capacity);
+			*directory = 0;
+			*symlink = 1;
+			return 1;
+		}
+		return 0;
+	}
+	unsigned int slot = raw - NUM_APPLETS;
+	if (slot >= RAMFS_MAX_DYNAMIC_FILES || !dynamic_files[slot].used) return 0;
+	*symlink = 0;
+	return child_name(dir, dynamic_files[slot].name, name, capacity, directory);
+}
+
+int ramfs_dir_entry(const char *dir, unsigned int index, char *name,
+	unsigned int capacity, int *directory, int *symlink) {
+	unsigned int raw_count = RAMFS_MAX_DYNAMIC_FILES + NUM_APPLETS;
+	unsigned int accepted = 0;
+	for (unsigned int raw = 0; raw < raw_count; raw++) {
+		char candidate[128], previous[128];
+		int candidate_dir, candidate_link, duplicate = 0;
+		if (!raw_child(dir, raw, candidate, sizeof(candidate), &candidate_dir, &candidate_link))
+			continue;
+		for (unsigned int earlier = 0; earlier < raw; earlier++) {
+			int previous_dir, previous_link;
+			if (raw_child(dir, earlier, previous, sizeof(previous), &previous_dir, &previous_link) &&
+			    streq(candidate, previous)) { duplicate = 1; break; }
+		}
+		if (duplicate) continue;
+		if (accepted++ == index) {
+			name_copy(name, candidate, capacity);
+			*directory = candidate_dir;
+			*symlink = candidate_link;
+			return 1;
 		}
 	}
 	return 0;
+}
+
+int ramfs_is_dir(const char *dir) {
+	if (!dir[0]) return 1;
+	char name[128];
+	int directory, symlink;
+	return ramfs_dir_entry(dir, 0, name, sizeof(name), &directory, &symlink);
 }

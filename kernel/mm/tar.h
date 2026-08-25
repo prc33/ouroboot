@@ -8,9 +8,9 @@
  * Every regular file entry becomes a
  * immediately readable/listable ramfs entry. Its bytes remain in the initrd
  * until the first write, when the normal writable-file path copies them.
- * Directories/symlinks/etc are silently
- * skipped. Directory components in regular-file names are retained as part
- * of the lookup key; directory inodes themselves are not modeled.
+ * Explicit tar directory records and symlinks are skipped. Directories are
+ * inferred from regular-file path prefixes and support stat, open/readdir,
+ * chdir, getcwd, relative paths, and directory-relative openat.
  *
  * Uncompressed tar, not zip: USTAR's own format is a flat, forward-
  * only stream of fixed 512-byte headers + block-padded data, parseable

@@ -502,26 +502,53 @@ static int copy_path_from_user(char *dst, const char *user_src) {
 	return i;
 }
 
+/* Canonicalize absolute or cwd-relative paths into the ramfs key form: no
+ * leading slash, with '.' and '..' resolved. */
+static void resolve_path(char *out, const char *input, const char *base) {
+	unsigned int n = 0, i = 0;
+	if (input[0] != '/') {
+		if (base[0] == '/') base++;
+		while (base[n] && n < PATH_MAX_LOCAL - 1) { out[n] = base[n]; n++; }
+	}
+	while (input[i]) {
+		while (input[i] == '/') i++;
+		unsigned int start = i;
+		while (input[i] && input[i] != '/') i++;
+		unsigned int len = i - start;
+		if (!len || (len == 1 && input[start] == '.')) continue;
+		if (len == 2 && input[start] == '.' && input[start + 1] == '.') {
+			while (n && out[n - 1] != '/') n--;
+			if (n) n--;
+			continue;
+		}
+		if (n && n < PATH_MAX_LOCAL - 1) out[n++] = '/';
+		for (unsigned int j = 0; j < len && n < PATH_MAX_LOCAL - 1; j++) out[n++] = input[start + j];
+	}
+	out[n] = 0;
+}
+
+static void resolve_user_path(char *out, const char *user_path) {
+	char input[PATH_MAX_LOCAL];
+	copy_path_from_user(input, user_path);
+	resolve_path(out, input, process_current_cwd());
+}
+
 static void sys_openat(struct regs *r) {
-	/* a0=dirfd, a1=path, a2=flags, a3=mode -- dirfd is ignored (only
-	 * AT_FDCWD/absolute paths make sense with no real cwd concept
-	 * yet); mode too (mm/ramfs.c's dynamic files are always 0644-ish
-	 * in spirit, real permission bits aren't modeled). flags *are*
-	 * honored now -- checkpoint 12, see below. */
-	char path[PATH_MAX_LOCAL];
-	copy_path_from_user(path, (const char *)r->a1);
+	/* a0=dirfd, a1=path, a2=flags, a3=mode. Relative paths use cwd or
+	 * the supplied directory fd; permission bits are not modeled. */
+	char input[PATH_MAX_LOCAL], path[PATH_MAX_LOCAL];
+	copy_path_from_user(input, (const char *)r->a1);
+	const char *base = process_current_cwd();
+	if (input[0] != '/' && (long)r->a0 != AT_FDCWD) {
+		struct fd_entry *dirfd = r->a0 >= 3 ? process_fd_get((int)r->a0 - 3) : 0;
+		if (!dirfd || !dirfd->is_dir) { r->a0 = (unsigned long)-EBADF; return; }
+		base = dirfd->path;
+	}
+	resolve_path(path, input, base);
 	unsigned long flags = r->a2;
 
-	/* checkpoint 11: opendir(".") -- musl's own opendir() (src/dirent/
-	 * opendir.c) is just open(name, O_DIRECTORY|...), so this is the
-	 * only place left to recognize "you're opening the one directory
-	 * this ramfs has", same "." /"/" special case sys_newfstatat
-	 * already makes for stat(). Real bug, found running real `ls`:
-	 * stat(".") already worked (correctly reporting a directory), so
-	 * ash's own cwd-tracking never noticed anything wrong, but open(".")
-	 * fell through to ramfs_lookup() -- which only ever matches real
-	 * *files* -- and failed with ENOENT ("ls: can't open '.'"). */
-	if ((path[0] == '.' && path[1] == 0) || (path[0] == '/' && path[1] == 0)) {
+	/* Directories are inferred from stored file path prefixes. */
+	if (ramfs_is_dir(path)) {
 		int idx = process_fd_alloc();
 		if (idx < 0) {
 			r->a0 = (unsigned long)-ENOMEM;
@@ -530,9 +557,10 @@ static void sys_openat(struct regs *r) {
 		struct fd_entry *fd = process_fd_get(idx);
 		fd->data = 0;
 		fd->size = 0;
-		fd->pos = 0; /* which root-directory entry sys_getdents64 hands out next */
+		fd->pos = 0;
 		fd->is_dir = 1;
 		fd->dynfile = 0;
+		copy_path_from_user(fd->path, path);
 		r->a0 = (unsigned long)(idx + 3);
 		return;
 	}
@@ -779,7 +807,7 @@ static void sys_lseek(struct regs *r) {
  * value either way). */
 static void sys_unlinkat(struct regs *r) {
 	char path[PATH_MAX_LOCAL];
-	copy_path_from_user(path, (const char *)r->a1);
+	resolve_user_path(path, (const char *)r->a1);
 	ramfs_dynamic_unlink(path);
 	r->a0 = 0;
 }
@@ -794,8 +822,8 @@ static void sys_unlinkat(struct regs *r) {
  * priority over the fixed table, same reasoning as everywhere else. */
 static void sys_faccessat(struct regs *r) {
 	char path[PATH_MAX_LOCAL];
-	copy_path_from_user(path, (const char *)r->a1);
-	if ((path[0] == '.' && path[1] == 0) || (path[0] == '/' && path[1] == 0)) {
+	resolve_user_path(path, (const char *)r->a1);
+	if (ramfs_is_dir(path)) {
 		r->a0 = 0;
 		return;
 	}
@@ -893,30 +921,19 @@ static void sys_getdents64(struct regs *r) {
 		return;
 	}
 
-	/* fd->pos indexes a virtual entry list: ".", "..", then
-	 * mm/ramfs.c's own fixed root directory (ramfs_root_entry_*()),
-	 * then (checkpoint 12) every dynamic (writable, created-at-
-	 * runtime) file -- so something `tcc -o out.elf ...` just wrote
-	 * actually shows up in `ls`, not just fixed/embedded content.
-	 * Synthesized here rather than stored anywhere, since there are
-	 * always exactly two fixed extra entries every real directory
-	 * has. */
-	unsigned int num_fixed = ramfs_root_entry_count();
-	unsigned int total = 2 + num_fixed + ramfs_dynamic_entry_count();
+	/* fd->pos indexes ".", "..", then the directory's unique immediate
+	 * children synthesized from ramfs path prefixes. */
 	unsigned long written = 0;
-	while (fd->pos < total) {
-		const char *name;
+	while (1) {
+		char name[PATH_MAX_LOCAL];
 		unsigned char d_type;
-		if (fd->pos == 0) { name = "."; d_type = DT_DIR; }
-		else if (fd->pos == 1) { name = ".."; d_type = DT_DIR; }
-		else if (fd->pos - 2 < num_fixed) {
-			unsigned int i = (unsigned int)(fd->pos - 2);
-			name = ramfs_root_entry_name(i);
-			d_type = ramfs_root_entry_is_symlink(i) ? DT_LNK : DT_REG;
-		} else {
-			unsigned int i = (unsigned int)(fd->pos - 2 - num_fixed);
-			name = ramfs_dynamic_entry_name(i);
-			d_type = DT_REG;
+		if (fd->pos == 0) { name[0] = '.'; name[1] = 0; d_type = DT_DIR; }
+		else if (fd->pos == 1) { name[0] = '.'; name[1] = '.'; name[2] = 0; d_type = DT_DIR; }
+		else {
+			int is_dir, is_symlink;
+			if (!ramfs_dir_entry(fd->path, (unsigned int)fd->pos - 2, name,
+			    sizeof(name), &is_dir, &is_symlink)) break;
+			d_type = is_dir ? DT_DIR : is_symlink ? DT_LNK : DT_REG;
 		}
 
 		unsigned int namelen = 0;
@@ -952,7 +969,7 @@ static void sys_getdents64(struct regs *r) {
 
 static void sys_execve(struct regs *r) {
 	char path[PATH_MAX_LOCAL];
-	copy_path_from_user(path, (const char *)r->a0);
+	resolve_user_path(path, (const char *)r->a0);
 
 	char *argv[EXECVE_MAX_ARGV + 1];
 	unsigned long *user_argv = (unsigned long *)r->a1;
@@ -1008,19 +1025,13 @@ static void fill_stat(unsigned char *sb, unsigned int mode, unsigned long size) 
 }
 
 static void sys_newfstatat(struct regs *r) {
-	/* a0=dirfd, a1=path, a2=statbuf, a3=flags -- dirfd/flags ignored,
-	 * same "no real cwd/directory concept" reasoning as sys_openat. */
+	/* a0=dirfd, a1=path, a2=statbuf, a3=flags. */
 	char path[PATH_MAX_LOCAL];
-	copy_path_from_user(path, (const char *)r->a1);
+	resolve_user_path(path, (const char *)r->a1);
 	unsigned char *sb = (unsigned char *)r->a2;
 	paging_ensure_writable((unsigned long)sb, 128); /* sizeof(struct stat) -- see fill_stat()'s own comment for the layout */
 
-	/* "." and "/" both mean the same thing here (mm/ramfs.h has no
-	 * real subdirectories) -- ash's own getpwd() logic stats both its
-	 * cached cwd string and "." to cross-check they're the same
-	 * place; a directory entry satisfies that unconditionally since
-	 * there's only ever the one directory. */
-	if ((path[0] == '.' && path[1] == 0) || (path[0] == '/' && path[1] == 0)) {
+	if (ramfs_is_dir(path)) {
 		fill_stat(sb, S_IFDIR | 0755, 0);
 		r->a0 = 0;
 		return;
@@ -1047,26 +1058,29 @@ static void sys_newfstatat(struct regs *r) {
 }
 
 static void sys_getcwd(struct regs *r) {
-	/* Always "/" -- mm/ramfs.h has no real subdirectories, so it's
-	 * also the only correct answer here, not just a placeholder (same
-	 * reasoning as sys_chdir below). */
 	char *buf = (char *)r->a0;
 	unsigned long size = r->a1;
-	if (size < 2) {
+	const char *cwd = process_current_cwd();
+	unsigned long len = 0;
+	while (cwd[len]) len++;
+	if (size <= len) {
 		r->a0 = (unsigned long)-EINVAL; /* ERANGE would be more precise; not worth a new errno for this */
 		return;
 	}
-	paging_ensure_writable((unsigned long)buf, 2);
-	buf[0] = '/';
-	buf[1] = 0;
-	r->a0 = 2; /* real getcwd(2) returns the length written, including the NUL */
+	paging_ensure_writable((unsigned long)buf, len + 1);
+	for (unsigned long i = 0; i <= len; i++) buf[i] = cwd[i];
+	r->a0 = len + 1;
 }
 
 static void sys_chdir(struct regs *r) {
-	/* No-op success: pathname keys retain directory components, but the ramfs
-	 * has no directory inodes or cwd state. Rejecting a chdir into somewhere
-	 * other than "/" would be more correct, but nothing here needs it. */
-	(void)r;
+	char path[PATH_MAX_LOCAL], absolute[PATH_MAX_LOCAL];
+	resolve_user_path(path, (const char *)r->a0);
+	if (!ramfs_is_dir(path)) { r->a0 = (unsigned long)-ENOENT; return; }
+	unsigned int n = 0;
+	absolute[n++] = '/';
+	for (unsigned int i = 0; path[i] && n < sizeof(absolute) - 1; i++) absolute[n++] = path[i];
+	absolute[n] = 0;
+	process_set_current_cwd(absolute);
 	r->a0 = 0;
 }
 

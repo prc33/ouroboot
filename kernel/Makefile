@@ -379,7 +379,7 @@ selfhost-initrd tcc-initrd: user_test/user_test_riscv64.elf $(RISCV64_USER_ELFS)
 	$(MAKE) -C ../compiler TARGET=riscv64 stage1
 	sh test/build-selfhost-initrd.sh .. $@.tar
 
-RISCV64_SELFHOST_INPUT := \r\rash /selfhost.sh\rexit 7\r
+RISCV64_SELFHOST_INPUT := \r\rls\rls tcc-src\rcd tcc-src\rpwd\rcd /\rash /selfhost.sh\rexit 7\r
 
 test-selfhost: kernel.elf
 	$(MAKE) selfhost-initrd
@@ -392,6 +392,9 @@ test-selfhost: kernel.elf
 		--mem 128 --timeout 30 \
 		--stdin-input "$(RISCV64_SELFHOST_INPUT)" \
 		--must-contain "SELFHOST: stage1 compiling TCC" \
+		--must-contain "tcc-src" \
+		--must-contain "musl" \
+		--must-contain "/tcc-src" \
 		--must-contain "SELFHOST: stage2 runs" \
 		--must-contain "tcc version 0.9.27-rv64min (riscv64 Linux)" \
 		--must-contain "hello from stage2 tcc" \

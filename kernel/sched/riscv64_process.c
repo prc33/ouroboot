@@ -166,6 +166,8 @@ struct process *process_create_from_elf(const unsigned char *elf_data, unsigned 
 	p->user_stack_limit = USER_STACK_LIMIT;
 	p->user_brk = USER_BRK_BASE;
 	p->user_mmap_next = USER_MMAP_BASE;
+	p->cwd[0] = '/';
+	p->cwd[1] = 0;
 
 	unsigned char *page = (unsigned char *)stack_top;
 	char *argv0 = (char *)(page - 64);
@@ -397,6 +399,17 @@ int process_handle_stack_fault(unsigned long address) {
 	return 1;
 }
 
+const char *process_current_cwd(void) {
+	return current_process ? current_process->cwd : "/";
+}
+
+void process_set_current_cwd(const char *path) {
+	if (!current_process) return;
+	int i = 0;
+	while (path[i] && i < 127) { current_process->cwd[i] = path[i]; i++; }
+	current_process->cwd[i] = 0;
+}
+
 /* checkpoint 7: real fork(), via SYS_clone -- see process.h's own
  * comment for why clone() rather than a dedicated fork syscall, and
  * arch/riscv64_syscall.c for the narrow flags check that gates
@@ -456,6 +469,7 @@ int process_fork(struct regs *r) {
 	child->user_stack_limit = parent->user_stack_limit;
 	child->user_brk = parent->user_brk;
 	child->user_mmap_next = parent->user_mmap_next;
+	for (int i = 0; i < 128; i++) child->cwd[i] = parent->cwd[i];
 
 	/* Real fork() semantics: open file descriptors survive into the
 	 * child. Simplified here to an independent copy (including `pos`)
@@ -475,6 +489,7 @@ int process_fork(struct regs *r) {
 		child->fds[fd].pos = parent->fds[fd].pos;
 		child->fds[fd].is_dir = parent->fds[fd].is_dir;
 		child->fds[fd].dynfile = parent->fds[fd].dynfile;
+		for (int i = 0; i < 128; i++) child->fds[fd].path[i] = parent->fds[fd].path[i];
 	}
 	/* checkpoint 12: any active stdio redirection (dup3() onto fd
 	 * 0/1/2 -- struct process's own stdio_override comment) survives
@@ -490,6 +505,7 @@ int process_fork(struct regs *r) {
 		child->stdio_override[fd].pos = parent->stdio_override[fd].pos;
 		child->stdio_override[fd].is_dir = parent->stdio_override[fd].is_dir;
 		child->stdio_override[fd].dynfile = parent->stdio_override[fd].dynfile;
+		for (int i = 0; i < 128; i++) child->stdio_override[fd].path[i] = parent->stdio_override[fd].path[i];
 	}
 
 	/* Child's saved trapframe: an exact snapshot of the parent's live
@@ -594,6 +610,7 @@ void process_fd_set(int index, const struct fd_entry *src) {
 	dst->pos = src->pos;
 	dst->is_dir = src->is_dir;
 	dst->dynfile = src->dynfile;
+	for (int i = 0; i < 128; i++) dst->path[i] = src->path[i];
 	dst->used = 1;
 }
 
@@ -634,6 +651,7 @@ void process_stdio_set(int fd, const struct fd_entry *src) {
 	dst->pos = src->pos;
 	dst->is_dir = src->is_dir;
 	dst->dynfile = src->dynfile;
+	for (int i = 0; i < 128; i++) dst->path[i] = src->path[i];
 	dst->used = 1;
 }
 

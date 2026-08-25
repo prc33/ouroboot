@@ -39,12 +39,9 @@ struct fd_entry {
 	const unsigned char *data;
 	unsigned long size;
 	unsigned long pos;
-	int is_dir; /* checkpoint 11: opendir()/readdir() -- see arch/riscv64_syscall.c's
-	             * sys_openat/sys_getdents64. When set, `pos` means something
-	             * different: not a byte offset into `data` (there is none --
-	             * a directory fd has no backing bytes), but which
-	             * mm/ramfs.c root-directory entry to hand out next. */
+	int is_dir; /* for directories, pos is the next readdir entry */
 	struct ramfs_dynamic_file *dynfile; /* checkpoint 12 -- see this struct's own comment above */
+	char path[128]; /* normalized directory path when is_dir is set */
 };
 
 struct process {
@@ -81,6 +78,7 @@ struct process {
 	 * fds open and interleaves reads/writes through both, which
 	 * nothing this kernel runs does. */
 	struct fd_entry stdio_override[3];
+	char cwd[128];
 };
 
 void process_init(void);
@@ -134,6 +132,8 @@ unsigned long process_current_brk(void);
 void process_set_current_brk(unsigned long value);
 unsigned long process_take_mmap(unsigned long length);
 int process_handle_stack_fault(unsigned long address);
+const char *process_current_cwd(void);
+void process_set_current_cwd(const char *path);
 
 /* Runs once, the next time the process table completely drains (no
  * RUNNABLE process left) -- riscv64_kmain.c uses this to chain into

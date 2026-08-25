@@ -16,11 +16,11 @@ struct ramfs_file {
  * Ordinary files use ramfs_dynamic_lookup() and retain their full paths. */
 const struct ramfs_file *ramfs_lookup(const char *path);
 
-/* The synthetic root entries are the BusyBox aliases. Real files loaded from
- * the initrd are enumerated by ramfs_dynamic_entry_* below. */
-unsigned int ramfs_root_entry_count(void);
-const char *ramfs_root_entry_name(unsigned int index); /* index must be < ramfs_root_entry_count() */
-int ramfs_root_entry_is_symlink(unsigned int index);   /* every entry is an alias */
+/* Directories are inferred from file paths. `dir` is normalized without a
+ * leading slash (empty means root). Entries are unique immediate children. */
+int ramfs_is_dir(const char *dir);
+int ramfs_dir_entry(const char *dir, unsigned int index, char *name,
+	unsigned int capacity, int *is_dir, int *is_symlink);
 
 /* A real writable file, loaded or created at runtime. `data` is a physical
  * address that is also a kernel pointer through identity-mapped RAM. NULL/0 until
@@ -51,12 +51,8 @@ struct ramfs_dynamic_file {
  * "/tcc-src/tcc.c" and "tcc-src/tcc.c" name the same file, matching how sys_openat/execve
  * already treat a leading '/' as "the one root this ramfs has" rather
  * than something meaningfully different from no leading '/' at all) --
- * this ramfs still has no real directory *inodes* (no mkdir, no
- * per-directory readdir, no '.'/'..'), just path strings used as opaque
- * lookup keys, which is all a real `-I dir` + `#include "file.h"` build
- * actually needs (open()/stat() by constructed path, never readdir() on
- * one of these subdirectories). Returns 0 if no dynamic file by that
- * path currently exists. */
+ * directories are inferred from those path prefixes. Returns 0 if no dynamic
+ * file by that path currently exists. */
 struct ramfs_dynamic_file *ramfs_dynamic_lookup(const char *path);
 
 /* Finds an existing dynamic file by that name, or allocates a fresh
@@ -91,12 +87,5 @@ void ramfs_dynamic_unlink(const char *path);
  * on success, -1 on failure (pmm_alloc_contiguous() couldn't find
  * enough contiguous free RAM -- real ENOMEM, not a bug). */
 int ramfs_dynamic_write(struct ramfs_dynamic_file *f, unsigned long offset, const unsigned char *src, unsigned long len);
-
-/* Same index-based shape as ramfs_root_entry_count()/_name() above,
- * for the same reason (arch/riscv64_syscall.c's sys_getdents64 builds
- * dirent64 records for these too, appended after the BusyBox aliases,
- * so a freshly created file actually shows up in `ls`). */
-unsigned int ramfs_dynamic_entry_count(void);
-const char *ramfs_dynamic_entry_name(unsigned int index); /* index must be < ramfs_dynamic_entry_count() */
 
 #endif

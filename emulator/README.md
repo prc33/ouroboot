@@ -46,6 +46,8 @@ Open <http://localhost:8000/emulator/web/>. By default it loads the direct-shell
 kernel and `kernel/tcc-initrd.tar`, so `ls` includes the runnable `tcc`,
 `hello.c`, and `selfhost.sh`. Run `ash /selfhost.sh` to rebuild TCC with itself,
 compile the example, and run it.
+The ramfs exposes the source closure as normal directories: for example,
+`ls tcc-src`, `cd tcc-src`, and `pwd` work as expected.
 Use `?kernel=../../kernel/kernel.elf` to run every historical checkpoint first.
 `tcc-initrd.tar` contains the complete source/header closure; the equivalent
 test artifact is available as `selfhost-initrd.tar`.
