@@ -1,16 +1,15 @@
 # TCC WebAssembly example
 
-This is the first, deliberately standalone use of Ouroboot's `wasm32`
-TCC target. It compiles ordinary freestanding C functions into a WebAssembly
-module and calls them from a small browser page.
+This directory exercises Ouroboot's `wasm32` TCC target with small examples
+and builds the C RV64 emulator used by the terminal demo.
 
 ```sh
 make test
-make serve
+make ../js/rv64.wasm
 ```
 
-Then open <http://localhost:8000>. The module has no WASI or JavaScript
-imports. Its non-static C functions and linear memory are exported.
+The generated modules have no WASI or JavaScript imports. Their non-static C
+functions and linear memory are exported.
 
 The backend currently targets small freestanding code. It supports scalar
 integer and floating-point operations, calls, memory, and ordinary structured

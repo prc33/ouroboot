@@ -1,63 +1,28 @@
-# emulator/ — P1+P2+P3 done: boots kernel/kernel.elf, in a real browser tab, full test parity with QEMU; checkpoint 10's real interactive busybox ash accepts real typed input, in the browser too
+# RV64 emulator
 
-See `../docs/emulator-plan.md` for the plan (locked decisions, phased
-exit criteria, the ISA subset derived from this repo's own build
-output) and the findings docs for what's built and the real bugs found
-bringing each phase up: `../docs/emulator-p1-findings.md` (headless
-Node, the core CPU/MMU/UART) and `../docs/emulator-p3-findings.md`
-(the browser/`xterm.js`/Worker wrapper).
+The active emulator core is standard C in `wasm/rv64.c`, compiled by this
+repository's TCC wasm32 target. It implements the RV64IM, Sv39, supervisor,
+Sstc, UART, and small F/D subsets used by this repository. Wasm supplies
+native 64-bit integer registers; there is no JavaScript `BigInt` CPU loop.
 
-`js/` is a from-scratch RV64IM + Zicsr + privileged-subset interpreter
-in plain JavaScript (jor1k -- https://github.com/s-macke/jor1k/wiki/Technical-details
--- as reference for technique, not a fork base or dependency).
+The browser wrapper in `js/worker.js` only instantiates Wasm, copies ELF load
+segments into guest RAM, forwards terminal input, drains UART output, and
+yields between execution batches.
 
-**Headless (Node), matching `kernel/test/boot_test.py`'s own checkpoints:**
+Build and test:
+
+```sh
+make -C compiler TARGET=wasm32
+make -C emulator/wasm
+make -C emulator/wasm test
+make -C emulator/wasm test-boot
+make -C emulator/wasm test-shell
 ```
-cd ../kernel && make ARCH=riscv64        # build kernel.elf
-make ARCH=riscv64 test-js                # boot it under this emulator
-```
 
-**In an actual browser tab:**
-```
-cd ../kernel && make ARCH=riscv64        # build kernel.elf (must be riscv64 --
-                                          # kernel.elf is a shared build-artifact
-                                          # filename across ARCH= targets, see
-                                          # kernel/Makefile's own top comment)
-cd ..    # repo root -- index.html fetches ../../kernel/kernel.elf,
-         # so the server's root has to be the repo root, not
-         # emulator/js/ itself (a server rooted at emulator/js/ 404s
-         # on that fetch -- python3 -m http.server won't serve a path
-         # that escapes its own root)
-python3 -m http.server 8000
-# open http://localhost:8000/emulator/js/index.html
-```
-(Any static HTTP server works -- `fetch()` and Worker script loading
-both need a real origin, not `file://`.)
+For the browser demo, build `kernel/kernel.elf`, serve the repository root,
+and open `http://localhost:8000/emulator/js/`. The generated
+`emulator/js/rv64.wasm` has no WASI or JavaScript imports.
 
-Once the kernel finishes booting (P4 through P10's checkpoints, then a
-real busybox ash prompt), the terminal is live: click into it and type
--- real keystrokes go through `app.js`'s `term.onData` handler, into
-the Worker via `postMessage`, into the kernel's own UART RX exactly as
-a real serial keyboard would, and back out as real shell output.
-Verified end-to-end with Puppeteer (real headless Chromium, real
-simulated per-character keystrokes, not just simulated in Node) -- see
-this repo's own git history (commits `6932c25` and `4e21ca4`) for how
-that was confirmed and the two real bugs it found along the way: a
-nested-trap COW bug (a page fault mid-syscall corrupting this kernel's
-single shared trapframe), and `sys_read` needing its own ICRNL
-translation by hand, since there's no tty layer to do it the usual
-way.
-
-`docs/emulator-ecosystem-blueprint.md` is the raw external input that
-prompted `docs/emulator-plan.md`, kept for reference.
-
-Next up: P4 (F/D instruction support, needed for real userspace
-binaries like the self-hosted compiler, beyond what the kernel itself
-uses).
-
-`../docs/self-hosting-system-plan.md`'s original emulator design
-(P1/P2 phases: CPU core, then differential testing against QEMU
-instruction-by-instruction) predates both the RISC-V pivot and
-`docs/emulator-plan.md` -- the phased *approach* still holds and
-shaped this plan; the specific instruction-set target and
-implementation language do not.
+The former plain-JavaScript implementation remains in `js/cpu.js`,
+`js/mmu.js`, `js/memory.js`, and `js/uart.js` as a readable reference and
+comparison implementation; the browser worker no longer loads it.

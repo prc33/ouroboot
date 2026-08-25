@@ -1,7 +1,7 @@
 {
   "name": "riscv64-emulator",
   "version": "0.1.0",
-  "description": "From-scratch RV64 emulator for kernel/'s riscv64 port -- see ../../docs/emulator-plan.md",
+  "description": "Browser wrapper for the C/Wasm RV64 emulator",
   "private": true,
   "main": "boot.js",
   "bin": { "boot": "./boot.js" },
