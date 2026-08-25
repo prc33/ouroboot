@@ -16,6 +16,11 @@ assert.equal(instance.exports.identity64(0x123456789abcdefn), 0x123456789abcdefn
 assert.equal(instance.exports.add64(0x100000000n, 7n), 0x100000007n);
 assert.equal(instance.exports.shift64(0x8000000000000000n, 63), 1n);
 assert.equal(instance.exports.multiply64(0x100000001n, 3n), 0x300000003n);
+assert.equal(instance.exports.divide_u64(0xffffffffffffffffn, 3n), 0x5555555555555555n);
+assert.equal(instance.exports.remainder64(-17n, 5n), -2n);
+assert.equal(instance.exports.shift_left64(1n, 63), -0x8000000000000000n);
+assert.equal(instance.exports.less64(-1n, 1n), 1);
+assert.equal(instance.exports.less_u64(0xffffffffffffffffn, 1n), 0);
 assert.equal(instance.exports.extend_signed(-7), -7n);
 assert.equal(instance.exports.extend_unsigned(0xffffffff), 0xffffffffn);
 assert.equal(instance.exports.truncate64(0x10000002an), 42);

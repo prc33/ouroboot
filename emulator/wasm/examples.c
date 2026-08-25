@@ -44,6 +44,11 @@ unsigned long long identity64(unsigned long long x) { return x; }
 unsigned long long add64(unsigned long long a, unsigned long long b) { return a + b; }
 unsigned long long shift64(unsigned long long x, int n) { return x >> n; }
 unsigned long long multiply64(unsigned long long a, unsigned long long b) { return a * b; }
+unsigned long long divide_u64(unsigned long long a, unsigned long long b) { return a / b; }
+long long remainder64(long long a, long long b) { return a % b; }
+unsigned long long shift_left64(unsigned long long x, int n) { return x << n; }
+int less64(long long a, long long b) { return a < b; }
+int less_u64(unsigned long long a, unsigned long long b) { return a < b; }
 long long extend_signed(int x) { return x; }
 unsigned long long extend_unsigned(unsigned int x) { return x; }
 int truncate64(long long x) { return x; }

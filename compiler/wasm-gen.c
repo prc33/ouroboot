@@ -541,12 +541,11 @@ ST_FUNC void gfunc_call(int nb_args)
 {
     Sym *func_sym;
     WasmOp *wo, *sop;
-    int i, r, r2;
+    int i, r;
     int arg_types[WASM_MAX_CALL_ARGS];
     int arg_off[WASM_MAX_CALL_ARGS];
     int ret_type;
     int is_direct;
-    int func_reg;
 
     if (nb_args > WASM_MAX_CALL_ARGS)
         tcc_error("wasm32 backend: too many call arguments (%d)", nb_args);
@@ -556,7 +555,6 @@ ST_FUNC void gfunc_call(int nb_args)
     for (i = nb_args - 1; i >= 0; --i) {
         int bt = vtop->type.t & VT_BTYPE;
         int size, align, slot;
-        r2 = VT_CONST;
         if (bt == VT_STRUCT)
             wasm_unimp("struct argument passing");
         if (wasm_is_float_type(vtop->type.t)) {
@@ -606,12 +604,10 @@ ST_FUNC void gfunc_call(int nb_args)
     if (!is_direct)
         wasm_unimp("indirect function call");
     wo = wasm_emit_op(WASM_OP_CALL);
-    func_reg = VT_CONST;
     if (wo) {
         int bt = func_sym->type.t & VT_BTYPE;
         wo->call_tok = vtop->sym ? vtop->sym->v : func_sym->v;
         wo->call_name = wasm_tok_strdup(wo->call_tok);
-        wo->r0 = func_reg;
         wo->call_nb_args = nb_args;
         for (i = 0; i < nb_args; ++i) {
             wo->call_arg_type[i] = (unsigned char)arg_types[i];
