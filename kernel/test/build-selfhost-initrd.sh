@@ -28,7 +28,8 @@ cp -R "$root"/musl-riscv64/arch/generic/. "$stage/musl/arch/generic/"
 cp "$root"/musl-riscv64/lib/crt1.o "$root"/musl-riscv64/lib/crti.o \
     "$root"/musl-riscv64/lib/crtn.o "$root"/musl-riscv64/lib/libc.a \
     "$stage/musl/lib/"
-cp "$root"/kernel/test/selfhost-hello.c "$stage/"
+cp "$root"/kernel/test/selfhost-hello.c "$stage/hello.c"
+cp "$root"/kernel/test/selfhost.sh "$stage/"
 
 tar cf "$output" -C "$stage" busybox exec_target greeting test.sh \
-    from-initrd.txt tcc tcc-src musl selfhost-hello.c
+    from-initrd.txt tcc tcc-src musl hello.c selfhost.sh

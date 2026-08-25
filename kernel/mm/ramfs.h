@@ -65,6 +65,10 @@ struct ramfs_dynamic_file *ramfs_dynamic_lookup(const char *path);
  * if generous, fixed ceiling -- see mm/ramfs.c's own RAMFS_MAX_DYNAMIC_FILES). */
 struct ramfs_dynamic_file *ramfs_dynamic_open_or_create(const char *path);
 
+/* Installs read-only bytes already resident in the initrd. A later write
+ * transparently allocates writable backing and copies the old contents. */
+int ramfs_dynamic_load(const char *path, const unsigned char *data, unsigned long size);
+
 /* Forgets a dynamic file's content (size back to 0) without freeing
  * its backing capacity -- the O_TRUNC half of openat(), and (see
  * sys_openat's own comment) also what a real filesystem's rewrite-in-

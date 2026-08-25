@@ -1063,11 +1063,9 @@ static void sys_getcwd(struct regs *r) {
 }
 
 static void sys_chdir(struct regs *r) {
-	/* No-op success: mm/ramfs.h is flat, so "changing directory" has
-	 * nothing to actually change -- every lookup already matches by
-	 * basename regardless of any notion of cwd. Rejecting a chdir
-	 * into somewhere that isn't "/" would be more correct but nothing
-	 * in this checkpoint's tests needs that distinction yet. */
+	/* No-op success: pathname keys retain directory components, but the ramfs
+	 * has no directory inodes or cwd state. Rejecting a chdir into somewhere
+	 * other than "/" would be more correct, but nothing here needs it. */
 	(void)r;
 	r->a0 = 0;
 }

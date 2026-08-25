@@ -12,8 +12,3 @@ cp "$root/kernel/test/initrd-fixture/greeting" "$stage/greeting"
 cp "$root/kernel/test/initrd-fixture/test.sh" "$stage/test.sh"
 cp "$root/kernel/test/initrd-fixture/from-initrd.txt" "$stage/from-initrd.txt"
 tar cf "$output" -C "$stage" busybox exec_target greeting test.sh from-initrd.txt
-
-if [ "$#" -ge 3 ]; then
-    cp "$3" "$stage/tcc"
-    tar rf "$output" -C "$stage" tcc
-fi

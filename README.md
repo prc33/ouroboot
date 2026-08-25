@@ -126,12 +126,15 @@ python3 -m http.server 8000
 both need a real origin, not `file://`.)
 
 You'll see the direct-shell kernel boot and hand off to BusyBox `ash` from the
-explicit initrd, with a runnable `/tcc`, all inside
+explicit initrd, with a runnable `/tcc`, `/hello.c`, and `/selfhost.sh`, all inside
 `xterm.js`, with the CPU running in a Web Worker so it never blocks
 the UI. Once you see the `#` prompt, click into the terminal and
 type: real keystrokes go out over the same UART byte interface the
 kernel's own serial console uses. The direct BusyBox shell reaches its prompt
 in roughly twenty seconds in the Node/V8 regression environment.
+Run `ash /selfhost.sh` to have TCC rebuild itself, build the hello-world source,
+and execute the resulting program. This compilation is much faster under QEMU
+than under the instruction-interpreting browser emulator.
 
 Headless equivalent (same checkpoints, including a scripted shell
 session, asserted against QEMU's own output so the two can't silently

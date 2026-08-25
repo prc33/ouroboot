@@ -121,6 +121,16 @@ struct ramfs_dynamic_file *ramfs_dynamic_open_or_create(const char *path) {
 	return 0; /* every slot in use -- a real, if generous, fixed ceiling */
 }
 
+int ramfs_dynamic_load(const char *path, const unsigned char *data, unsigned long size) {
+	struct ramfs_dynamic_file *f = ramfs_dynamic_open_or_create(path);
+	if (!f)
+		return -1;
+	f->data = (unsigned char *)data;
+	f->size = size;
+	f->capacity = 0; /* borrowed initrd storage; grow() makes it writable */
+	return 0;
+}
+
 void ramfs_dynamic_truncate(struct ramfs_dynamic_file *f) {
 	/* Content beyond `size` is never trusted to already be zero (see
 	 * ramfs_dynamic_write's own comment on why it re-zeros a gap
@@ -133,7 +143,7 @@ void ramfs_dynamic_unlink(const char *path) {
 	struct ramfs_dynamic_file *f = ramfs_dynamic_lookup(path);
 	if (!f)
 		return; /* no matching dynamic file -- silently harmless, see this function's own header comment */
-	if (f->data) {
+	if (f->capacity) {
 		unsigned int pages = (unsigned int)(f->capacity / PAGE_SIZE);
 		unsigned int base = (unsigned int)(unsigned long)f->data;
 		for (unsigned int i = 0; i < pages; i++)
@@ -170,7 +180,7 @@ static int ramfs_dynamic_grow(struct ramfs_dynamic_file *f, unsigned long needed
 		new_data[i] = f->data[i];
 	for (i = f->size; i < new_capacity; i++)
 		new_data[i] = 0; /* fresh pages -- real content, not garbage, from the first byte past size onward */
-	if (f->data) {
+	if (f->capacity) {
 		unsigned int old_pages = (unsigned int)(f->capacity / PAGE_SIZE);
 		unsigned int old_base = (unsigned int)(unsigned long)f->data;
 		for (unsigned int p = 0; p < old_pages; p++)

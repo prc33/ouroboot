@@ -43,10 +43,12 @@ python3 -m http.server 8000
 ```
 
 Open <http://localhost:8000/emulator/web/>. By default it loads the direct-shell
-kernel and `kernel/tcc-initrd.tar`, so `ls` includes the runnable `tcc`.
+kernel and `kernel/tcc-initrd.tar`, so `ls` includes the runnable `tcc`,
+`hello.c`, and `selfhost.sh`. Run `ash /selfhost.sh` to rebuild TCC with itself,
+compile the example, and run it.
 Use `?kernel=../../kernel/kernel.elf` to run every historical checkpoint first.
-To expose the complete source/header closure image instead, build
-`selfhost-initrd` and add `?initrd=../../kernel/selfhost-initrd.tar`.
+`tcc-initrd.tar` contains the complete source/header closure; the equivalent
+test artifact is available as `selfhost-initrd.tar`.
 The page obtains xterm.js from a CDN, so that first load needs network access.
 It starts the emulator in a Web Worker, leaving the terminal responsive while
 the guest runs. `fetch()` and Worker loading require HTTP; opening the HTML as

@@ -6,10 +6,9 @@
  * (arch/riscv64_memmap.h's RV64_INITRD_BASE) by whatever actually
  * booted the kernel; no filesystem contents are baked into kernel.elf.
  * Every regular file entry becomes a
- * real, immediately readable/writable/listable ramfs entry (mm/ramfs.h's
- * own checkpoint 12 dynamic files) -- the same mechanism a running
- * program creating a file with open()+write() uses, not a separate
- * read-only fixed table. Directories/symlinks/etc are silently
+ * immediately readable/listable ramfs entry. Its bytes remain in the initrd
+ * until the first write, when the normal writable-file path copies them.
+ * Directories/symlinks/etc are silently
  * skipped. Directory components in regular-file names are retained as part
  * of the lookup key; directory inodes themselves are not modeled.
  *

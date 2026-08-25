@@ -72,12 +72,8 @@ unsigned int tar_load_initrd(const unsigned char *data, unsigned long max_size) 
 			name[i] = 0;
 
 			if (name[0] && off + size <= max_size) {
-				struct ramfs_dynamic_file *f = ramfs_dynamic_open_or_create(name);
-				if (f) {
-					ramfs_dynamic_truncate(f); /* in case the same archive is ever loaded twice */
-					if (ramfs_dynamic_write(f, 0, data + off, size) == 0)
-						count++;
-				}
+				if (ramfs_dynamic_load(name, data + off, size) == 0)
+					count++;
 			}
 		}
 		/* Skip this entry's data (block-padded, regardless of

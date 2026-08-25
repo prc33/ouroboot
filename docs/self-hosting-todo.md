@@ -15,10 +15,10 @@ into a tar initrd, and boots the normal kernel under QEMU. Inside BusyBox ash:
 3. stage 2 compiles and links a fresh program;
 4. that program runs and prints `hello from stage2 tcc`.
 
-The test also requires the kernel's final P10 checkpoint and rejects fatal or
-page-fault output. `kernel/test/build-selfhost-initrd.sh` is the payload recipe
-and `RISCV64_SELFHOST_INPUT` in `kernel/Makefile` is the exact guest command
-sequence.
+The exact guest-side demonstration is `/selfhost.sh`; its input program is the
+small `/hello.c`. Both are ordinary files in the initrd, so the same sequence
+can be run interactively in the browser. The test also requires the kernel's
+final P10 checkpoint and rejects fatal or page-fault output.
 
 ## Blockers found and fixed
 

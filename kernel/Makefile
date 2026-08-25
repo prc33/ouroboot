@@ -356,19 +356,12 @@ test-initrd-wasm: kernel.elf initrd.tar
 # Full closure test: build a riscv64 TCC with this repository's TCC, place
 # that compiler, its own sources, and its musl build environment in the real
 # tar initrd, then have it compile and link TCC again inside this kernel.
-selfhost-initrd:
+selfhost-initrd tcc-initrd:
 	$(MAKE) -C ../compiler clean
 	$(MAKE) -C ../compiler TARGET=riscv64 stage1
-	sh test/build-selfhost-initrd.sh .. selfhost-initrd.tar
+	sh test/build-selfhost-initrd.sh .. $@.tar
 
-# Small interactive image: the ordinary BusyBox filesystem plus a runnable
-# stage-1 compiler, without the much larger source/header closure payload.
-tcc-initrd:
-	$(MAKE) -C ../compiler clean
-	$(MAKE) -C ../compiler TARGET=riscv64 stage1
-	sh test/build-initrd.sh .. tcc-initrd.tar ../compiler/stage1/tcc
-
-RISCV64_SELFHOST_INPUT := \r\recho SELFHOST: stage1 compiling TCC\r/tcc -B/tcc-src -I/tcc-src -I/tcc-src/include -I/musl/obj/include -I/musl/include -I/musl/arch/riscv64 -I/musl/arch/generic -nostdinc -DTCC_TARGET_RISCV64 -c -o /tcc-stage2.o /tcc-src/tcc.c\r/tcc -B/tcc-src -static -nostdinc -nostdlib -o /tcc-stage2 /musl/lib/crt1.o /musl/lib/crti.o /tcc-stage2.o /musl/lib/libc.a /tcc-src/libtcc1.a /musl/lib/crtn.o\recho SELFHOST: stage2 runs\r/tcc-stage2 -v\recho SELFHOST: stage2 compiling program\r/tcc-stage2 -B/tcc-src -I/tcc-src/include -I/musl/obj/include -I/musl/include -I/musl/arch/riscv64 -I/musl/arch/generic -nostdinc -static -nostdlib -o /selfhost-hello /musl/lib/crt1.o /musl/lib/crti.o /selfhost-hello.c /musl/lib/libc.a /tcc-src/libtcc1.a /musl/lib/crtn.o\r/selfhost-hello\recho SELFHOST: complete\rexit 7\r
+RISCV64_SELFHOST_INPUT := \r\rash /selfhost.sh\rexit 7\r
 
 test-selfhost: kernel.elf
 	$(MAKE) selfhost-initrd
