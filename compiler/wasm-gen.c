@@ -194,8 +194,6 @@ static WasmFuncIR *wasm_new_func(Sym *sym)
               tcc_wasm_nb_funcs + 1, sizeof(WasmFuncIR));
     f = &tcc_wasm_funcs[tcc_wasm_nb_funcs++];
     memset(f, 0, sizeof(*f));
-    f->sym = sym;
-    f->sym_index = sym ? sym->c : 0;
     f->sym_tok = sym ? sym->v : 0;
     f->ret_type = WASM_VAL_VOID;
     return f;
@@ -283,7 +281,6 @@ static void wasm_set_addr(WasmOp *op, int fr, Sym *sym, int fc)
     } else if (fr == VT_CONST) {
         if (sym) {
             op->flags = value_flags | WASM_ADDR_SYM;
-            op->sym = sym;
             op->sym_index = sym->c;
             op->sym_tok = sym->v;
             op->sym_name = wasm_tok_strdup(sym->v);
@@ -409,7 +406,6 @@ ST_FUNC void load(int r, SValue *sv)
                     return;
                 wo->r0 = r;
                 wo->flags = WASM_ADDR_SYM;
-                wo->sym = sv->sym;
                 wo->sym_index = sv->sym ? sv->sym->c : 0;
                 wo->sym_tok = sv->sym ? sv->sym->v : 0;
                 wo->sym_name = sv->sym ? wasm_tok_strdup(sv->sym->v) : NULL;
@@ -430,7 +426,6 @@ ST_FUNC void load(int r, SValue *sv)
                 if (!wo)
                     return;
                 wo->r0 = r;
-                wo->sym = sv->sym;
                 wo->sym_index = sv->sym ? sv->sym->c : 0;
                 wo->sym_tok = sv->sym ? sv->sym->v : 0;
                 wo->sym_name = sv->sym ? wasm_tok_strdup(sv->sym->v) : NULL;
@@ -614,13 +609,11 @@ ST_FUNC void gfunc_call(int nb_args)
     func_reg = VT_CONST;
     if (wo) {
         int bt = func_sym->type.t & VT_BTYPE;
-        wo->sym = vtop->sym;
         wo->call_tok = vtop->sym ? vtop->sym->v : func_sym->v;
         wo->call_name = wasm_tok_strdup(wo->call_tok);
         wo->r0 = func_reg;
         wo->call_nb_args = nb_args;
         for (i = 0; i < nb_args; ++i) {
-            wo->call_arg_reg[i] = WASM_ARG_STACK;
             wo->call_arg_type[i] = (unsigned char)arg_types[i];
             wo->call_arg_off[i] = arg_off[i];
         }

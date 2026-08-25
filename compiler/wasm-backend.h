@@ -78,8 +78,6 @@ enum {
 #define WASM_OP_FLAG_UNSIGNED 0x0100
 
 #define WASM_MAX_CALL_ARGS 32
-#define WASM_ARG_STACK 0xff
-
 typedef struct WasmOp {
     int pc;
     unsigned char kind;
@@ -93,21 +91,17 @@ typedef struct WasmOp {
     int op;
     int target_pc;
     double f64;
-    Sym *sym;
     int sym_index;
     int sym_tok;
     char *sym_name;
     int call_tok;
     char *call_name;
     unsigned char call_nb_args;
-    unsigned char call_arg_reg[WASM_MAX_CALL_ARGS];
     unsigned char call_arg_type[WASM_MAX_CALL_ARGS];
     int call_arg_off[WASM_MAX_CALL_ARGS];
 } WasmOp;
 
 typedef struct WasmFuncIR {
-    Sym *sym;
-    int sym_index;
     int sym_tok;
     char *name;
     int start_pc;

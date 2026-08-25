@@ -280,29 +280,6 @@ static int wasm_find_func_index_by_tok(int tok)
     return -1;
 }
 
-static int wasm_find_func_index_by_sym_index(int sym_index)
-{
-    int i;
-    for (i = 0; i < tcc_wasm_nb_funcs; ++i) {
-        if (tcc_wasm_funcs[i].sym_index == sym_index)
-            return i;
-    }
-    return -1;
-}
-
-static int wasm_find_func_index_by_name(const char *name)
-{
-    int i;
-    if (!name || !*name)
-        return -1;
-    for (i = 0; i < tcc_wasm_nb_funcs; ++i) {
-        const char *fname = tcc_wasm_funcs[i].name;
-        if (fname && !strcmp(fname, name))
-            return i;
-    }
-    return -1;
-}
-
 static int wasm_find_defined_sym_index_by_name(const char *name)
 {
     ElfSym *symtab, *es;
@@ -503,38 +480,20 @@ static void wasm_emit_addr(WasmBuf *b, WasmOp *op, int local_fp, int local_i0)
     }
 }
 
-static void wasm_emit_call_arg(WasmBuf *b, WasmOp *op, int i, int local_fp, int local_i0, int local_f0)
+static void wasm_emit_call_arg(WasmBuf *b, WasmOp *op, int i, int local_fp)
 {
     int at = op->call_arg_type[i];
-    int ar = op->call_arg_reg[i];
-
-    if (ar == WASM_ARG_STACK) {
-        wb_local_get(b, local_fp);
-        if (op->call_arg_off[i])
-            wb_i32_const(b, op->call_arg_off[i]), wb_u8(b, 0x6a);
-        if (at == WASM_VAL_I32)
-            wb_u8(b, 0x28), wb_memarg(b, 2);
-        else if (at == WASM_VAL_I64)
-            wb_u8(b, 0x29), wb_memarg(b, 3);
-        else if (at == WASM_VAL_F32)
-            wb_u8(b, 0x2a), wb_memarg(b, 2);
-        else if (at == WASM_VAL_F64)
-            wb_u8(b, 0x2b), wb_memarg(b, 3);
-        else
-            tcc_error("wasm32 backend: invalid call argument type %d", at);
-        return;
-    }
-
+    wb_local_get(b, local_fp);
+    if (op->call_arg_off[i])
+        wb_i32_const(b, op->call_arg_off[i]), wb_u8(b, 0x6a);
     if (at == WASM_VAL_I32)
-        wb_local_get(b, wasm_i32_reg_local(ar, local_i0));
-    else if (at == WASM_VAL_I64) {
-        /* local_tmp64 immediately follows the four native i64 registers. */
-        int local_tmp64 = local_f0 + 8;
-        wb_local_get(b, wasm_i64_reg_local(ar, local_tmp64));
-    } else if (at == WASM_VAL_F32)
-        wb_local_get(b, wasm_f64_reg_local(ar, local_f0)), wb_u8(b, 0xb6);
+        wb_u8(b, 0x28), wb_memarg(b, 2);
+    else if (at == WASM_VAL_I64)
+        wb_u8(b, 0x29), wb_memarg(b, 3);
+    else if (at == WASM_VAL_F32)
+        wb_u8(b, 0x2a), wb_memarg(b, 2);
     else if (at == WASM_VAL_F64)
-        wb_local_get(b, wasm_f64_reg_local(ar, local_f0));
+        wb_u8(b, 0x2b), wb_memarg(b, 3);
     else
         tcc_error("wasm32 backend: invalid call argument type %d", at);
 }
@@ -1060,7 +1019,7 @@ static void wasm_emit_case(WasmBuf *b, WasmFuncIR *f, WasmOp *op,
         if (fi < 0)
             tcc_error("wasm32 backend: unresolved direct call");
         for (i = 0; i < op->call_nb_args; ++i)
-            wasm_emit_call_arg(b, op, i, local_fp, local_i0, local_f0);
+            wasm_emit_call_arg(b, op, i, local_fp);
         wb_u8(b, 0x10), wb_uleb(b, fi);
         if (op->type == WASM_VAL_I32)
             wb_local_set(b, wasm_i32_reg_local(REG_IRET, local_i0));
