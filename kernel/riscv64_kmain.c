@@ -4,6 +4,7 @@
 #include "mm/pmm.h"
 #include "mm/paging.h"
 #include "mm/elf.h"
+#include "mm/tar.h"
 #include "sched/task.h"
 #include "sched/process.h"
 #include "user_test_riscv64_payload.h"
@@ -420,8 +421,23 @@ void kmain(unsigned long hartid, unsigned long dtb) {
 	 * mm/pmm.h's pmm_reserve_range() comment for why this is required,
 	 * not defensive. */
 	pmm_reserve_range((unsigned int)RV64_SCRATCH_BASE, (unsigned int)RV64_TRAP_STACK_TOP);
+	/* checkpoint 13: arch/riscv64_memmap.h's own comment -- reserved
+	 * up front, same reasoning as the scratch region right above, so
+	 * nothing else can be handed this memory before tar_load_initrd()
+	 * below gets to read whatever's actually there. */
+	pmm_reserve_range((unsigned int)RV64_INITRD_BASE, (unsigned int)(RV64_INITRD_BASE + RV64_INITRD_MAX_SIZE));
 	run_pmm_reserve_test();
 	paging_init(RV64_MEM_TOP);
+
+	/* checkpoint 13: a real, separate boot module -- see mm/tar.h's
+	 * own comment. Harmless (0 files, real memory that was never
+	 * written to reads as zero, so the tar parser's own end-of-archive
+	 * check fires on the very first header) if nothing actually loaded
+	 * one -- every existing checkpoint below runs identically either
+	 * way, only kernel/Makefile's own test-initrd target actually
+	 * supplies a real archive. */
+	unsigned int initrd_files = tar_load_initrd((const unsigned char *)RV64_INITRD_BASE, RV64_INITRD_MAX_SIZE);
+	kprintf("initrd: %u file(s) loaded from tar at %p\n", initrd_files, (void *)RV64_INITRD_BASE);
 
 #ifdef KERNEL_DIRECT_SHELL
 	/* Product/performance boot: the checkpoint chain remains the default test

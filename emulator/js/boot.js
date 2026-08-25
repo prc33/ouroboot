@@ -27,15 +27,28 @@
  * only ever consumes one byte per read() call regardless of how many
  * are already queued, so this is equivalent to "the user typed
  * everything instantly", not a timing simulation; correct for an
- * automated correctness check, not a demo of realistic typing speed. */
+ * automated correctness check, not a demo of realistic typing speed.
+ *
+ * --initrd FILE: loads FILE's raw bytes into guest RAM at
+ * INITRD_BASE (checkpoint 13's own real, separate boot module --
+ * arch/riscv64_memmap.h's RV64_INITRD_BASE, mm/tar.c's own comment),
+ * the same fixed physical address kernel/Makefile's own test-initrd
+ * target has QEMU's real `-device loader,addr=...` place it at --
+ * this is this emulator's own equivalent of that mechanism, for
+ * test-js/shell-js parity with the real-QEMU test. */
 const fs = require('fs');
 const { Memory, RAM_BASE } = require('./memory');
 const { Uart16550, UART_BASE } = require('./uart');
 const { Cpu } = require('./cpu');
 const { loadElf } = require('./elf');
 
+/* arch/riscv64_memmap.h's RV64_INITRD_BASE -- this JS-side constant
+ * and that C-side one have to agree, same as UART_BASE (memory.js)
+ * already has to agree with drivers/riscv64_serial.c's own UART0. */
+const INITRD_BASE = 0x84000000n;
+
 function parseArgs(argv) {
-	const args = { mustContain: [], mustNotContain: [], maxInstructions: 200_000_000, maxSeconds: null, timeAdvance: 1, input: '' };
+	const args = { mustContain: [], mustNotContain: [], maxInstructions: 200_000_000, maxSeconds: null, timeAdvance: 1, input: '', initrd: null };
 	let kernel = null;
 	for (let i = 0; i < argv.length; i++) {
 		const a = argv[i];
@@ -45,6 +58,7 @@ function parseArgs(argv) {
 		else if (a === '--max-seconds') args.maxSeconds = Number(argv[++i]);
 		else if (a === '--time-advance') args.timeAdvance = Number(argv[++i]);
 		else if (a === '--input') args.input = argv[++i].replace(/\\n/g, '\n').replace(/\\r/g, '\r'); /* literal \n/\r -> real newline/CR, same convention as test/boot_test.py's --stdin-input */
+		else if (a === '--initrd') args.initrd = argv[++i];
 		else if (!kernel) kernel = a;
 		else throw new Error(`unexpected arg: ${a}`);
 	}
@@ -65,6 +79,9 @@ function boot(args) {
 	const elf = loadElf(new Uint8Array(buf));
 	for (const seg of elf.segments)
 		mem.loadBytes(seg.vaddr, seg.data);
+
+	if (args.initrd)
+		mem.loadBytes(INITRD_BASE, fs.readFileSync(args.initrd));
 
 	const cpu = new Cpu(mem);
 	cpu.pc = Number(elf.entry);

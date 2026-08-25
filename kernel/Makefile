@@ -60,7 +60,7 @@ OBJS := boot/riscv64_boot.o riscv64_entry.o riscv64_kmain.o \
         drivers/riscv64_serial.o drivers/kprintf.o \
         arch/riscv64_trap_entry.o arch/riscv64_trap.o arch/riscv64_timer.o \
         arch/riscv64_usermode.o arch/riscv64_syscall.o \
-        mm/pmm.o mm/riscv64_paging.o mm/elf.o mm/ramfs.o \
+        mm/pmm.o mm/riscv64_paging.o mm/elf.o mm/ramfs.o mm/tar.o \
         sched/riscv64_task.o sched/riscv64_switch_context.o \
         sched/riscv64_process.o \
         arch/riscv64_kend.o
@@ -68,7 +68,7 @@ else
 $(error unknown ARCH '$(ARCH)' -- expected i386 or riscv64)
 endif
 
-.PHONY: all test test-js shell-js clean
+.PHONY: all test test-js shell-js test-initrd test-initrd-js clean
 
 all: kernel.elf
 
@@ -263,12 +263,30 @@ RISCV64_TEST_ASSERTIONS := \
 # the write) is real.
 RISCV64_INTERACTIVE_INPUT := \r\recho hello ash\rls\recho writable-fs-works > wtest\rls\rexit 7\r
 
+# --mem 128: a real, pre-existing bug this checkpoint's own initrd
+# work found (not something it caused) -- test/boot_test.py's own
+# DEFAULT_MEM_MB is 32, and nothing here ever overrode it, so every
+# `make ARCH=riscv64 test` this project has ever run gave QEMU only
+# 32MB of *real* RAM despite arch/riscv64_memmap.h's RV64_MEM_TOP
+# hardcoding a 128MB assumption everywhere else (pmm_init(),
+# paging_init(), ...) -- a mismatch nothing ever actually hit before
+# (every checkpoint's real memory usage happened to stay comfortably
+# under 32MB) until RV64_INITRD_BASE (64MB in) tried to read real
+# memory that, under the 32MB default, genuinely wasn't backed by
+# anything -- confirmed as a real (not virtual/page-table) fault:
+# scause 5 "Load access fault", not 13 "Load page fault", at exactly
+# 0x84000000. emulator/js/memory.js's own RAM_SIZE was *already*
+# hardcoded to the full 128MB, which is why `test-js`/`shell-js` never
+# had this problem -- only the real-QEMU path was under-provisioned.
+# Explicit here now so QEMU's real configuration actually matches what
+# the kernel has always assumed it has.
 test: kernel.elf
 	python3 test/boot_test.py kernel.elf \
 		--qemu-binary qemu-system-riscv64 \
 		--qemu-arg=-M --qemu-arg=virt \
 		--qemu-arg=-bios --qemu-arg=default \
 		--qemu-arg=-cpu --qemu-arg=rv64,sstc=true \
+		--mem 128 \
 		--stdin-input "$(RISCV64_INTERACTIVE_INPUT)" \
 		$(RISCV64_TEST_ASSERTIONS)
 
@@ -330,7 +348,62 @@ shell-js: kernel-shell.elf
 		--must-not-contain "UNHANDLED EXCEPTION" \
 		--must-not-contain "UNHANDLED INTERRUPT" \
 		--must-not-contain "PAGE FAULT"
+
+# checkpoint 13: the actual point of mm/tar.c -- a real, separate
+# tar archive (test/initrd-fixture/, one small real file, tarred by
+# the host's own `tar`, same "external, unmodified host tool" role
+# `qemu-riscv64-static`/`git` already have throughout this project's
+# own build scripts -- nothing about *packaging* a tar is this
+# project's own work to reinvent) loaded at boot by QEMU's real
+# `-device loader,file=...,addr=...` (a real, documented QEMU
+# mechanism for placing an arbitrary file at a fixed physical address
+# before the guest starts -- exactly the same address
+# arch/riscv64_memmap.h's RV64_INITRD_BASE already hardcodes), parsed
+# and turned into a real, readable ramfs file entirely at runtime, no
+# kernel rebuild involved in changing what's inside it. "1 file(s)
+# loaded" plus the fixture's own real content (not embedded anywhere
+# else in this kernel) is the real proof this actually worked, not
+# just that boot reached a prompt.
+initrd.tar: test/initrd-fixture/from-initrd.txt
+	tar cf $@ -C test/initrd-fixture from-initrd.txt
+
+test-initrd: kernel.elf initrd.tar
+	python3 test/boot_test.py kernel.elf \
+		--qemu-binary qemu-system-riscv64 \
+		--qemu-arg=-M --qemu-arg=virt \
+		--qemu-arg=-bios --qemu-arg=default \
+		--qemu-arg=-cpu --qemu-arg=rv64,sstc=true \
+		--qemu-arg=-device --qemu-arg=loader,file=initrd.tar,addr=0x84000000 \
+		--mem 128 \
+		--stdin-input "\r\rcat from-initrd.txt\rexit 7\r" \
+		--must-contain "initrd: 1 file(s) loaded" \
+		--must-contain "hello from a real initrd tar" \
+		--must-contain "process: all processes exited" \
+		--must-contain "P10 checkpoint OK" \
+		--must-not-contain "FATAL" \
+		--must-not-contain "UNHANDLED EXCEPTION" \
+		--must-not-contain "UNHANDLED INTERRUPT" \
+		--must-not-contain "PAGE FAULT"
+
+# Same test, same real tar file, this emulator's own --initrd
+# (emulator/js/boot.js's own comment) instead of QEMU's `-device
+# loader` -- test-js/shell-js's own parity-with-QEMU reasoning applies
+# here too, not just to the checkpoint sequence itself.
+test-initrd-js: kernel.elf initrd.tar
+	node ../emulator/js/boot.js kernel.elf \
+		--max-instructions 200000000 \
+		--time-advance 100 \
+		--initrd initrd.tar \
+		--input "\r\rcat from-initrd.txt\rexit 7\r" \
+		--must-contain "initrd: 1 file(s) loaded" \
+		--must-contain "hello from a real initrd tar" \
+		--must-contain "process: all processes exited" \
+		--must-contain "P10 checkpoint OK" \
+		--must-not-contain "FATAL" \
+		--must-not-contain "UNHANDLED EXCEPTION" \
+		--must-not-contain "UNHANDLED INTERRUPT" \
+		--must-not-contain "PAGE FAULT"
 endif
 
 clean:
-	rm -f kernel.elf kernel-shell.elf riscv64_kmain_shell.o $(OBJS)
+	rm -f kernel.elf kernel-shell.elf riscv64_kmain_shell.o initrd.tar $(OBJS)

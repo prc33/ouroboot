@@ -102,4 +102,35 @@
  * arch/riscv64_trap_entry.S). sp starts at the top. */
 #define RV64_TRAP_STACK_TOP    0x8060b000UL
 
+/* checkpoint 13: a real, separate boot module -- an uncompressed tar
+ * archive (mm/tar.c), loaded at this fixed physical address by
+ * whatever's actually booting the kernel (QEMU's `-device
+ * loader,file=...,addr=...` -- kernel/Makefile's own test target --
+ * or emulator/js/boot.js's equivalent second fetch()+loadBytes()),
+ * *not* baked into kernel.elf the way every other embedded payload in
+ * this kernel is. 64MB in from RV64_RAM_BASE: comfortably past
+ * kernel_end (a few MB at most) and the scratch region above, with
+ * still-generous headroom below RV64_MEM_TOP (128MB total) for
+ * whatever the archive actually contains. Not a linker symbol or a
+ * hand-written .S constant -- read only from ordinary, fully
+ * relocatable C (riscv64_kmain.c, mm/tar.c) -- so unlike the addresses
+ * above, this one didn't need arch/gen_riscv64_asm.sh regeneration
+ * when picked; it's hardcoded for the same "we fully control the
+ * QEMU invocation" reason as everything else in this file, not
+ * because anything *requires* it to be a raw immediate. */
+#define RV64_INITRD_BASE       0x84000000UL
+
+/* Reserved via pmm_reserve_range() (riscv64_kmain.c, right alongside
+ * the scratch region above) so nothing else can be handed this memory
+ * by pmm_alloc_page()/pmm_alloc_contiguous() before mm/tar.c's own
+ * tar_load_initrd() gets to read it -- real bytes actually sitting in
+ * real RAM at boot, not a value anything computes. 4MB is a generous
+ * ceiling over what any archive this project currently loads actually
+ * needs; the tar format's own two-all-zero-block end marker (mm/tar.c's
+ * own comment) means the *real* archive can be far smaller than this
+ * without anything needing to know its exact size in advance -- this
+ * is just how far tar_load_initrd() is willing to keep scanning before
+ * giving up, a safety bound, not a size QEMU/boot.js need to match. */
+#define RV64_INITRD_MAX_SIZE   0x400000UL /* 4MB */
+
 #endif
