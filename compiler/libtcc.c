@@ -21,6 +21,9 @@
 #if !defined ONE_SOURCE || ONE_SOURCE
 #include "tccpp.c"
 #include "tccgen.c"
+#ifdef TCC_TARGET_I386
+#include "i386-pair.c"
+#endif
 #include "tccelf.c"
 /* tccrun.c (the -run JIT-execute-in-memory mode) deliberately removed
  * from this fork -- unused by every build this project does (always

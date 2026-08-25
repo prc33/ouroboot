@@ -1448,9 +1448,6 @@ ST_FUNC void vpush_global_sym(CType *type, int v);
 ST_FUNC void vrote(SValue *e, int n);
 ST_FUNC void vrott(int n);
 ST_FUNC void vrotb(int n);
-#if PTR_SIZE == 4 && !defined TCC_NATIVE_I64
-ST_FUNC void lexpand(void);
-#endif
 #ifdef TCC_TARGET_ARM
 ST_FUNC int get_reg_ex(int rc, int rc2);
 #endif
@@ -1649,6 +1646,13 @@ static inline void add64le(unsigned char *p, int64_t x) {
 }
 
 /* ------------ i386-gen.c ------------ */
+#ifdef TCC_TARGET_I386
+ST_FUNC void lexpand(void);
+static void lbuild(int t);
+static void i386_gv_dup_llong(int t);
+static int i386_gen_cvt_i64(int dbt, int sbt, int ds, int ss);
+static void gen_opl(int op);
+#endif
 #if defined TCC_TARGET_I386 || defined TCC_TARGET_X86_64
 ST_FUNC void g(int c);
 ST_FUNC void gen_le16(int c);
