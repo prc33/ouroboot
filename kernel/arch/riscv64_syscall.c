@@ -432,6 +432,26 @@ static void sys_read(struct regs *r) {
 		 * bytes become a line a shell reads. */
 		if (c == '\r')
 			c = '\n';
+		/* Local echo, by hand, same reasoning as the ICRNL translation
+		 * right above: on a real tty, ECHO is the *kernel* tty
+		 * driver's job, not the application's -- a shell only does
+		 * its own echoing when it's disabled canonical/ECHO mode
+		 * itself to do real line-editing (arrow keys, history), which
+		 * this busybox build doesn't do (FEATURE_EDITING is off --
+		 * see demo/build-busybox-riscv64.sh's allnoconfig-plus-applets
+		 * list; shell/ash.c's own preadfd() falls back to a plain
+		 * read() with zero echo logic without it). Without a tty layer
+		 * to do this for us, sys_read is the only place left, same as
+		 * ICRNL -- echo the byte actually stored (post-translation, so
+		 * Enter echoes as '\n', which serial_putc() below already
+		 * turns into a real "\r\n" for display, same as any other
+		 * newline this kernel prints). No backspace/line-editing
+		 * support is added here -- that needs a real line discipline
+		 * (a whole feature, not a one-line fix); this only restores
+		 * the baseline "I can see what I'm typing" a human doing
+		 * interactive work expects, without asking them to write their
+		 * own line editor first. */
+		serial_putc(c);
 		buf[0] = c;
 		r->a0 = 1;
 		return;

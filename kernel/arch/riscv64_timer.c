@@ -64,3 +64,35 @@ void timer_init(unsigned int hz) {
 
 	kprintf("timer: Sstc armed at %u Hz (delta=%lu timebase ticks)\n", hz, g_delta);
 }
+
+/* Real bug, found running real *paced* interactive input (a live
+ * human typing in the browser demo, or Puppeteer simulating one --
+ * every existing automated test feeds its scripted input all at once,
+ * before the CPU even starts or over an instantly-drained pipe, so
+ * arch/riscv64_syscall.c's sys_read (fd==0) never actually spins in
+ * its "while (!serial_rx_ready()) process_schedule();" wait for more
+ * than a handful of instructions; a real keystroke's real gap is
+ * plenty of *virtual* time -- at this 100Hz and the emulator's own
+ * --time-advance 100 -- for many timer interrupts to come due while
+ * still deep inside that loop). A timer interrupt is a trap like any
+ * other, routed through the exact same single global trapframe
+ * (arch/riscv64_memmap.h's RV64_TRAPFRAME_BASE) an outer ecall is
+ * still relying on -- this kernel's whole trap design assumes traps
+ * never nest (arch/riscv64_trap_entry.S's own comment), and an
+ * interrupt firing mid-syscall is exactly that nested trap. Unlike
+ * mm/riscv64_paging.c's paging_ensure_writable() (the same class of
+ * bug via a page fault instead), there's no way to "pre-resolve" an
+ * asynchronous interrupt before it can fire -- the only fix that
+ * doesn't mean rewriting this kernel's trap handling for real nested
+ * contexts is to stop it happening at all.
+ *
+ * Nothing past the P4 scheduler checkpoint (kmain.c's own
+ * conclude_scheduler_test(), the only caller) actually needs the
+ * timer any more -- every process/syscall switch from P5 onward is
+ * already cooperative (sched_yield/wait4/read all reach
+ * process_schedule() by calling it directly, never via a timer ISR),
+ * so turning interrupts off for good here trades away nothing real. */
+void timer_disable(void) {
+	unsigned long sstatus = __builtin_riscv_csrr(CSR_SSTATUS);
+	__builtin_riscv_csrw(CSR_SSTATUS, sstatus & ~SSTATUS_SIE);
+}

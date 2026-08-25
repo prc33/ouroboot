@@ -365,6 +365,12 @@ void run_process_test(void) {
 static void conclude_scheduler_test(void) {
 	kprintf("scheduler: %u switches across 2 tasks OK\n", g_switches);
 	kprintf("P4 checkpoint 2 OK\n");
+	/* This was the only thing the timer was ever for -- see
+	 * timer_disable()'s own comment for the real bug leaving it armed
+	 * caused (a nested-trap corruption only paced, real-world-timed
+	 * input could actually trigger, so no scripted/all-at-once test
+	 * ever exercised it). */
+	timer_disable();
 	run_ring3_test();
 }
 

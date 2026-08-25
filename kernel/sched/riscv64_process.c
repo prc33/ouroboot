@@ -44,6 +44,7 @@
 #define CSR_SSTATUS 0x100
 #define SSTATUS_SPP  (1UL << 8)
 #define SSTATUS_SPIE (1UL << 5)
+#define SSTATUS_SIE  (1UL << 1)
 
 extern void riscv64_trap_return(void); /* arch/riscv64_trap_entry.S */
 
@@ -181,7 +182,26 @@ struct process *process_create_from_elf(const unsigned char *elf_data, unsigned 
 	ur->sp = (unsigned long)sp;
 	unsigned long sstatus = __builtin_riscv_csrr(CSR_SSTATUS);
 	sstatus &= ~SSTATUS_SPP;  /* sret drops to U-mode */
-	sstatus |= SSTATUS_SPIE;  /* interrupts enabled once there */
+	/* SPIE inherits the *current* global SIE, not a hardcoded 1: real
+	 * sret semantics copy SPIE into SIE, and this kernel has no
+	 * per-process interrupt-enable state of its own (arch/riscv64_timer.c's
+	 * own comment) -- SIE is one global CPU-wide policy, so a freshly
+	 * created process should come up under whatever that policy
+	 * currently is, not silently override it back on. Real bug, found
+	 * running real *paced* interactive input: hardcoding SPIE=1 here
+	 * meant every new process's first launch re-enabled interrupts
+	 * regardless of arch/riscv64_timer.c's timer_disable() (called once,
+	 * right after the P4 scheduler checkpoint) -- the timer came back
+	 * the moment checkpoint 5 created its first process, and stayed
+	 * back for every process after, defeating timer_disable() entirely
+	 * and leaving every syscall's busy-wait loop (sys_read's above all
+	 * -- the one paced real-world delays actually exercise) exposed to
+	 * the exact nested-trap corruption timer_disable() exists to
+	 * prevent (see its own comment for the full mechanism). */
+	if (sstatus & SSTATUS_SIE)
+		sstatus |= SSTATUS_SPIE;
+	else
+		sstatus &= ~SSTATUS_SPIE;
 	ur->sstatus = sstatus;
 
 	p->root_table = new_root;
