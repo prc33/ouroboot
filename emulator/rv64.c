@@ -41,6 +41,24 @@ static u32 in_read, in_write, out_read, out_write;
 static u64 tlb_vpage[512], tlb_ppage[512], tlb_satp[512];
 static u8 tlb_context[512], tlb_valid[512];
 
+/* Spell unsigned 64-bit float conversions in terms of signed ones so the
+ * tiny wasm32 backend needs no compiler-rt conversion helpers. */
+static double i64_to_double(i64 n)
+{
+    return (double)n;
+}
+
+static double u64_to_double(u64 n)
+{
+    return i64_to_double((i64)(n >> 1)) * 2.0 + (u32)(n & 1);
+}
+
+static u64 double_to_u64(double n)
+{
+    return n < 9223372036854775808.0 ? (u64)(i64)n :
+        ((u64)(i64)(n - 9223372036854775808.0) | (1ULL << 63));
+}
+
 u32 rv_ram(void) { return (u32)(unsigned long)ram; }
 u32 rv_ram_size(void) { return RAM_SIZE; }
 u64 rv_pc(void) { return pc; }
@@ -349,7 +367,10 @@ static void execute(u32 insn)
         if (!ok) { trap(fault == 2 ? 7 : 15, fault_addr, 0); return; }
         break;
     case 0x53:
-        if (f7 == 0x01) set_f64(rd, get_f64(rs1) + get_f64(rs2));
+        if (f7 == 0x00) set_f32(rd, get_f32(rs1) + get_f32(rs2));
+        else if (f7 == 0x01) set_f64(rd, get_f64(rs1) + get_f64(rs2));
+        else if (f7 == 0x04) set_f32(rd, get_f32(rs1) - get_f32(rs2));
+        else if (f7 == 0x05) set_f64(rd, get_f64(rs1) - get_f64(rs2));
         else if (f7 == 0x08) set_f32(rd, get_f32(rs1) * get_f32(rs2));
         else if (f7 == 0x09) set_f64(rd, get_f64(rs1) * get_f64(rs2));
         else if (f7 == 0x0c) set_f32(rd, get_f32(rs1) / get_f32(rs2));
@@ -359,8 +380,32 @@ static void execute(u32 insn)
         else if (f7 == 0x11 && f3 == 0)
             f[rd] = (f[rs1] & 0x7fffffffffffffffULL) | (f[rs2] & 0x8000000000000000ULL);
         else if (f7 == 0x20 && rs2 == 1) set_f32(rd, get_f64(rs1));
-        else if (f7 == 0x68 && rs2 == 0) set_f32(rd, (i32)x[rs1]);
-        else if (f7 == 0x71 && rs2 == 0 && f3 == 0) { if (rd) x[rd] = f[rs1]; }
+        else if (f7 == 0x21 && rs2 == 0) set_f64(rd, get_f32(rs1));
+        else if ((f7 == 0x50 || f7 == 0x51) && f3 <= 2) {
+            double aa = f7 & 1 ? get_f64(rs1) : get_f32(rs1);
+            double bb = f7 & 1 ? get_f64(rs2) : get_f32(rs2);
+            v = f3 == 2 ? aa == bb : (f3 == 1 ? aa < bb : aa <= bb);
+            goto write;
+        } else if (f7 == 0x60 || f7 == 0x61) {
+            double n = f7 & 1 ? get_f64(rs1) : get_f32(rs1);
+            if (rs2 == 0) v = (i64)(i32)n;
+            else if (rs2 == 1) v = (u32)n;
+            else if (rs2 == 2) v = (i64)n;
+            else if (rs2 == 3) v = double_to_u64(n);
+            else ok = 0;
+            goto write;
+        } else if (f7 == 0x68 || f7 == 0x69) {
+            double n;
+            if (rs2 == 0) n = (i32)x[rs1];
+            else if (rs2 == 1) n = (u32)x[rs1];
+            else if (rs2 == 2) n = (i64)x[rs1];
+            else if (rs2 == 3) n = u64_to_double(x[rs1]);
+            else { ok = 0; break; }
+            if (f7 & 1) set_f64(rd, n); else set_f32(rd, n);
+        } else if (f7 == 0x70 && rs2 == 0 && f3 == 0) { v = (i64)(i32)f[rs1]; goto write; }
+        else if (f7 == 0x71 && rs2 == 0 && f3 == 0) { v = f[rs1]; goto write; }
+        else if (f7 == 0x78 && rs2 == 0 && f3 == 0) f[rd] = 0xffffffff00000000ULL | (u32)x[rs1];
+        else if (f7 == 0x79 && rs2 == 0 && f3 == 0) f[rd] = x[rs1];
         else ok = 0;
         break;
     case 0x73:

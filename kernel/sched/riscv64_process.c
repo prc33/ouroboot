@@ -45,6 +45,11 @@
 #define SSTATUS_SPP  (1UL << 8)
 #define SSTATUS_SPIE (1UL << 5)
 #define SSTATUS_SIE  (1UL << 1)
+#define USER_BRK_BASE 0x40000000UL
+#define USER_MMAP_BASE 0x60000000UL
+#define USER_STACK_TOP 0xB1000000UL
+#define USER_STACK_LIMIT 0xB0000000UL
+#define USER_STACK_INITIAL_PAGES 2
 
 extern void riscv64_trap_return(void); /* arch/riscv64_trap_entry.S */
 
@@ -143,15 +148,24 @@ struct process *process_create_from_elf(const unsigned char *elf_data, unsigned 
 	 * auxv entry: AT_PAGESZ, which musl's __libc_start_main has no
 	 * fallback for -- see that function's comment for why it's not
 	 * optional). Each process gets its own copy at the same virtual
-	 * address, 0xB0000000 -- safe because it's a *different* address
-	 * space now, unlike P5's single shared one. */
-	unsigned long stack_va = 0xB0000000UL;
-	unsigned long stack_pages = 2;
+	 * address -- safe because it's a *different* address space now,
+	 * unlike P5's single shared one. Only the top two pages are committed;
+	 * the page-fault handler grows it downward within a 16MB reservation. */
+	unsigned long stack_pages = USER_STACK_INITIAL_PAGES;
+	unsigned long stack_top = USER_STACK_TOP;
+	unsigned long stack_va = stack_top - stack_pages * PAGE_SIZE;
 	for (unsigned long i = 0; i < stack_pages; i++) {
 		unsigned long phys = pmm_alloc_page();
+		unsigned long *words = (unsigned long *)phys;
+		for (unsigned int w = 0; w < PAGE_SIZE / sizeof(unsigned long); w++)
+			words[w] = 0;
 		paging_map_page(stack_va + i * PAGE_SIZE, phys, PTE_PRESENT | PTE_WRITABLE | PTE_USER);
 	}
-	unsigned long stack_top = stack_va + stack_pages * PAGE_SIZE;
+	p->user_stack_lo = stack_va;
+	p->user_stack_hi = stack_top;
+	p->user_stack_limit = USER_STACK_LIMIT;
+	p->user_brk = USER_BRK_BASE;
+	p->user_mmap_next = USER_MMAP_BASE;
 
 	unsigned char *page = (unsigned char *)stack_top;
 	char *argv0 = (char *)(page - 64);
@@ -351,6 +365,38 @@ int process_current_ppid(void) {
 	return current_process ? current_process->ppid : 0;
 }
 
+unsigned long process_current_brk(void) {
+	return current_process ? current_process->user_brk : USER_BRK_BASE;
+}
+
+void process_set_current_brk(unsigned long value) {
+	if (current_process)
+		current_process->user_brk = value;
+}
+
+unsigned long process_take_mmap(unsigned long length) {
+	unsigned long base = current_process->user_mmap_next;
+	current_process->user_mmap_next += length;
+	return base;
+}
+
+int process_handle_stack_fault(unsigned long address) {
+	if (!current_process || address < current_process->user_stack_limit ||
+	    address >= current_process->user_stack_hi)
+		return 0;
+	unsigned long page = address & ~(PAGE_SIZE - 1UL);
+	unsigned long phys = pmm_alloc_page();
+	if (!phys)
+		return 0;
+	unsigned long *words = (unsigned long *)phys;
+	for (unsigned int i = 0; i < PAGE_SIZE / sizeof(unsigned long); i++)
+		words[i] = 0;
+	paging_map_page(page, phys, PTE_PRESENT | PTE_WRITABLE | PTE_USER);
+	if (page < current_process->user_stack_lo)
+		current_process->user_stack_lo = page;
+	return 1;
+}
+
 /* checkpoint 7: real fork(), via SYS_clone -- see process.h's own
  * comment for why clone() rather than a dedicated fork syscall, and
  * arch/riscv64_syscall.c for the narrow flags check that gates
@@ -363,8 +409,8 @@ int process_current_ppid(void) {
  * ranges the same way), so fork() just clones the same fixed windows
  * every process is known to actually use -- 16MB from 0, comfortably
  * covering any of this kernel's real ELF payloads' code/data/BSS; the
- * 2-page stack at 0xB0000000 (process_create_from_elf's own
- * STACK_VA); and 1MB of arch/riscv64_syscall.c's own mmap arena
+ * process's actual mapped stack at 0xB0000000; and 1MB of
+ * arch/riscv64_syscall.c's own mmap arena
  * (MMAP_BASE, same value duplicated here rather than shared via a
  * header -- matches this function's existing "each fixed window
  * hardcoded where it's used" style).
@@ -387,8 +433,6 @@ int process_current_ppid(void) {
  * yet" caveat elsewhere in this kernel. */
 #define FORK_CLONE_LO 0x0UL
 #define FORK_CLONE_HI 0x1000000UL   /* 16MB */
-#define FORK_STACK_LO 0xB0000000UL
-#define FORK_STACK_HI 0xB0002000UL  /* 2 pages, matches process_create_from_elf's own stack_pages */
 #define FORK_MMAP_LO 0x60000000UL  /* arch/riscv64_syscall.c's MMAP_BASE */
 #define FORK_MMAP_HI 0x60100000UL  /* 1MB -- comfortably past what any real fork()+mmap() test here actually uses */
 
@@ -400,13 +444,18 @@ int process_fork(struct regs *r) {
 
 	unsigned long *child_root = paging_new_addrspace();
 	paging_fork_cow(child_root, parent->root_table, FORK_CLONE_LO, FORK_CLONE_HI);
-	paging_fork_cow(child_root, parent->root_table, FORK_STACK_LO, FORK_STACK_HI);
+	paging_fork_cow(child_root, parent->root_table, parent->user_stack_lo, parent->user_stack_hi);
 	paging_fork_cow(child_root, parent->root_table, FORK_MMAP_LO, FORK_MMAP_HI);
 
 	child->root_table = child_root;
 	child->pid = next_pid++;
 	child->ppid = parent->pid;
 	child->exit_code = 0;
+	child->user_stack_lo = parent->user_stack_lo;
+	child->user_stack_hi = parent->user_stack_hi;
+	child->user_stack_limit = parent->user_stack_limit;
+	child->user_brk = parent->user_brk;
+	child->user_mmap_next = parent->user_mmap_next;
 
 	/* Real fork() semantics: open file descriptors survive into the
 	 * child. Simplified here to an independent copy (including `pos`)
@@ -599,43 +648,14 @@ void process_stdio_clear(int fd) {
  * (a) this replaces the *current* process's root_table instead of
  * creating a new process, and (b) the stack carries real caller-
  * supplied argv instead of a single fixed arg0. */
-/* checkpoint 14: EXECVE_MAX_ARGV/EXECVE_ARG_MAX bumped -- EXECVE_MAX_ARGV
- * must match arch/riscv64_syscall.c's own copy (see its comment for the
- * real count -- a self-hosted TCC invocation -- that drove this), and
- * EXECVE_ARG_MAX now matches that file's PATH_MAX_LOCAL bump since most
- * of these argv strings *are* paths (-I/-B flags, source/object
- * filenames).
- *
- * STRDATA_SIZE/PTRBLOCK_SIZE deliberately stay at their original 256/256
- * rather than growing to fit EXECVE_MAX_ARGV*EXECVE_ARG_MAX's new worst
- * case (2560 bytes): tried that, and it reintroduced a real page fault
- * (stack overflow -- a *write* fault just below stack_va, confirmed by
- * address) inside busybox/ash's own startup, because the still-2-page
- * (8KB) stack doesn't have that much to spare once a real program's own
- * C stack usage is accounted for. No *current* invocation in this
- * checkpoint's test suite actually needs more than a handful of short
- * args, so this is safe today; it's still a real, open limit, not
- * silently fixed.
- *
- * EXECVE_STACK_PAGES was going to become the process's real ~1MB stack
- * (TCC's own recursive-descent parsing of its ~15K-line unity-build
- * source needs meaningfully more than 8KB) -- also reverted, back to 2,
- * matching process_create_from_elf's own proven stack size. Bumping it
- * to 256 produced its own real, deterministic page fault (inside
- * busybox's own code, reading/executing a bad stack address) that
- * explicit zeroing of the new pages (tried on its own) did not fix;
- * most likely FORK_STACK_HI below still hardcoding the *old* 2-page
- * COW-clone window, so a process forking after getting a bigger stack
- * would have its child silently missing the rest of it -- plausible,
- * not confirmed. Both of these need solving together (more argv room
- * AND a genuinely bigger stack) before a real self-hosted TCC build can
- * run here -- see docs/self-hosting-todo.md for the actual next step,
- * not attempted yet rather than shipped broken. */
+/* Self-hosting needs the real TCC command line and a growable stack for its
+ * recursive parser. The stack range and committed low-water mark are recorded
+ * per process so ash can fork it correctly. */
 #define EXECVE_MAX_ARGV 20
 #define EXECVE_ARG_MAX 128
-#define STRDATA_SIZE 256
-#define PTRBLOCK_SIZE 256
-#define EXECVE_STACK_PAGES 2
+#define STRDATA_SIZE 2560
+#define PTRBLOCK_SIZE 512
+#define EXECVE_STACK_PAGES USER_STACK_INITIAL_PAGES
 
 int process_execve(struct regs *r, const char *path, char **argv, char **envp) {
 	(void)envp; /* real environment support is future scope -- every
@@ -691,34 +711,30 @@ int process_execve(struct regs *r, const char *path, char **argv, char **envp) {
 		return -1;
 	}
 
-	/* Stack -- same VA/size as process_create_from_elf (see
-	 * EXECVE_STACK_PAGES's own comment above for why this is still 2
-	 * pages rather than the much bigger stack a real self-hosted TCC
-	 * build will eventually need). String data goes in the top
+	/* String data goes in the top
 	 * STRDATA_SIZE bytes, the argc/argv/envp/auxv pointer block in
 	 * PTRBLOCK_SIZE bytes below that -- both sized for
 	 * EXECVE_MAX_ARGV*EXECVE_ARG_MAX (2560 bytes worst case for
 	 * strings; argc+argv_ptrs+envp+auxv is at most 27 words = 216 bytes
-	 * for pointers), comfortably separate from each other and from
-	 * real stack use below within the still-2-page (8KB) budget. */
-	unsigned long stack_va = 0xB0000000UL;
+	 * for pointers). The initial two pages grow lazily down to
+	 * USER_STACK_LIMIT on user page faults. */
 	unsigned long stack_pages = EXECVE_STACK_PAGES;
+	unsigned long stack_top = USER_STACK_TOP;
+	unsigned long stack_va = stack_top - stack_pages * PAGE_SIZE;
 	for (unsigned long i = 0; i < stack_pages; i++) {
 		unsigned long phys = pmm_alloc_page();
-		/* pmm_alloc_page() makes no zeroing guarantee (mm/pmm.c's own
-		 * bitmap allocator never touches page content) -- explicit,
-		 * defensive zeroing here, same convention ramfs_dynamic_grow()
-		 * already uses for its own freshly allocated pages. (This was
-		 * tried, on its own, as a fix for the page fault documented in
-		 * EXECVE_STACK_PAGES's comment above; it did not fix it -- that
-		 * fault's real cause is still open -- but zeroing a fresh
-		 * stack is correct regardless, so it stays.) */
+		/* pmm_alloc_page() does not clear memory; user stacks must not
+		 * expose contents left by an earlier allocation. */
 		unsigned long *p64 = (unsigned long *)phys;
 		for (unsigned int w = 0; w < PAGE_SIZE / sizeof(unsigned long); w++)
 			p64[w] = 0;
 		paging_map_page(stack_va + i * PAGE_SIZE, phys, PTE_PRESENT | PTE_WRITABLE | PTE_USER);
 	}
-	unsigned long stack_top = stack_va + stack_pages * PAGE_SIZE;
+	p->user_stack_lo = stack_va;
+	p->user_stack_hi = stack_top;
+	p->user_stack_limit = USER_STACK_LIMIT;
+	p->user_brk = USER_BRK_BASE;
+	p->user_mmap_next = USER_MMAP_BASE;
 
 	unsigned char *strp = (unsigned char *)(stack_top - STRDATA_SIZE);
 	unsigned long argv_ptrs[EXECVE_MAX_ARGV];

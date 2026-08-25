@@ -40,6 +40,7 @@
 #define SYS_exit_group              94
 #define SYS_set_tid_address           96
 #define SYS_brk                         214
+#define SYS_mremap                        216
 #define SYS_munmap                        215
 #define SYS_mmap                            222
 #define SYS_clone                            220
@@ -90,6 +91,7 @@
 
 #define MAP_FIXED  0x10
 #define MAP_ANON   0x20
+#define MREMAP_MAYMOVE 1
 
 #define PROT_NONE  0x0
 
@@ -107,6 +109,25 @@
 
 static unsigned long brk_current = 0;
 static unsigned long next_mmap_addr = MMAP_BASE;
+
+static unsigned long get_brk_current(void) {
+	return process_mode_active() ? process_current_brk() : brk_current;
+}
+
+static void set_brk_current(unsigned long value) {
+	if (process_mode_active())
+		process_set_current_brk(value);
+	else
+		brk_current = value;
+}
+
+static unsigned long take_mmap_addr(unsigned long length) {
+	if (process_mode_active())
+		return process_take_mmap(length);
+	unsigned long base = next_mmap_addr;
+	next_mmap_addr += length;
+	return base;
+}
 
 static unsigned long page_round_up(unsigned long x) {
 	return (x + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1UL);
@@ -176,7 +197,12 @@ static void sys_writev(struct regs *r) {
 	unsigned long fd = r->a0;
 	unsigned long *iov = (unsigned long *)r->a1;
 	unsigned long iovcnt = r->a2;
-	if (fd != 1 && fd != 2) {
+	struct fd_entry *entry = 0;
+	if (fd <= 2)
+		entry = process_stdio_get((int)fd);
+	else
+		entry = process_fd_get((int)fd - 3);
+	if (fd == 0 || (fd > 2 && !entry)) {
 		r->a0 = (unsigned long)-EBADF;
 		return;
 	}
@@ -184,7 +210,15 @@ static void sys_writev(struct regs *r) {
 	for (unsigned long i = 0; i < iovcnt; i++) {
 		const char *base = (const char *)iov[i * 2];
 		unsigned long len = iov[i * 2 + 1];
-		sys_write_impl(fd, base, len);
+		if (entry) {
+			long ret = write_to_dynfile(entry, base, len);
+			if (ret < 0) {
+				r->a0 = (unsigned long)ret;
+				return;
+			}
+		} else {
+			sys_write_impl(fd, base, len);
+		}
 		total += len;
 	}
 	r->a0 = total;
@@ -266,30 +300,34 @@ static void sys_rt_sigprocmask(struct regs *r) {
 
 static void sys_brk(struct regs *r) {
 	unsigned long requested = r->a0;
+	unsigned long current = get_brk_current();
 
-	if (brk_current == 0)
-		brk_current = BRK_BASE; /* first call: musl queries with NULL first */
+	if (current == 0)
+		current = BRK_BASE;
 
 	if (requested == 0) {
-		r->a0 = brk_current;
+		r->a0 = current;
 		return;
 	}
-	if (requested > brk_current) {
-		unsigned long old_top = page_round_up(brk_current);
+	if (requested > current) {
+		unsigned long old_top = page_round_up(current);
 		unsigned long new_top = page_round_up(requested);
 		for (unsigned long va = old_top; va < new_top; va += PAGE_SIZE) {
 			unsigned long phys = pmm_alloc_page();
 			if (!phys) {
-				r->a0 = brk_current; /* out of memory: brk unchanged, per Linux semantics */
+				r->a0 = current; /* out of memory: brk unchanged, per Linux semantics */
 				return;
 			}
+			unsigned long *words = (unsigned long *)phys;
+			for (unsigned int i = 0; i < PAGE_SIZE / sizeof(unsigned long); i++)
+				words[i] = 0;
 			paging_map_page(va, phys, PTE_PRESENT | PTE_WRITABLE | PTE_USER);
 		}
 	}
 	/* shrinking: update accounting only, don't reclaim pages yet --
 	 * documented simplification, see file comment */
-	brk_current = requested;
-	r->a0 = brk_current;
+	set_brk_current(requested);
+	r->a0 = requested;
 }
 
 static void sys_mmap(struct regs *r) {
@@ -329,8 +367,7 @@ static void sys_mmap(struct regs *r) {
 	if (flags & MAP_FIXED) {
 		base = addr;
 	} else {
-		base = next_mmap_addr;
-		next_mmap_addr += len;
+		base = take_mmap_addr(len);
 	}
 
 	for (unsigned long va = base; va < base + len; va += PAGE_SIZE) {
@@ -339,6 +376,9 @@ static void sys_mmap(struct regs *r) {
 			r->a0 = (unsigned long)-ENOMEM;
 			return;
 		}
+		unsigned long *words = (unsigned long *)phys;
+		for (unsigned int i = 0; i < PAGE_SIZE / sizeof(unsigned long); i++)
+			words[i] = 0;
 		paging_map_page(va, phys, PTE_PRESENT | PTE_WRITABLE | PTE_USER);
 	}
 	r->a0 = base;
@@ -355,6 +395,54 @@ static void sys_munmap(struct regs *r) {
 		}
 	}
 	r->a0 = 0;
+}
+
+static void sys_mremap(struct regs *r) {
+	unsigned long old_addr = r->a0;
+	unsigned long old_len = page_round_up(r->a1);
+	unsigned long new_len = page_round_up(r->a2);
+	unsigned long flags = r->a3;
+	if (!new_len) {
+		r->a0 = (unsigned long)-EINVAL;
+		return;
+	}
+	if (new_len <= old_len) {
+		for (unsigned long va = old_addr + new_len; va < old_addr + old_len; va += PAGE_SIZE) {
+			unsigned long phys = paging_get_phys(va);
+			if (phys) {
+				paging_map_page(va, 0, 0);
+				pmm_free_page(phys & ~0xFFFUL);
+			}
+		}
+		r->a0 = old_addr;
+		return;
+	}
+	if (!(flags & MREMAP_MAYMOVE)) {
+		r->a0 = (unsigned long)-ENOMEM;
+		return;
+	}
+	unsigned long base = take_mmap_addr(new_len);
+	for (unsigned long va = base; va < base + new_len; va += PAGE_SIZE) {
+		unsigned long phys = pmm_alloc_page();
+		if (!phys) {
+			r->a0 = (unsigned long)-ENOMEM;
+			return;
+		}
+		unsigned long *words = (unsigned long *)phys;
+		for (unsigned int i = 0; i < PAGE_SIZE / sizeof(unsigned long); i++)
+			words[i] = 0;
+		paging_map_page(va, phys, PTE_PRESENT | PTE_WRITABLE | PTE_USER);
+	}
+	for (unsigned long i = 0; i < old_len; i++)
+		*(unsigned char *)(base + i) = *(unsigned char *)(old_addr + i);
+	for (unsigned long va = old_addr; va < old_addr + old_len; va += PAGE_SIZE) {
+		unsigned long phys = paging_get_phys(va);
+		if (phys) {
+			paging_map_page(va, 0, 0);
+			pmm_free_page(phys & ~0xFFFUL);
+		}
+	}
+	r->a0 = base;
 }
 
 #define TIOCGWINSZ 0x5413
@@ -1102,6 +1190,7 @@ static void syscall_dispatch(struct regs *r) {
 	case SYS_exit:              sys_exit(r); return;
 	case SYS_exit_group:        sys_exit_group(r); return;
 	case SYS_brk:                sys_brk(r); return;
+	case SYS_mremap:                sys_mremap(r); return;
 	case SYS_mmap:                 sys_mmap(r); return;
 	case SYS_munmap:                 sys_munmap(r); return;
 	case SYS_ioctl:                    sys_ioctl(r); return;
@@ -1140,7 +1229,7 @@ static void syscall_dispatch(struct regs *r) {
 void syscall_init(void) {
 	syscall_set_handler(syscall_dispatch);
 	kprintf("syscall: dispatch installed (write, writev, exit, exit_group, "
-		"brk, mmap, munmap, ioctl, sched_yield, set_tid_address, "
+		"brk, mmap, mremap, munmap, ioctl, sched_yield, set_tid_address, "
 		"clone, wait4, rt_sigprocmask, gettid, openat, close, read, execve, "
 		"getcwd, chdir, newfstatat, rt_sigaction, getppid, geteuid, "
 		"getpid, fcntl, getdents64, lseek, unlinkat, dup3, faccessat)\n");

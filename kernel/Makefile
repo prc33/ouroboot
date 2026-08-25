@@ -68,7 +68,8 @@ else
 $(error unknown ARCH '$(ARCH)' -- expected i386 or riscv64)
 endif
 
-.PHONY: all test test-wasm shell-wasm test-initrd test-initrd-wasm clean
+.PHONY: all test test-wasm shell-wasm test-initrd test-initrd-wasm \
+	test-selfhost selfhost-initrd clean
 
 all: kernel.elf
 
@@ -360,7 +361,38 @@ test-initrd-wasm: kernel.elf initrd.tar
 		"\r\rcat from-initrd.txt\rexit 7\r" \
 		'initrd: 1 file(s) loaded\nhello from a real initrd tar\nP10 checkpoint OK' \
 		initrd.tar
+
+# Full closure test: build a riscv64 TCC with this repository's TCC, place
+# that compiler, its own sources, and its musl build environment in the real
+# tar initrd, then have it compile and link TCC again inside this kernel.
+selfhost-initrd:
+	$(MAKE) -C ../compiler clean
+	$(MAKE) -C ../compiler TARGET=riscv64 stage1
+	sh test/build-selfhost-initrd.sh .. selfhost-initrd.tar
+
+RISCV64_SELFHOST_INPUT := \r\recho SELFHOST: stage1 compiling TCC\r/tcc/tcc -B/tcc -I/tcc -I/tcc/include -I/musl/obj/include -I/musl/include -I/musl/arch/riscv64 -I/musl/arch/generic -nostdinc -DTCC_TARGET_RISCV64 -c -o /tcc-stage2.o /tcc/tcc.c\r/tcc/tcc -B/tcc -static -nostdinc -nostdlib -o /tcc-stage2 /musl/lib/crt1.o /musl/lib/crti.o /tcc-stage2.o /musl/lib/libc.a /tcc/libtcc1.a /musl/lib/crtn.o\recho SELFHOST: stage2 runs\r/tcc-stage2 -v\recho SELFHOST: stage2 compiling program\r/tcc-stage2 -B/tcc -I/tcc/include -I/musl/obj/include -I/musl/include -I/musl/arch/riscv64 -I/musl/arch/generic -nostdinc -static -nostdlib -o /selfhost-hello /musl/lib/crt1.o /musl/lib/crti.o /selfhost-hello.c /musl/lib/libc.a /tcc/libtcc1.a /musl/lib/crtn.o\r/selfhost-hello\recho SELFHOST: complete\rexit 7\r
+
+test-selfhost: kernel.elf
+	$(MAKE) selfhost-initrd
+	python3 test/boot_test.py kernel.elf \
+		--qemu-binary qemu-system-riscv64 \
+		--qemu-arg=-M --qemu-arg=virt \
+		--qemu-arg=-bios --qemu-arg=default \
+		--qemu-arg=-cpu --qemu-arg=rv64,sstc=true \
+		--qemu-arg=-device --qemu-arg=loader,file=selfhost-initrd.tar,addr=0x84000000 \
+		--mem 128 --timeout 30 \
+		--stdin-input "$(RISCV64_SELFHOST_INPUT)" \
+		--must-contain "SELFHOST: stage1 compiling TCC" \
+		--must-contain "SELFHOST: stage2 runs" \
+		--must-contain "tcc version 0.9.27-rv64min (riscv64 Linux)" \
+		--must-contain "hello from stage2 tcc" \
+		--must-contain "SELFHOST: complete" \
+		--must-contain "P10 checkpoint OK" \
+		--must-not-contain "FATAL" \
+		--must-not-contain "PAGE FAULT"
+
 endif
 
 clean:
-	rm -f kernel.elf kernel-shell.elf riscv64_kmain_shell.o initrd.tar $(OBJS)
+	rm -f kernel.elf kernel-shell.elf riscv64_kmain_shell.o initrd.tar \
+		selfhost-initrd.tar $(OBJS)

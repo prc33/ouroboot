@@ -43,16 +43,12 @@ reasoning). For RISC-V64:
   A writable ramfs (real `open(O_CREAT)`/`write`/`unlink`) and a real
   tar-loading initrd (`make ARCH=riscv64 test-initrd`) followed.
 
-- **Not yet done: TCC running *inside* this kernel** (as opposed to
-  under `qemu-riscv64-static`'s Linux user-mode emulation, which
-  `make TARGET=riscv64 selfcheck` above already proves). This is the
-  project's actual closure condition — see
-  `docs/self-hosting-todo.md` for exactly what's been ruled out, the
-  one open bug blocking it (a real, deterministic page fault giving a
-  process a bigger stack), and the concrete next steps. Read that
-  file before touching `mm/ramfs.*`'s dynamic-file matching,
-  `sched/riscv64_process.c`'s `execve()` stack layout, or
-  `arch/riscv64_memmap.h`'s initrd size constants.
+- **Full in-kernel self-hosting is complete.** A stage-1 RISC-V64 TCC
+  runs as an ordinary process under this kernel, compiles and links a
+  stage-2 TCC, and stage 2 compiles, links, and runs a fresh program.
+  `make -C kernel ARCH=riscv64 test-selfhost` reproduces the closure
+  under QEMU; see `docs/self-hosting-todo.md` for the payload,
+  assertions, and kernel/compiler bugs found on the way.
 
 ## Layout
 
@@ -105,6 +101,8 @@ cd compiler && make TARGET=i386      # or TARGET=riscv64
 cd ../demo && ./build-musl-i386.sh   # or -riscv64
              ./build-busybox-i386.sh # or -riscv64
 cd ../kernel && make test            # or make ARCH=riscv64 test
+# full RISC-V64 closure:
+make ARCH=riscv64 test-selfhost
 ```
 
 ## Current all-in demo: a real interactive shell, in a real browser tab

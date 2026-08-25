@@ -32,7 +32,7 @@ struct ramfs_dynamic_file; /* mm/ramfs.h -- forward-declared rather than
  * file, `dynfile` non-NULL and `data`/`size` unused -- see
  * mm/ramfs.h's own struct ramfs_dynamic_file and
  * arch/riscv64_syscall.c's sys_openat/sys_write/sys_read. */
-#define MAX_FDS 8
+#define MAX_FDS 32
 
 struct fd_entry {
 	int used;
@@ -52,6 +52,11 @@ struct process {
 	int ppid;                          /* checkpoint 7: real parent, for process_wait4()'s "is this my child" check */
 	enum process_state state;
 	unsigned long *root_table;         /* this process's own address space (mm/paging.h) */
+	unsigned long user_stack_lo;       /* lowest currently mapped stack page */
+	unsigned long user_stack_hi;       /* fixed top of the downward-growing stack */
+	unsigned long user_stack_limit;    /* lowest address to which it may grow */
+	unsigned long user_brk;
+	unsigned long user_mmap_next;
 	unsigned long kernel_sp;           /* switch_context()-managed, see sched/riscv64_switch_context.S */
 	unsigned long kernel_stack[PROC_KSTACK_WORDS];
 	struct regs user_regs;             /* saved U-mode context when this process isn't the one currently running */
@@ -125,6 +130,10 @@ int process_current_pid(void);
  * if there isn't one (created directly by kmain, not fork()) or no
  * process context exists yet. arch/riscv64_syscall.c's sys_getppid. */
 int process_current_ppid(void);
+unsigned long process_current_brk(void);
+void process_set_current_brk(unsigned long value);
+unsigned long process_take_mmap(unsigned long length);
+int process_handle_stack_fault(unsigned long address);
 
 /* Runs once, the next time the process table completely drains (no
  * RUNNABLE process left) -- riscv64_kmain.c uses this to chain into

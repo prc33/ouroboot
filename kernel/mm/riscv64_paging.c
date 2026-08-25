@@ -30,12 +30,14 @@
 #include "arch/riscv64_memmap.h"
 #include "pmm.h"
 #include "paging.h"
+#include "sched/process.h"
 
 #define ENTRIES 512
 #define VPN_MASK 0x1FFUL
 #define PPN_SHIFT 10
 
 #define CSR_SATP 0x180
+#define SSTATUS_SPP (1UL << 8)
 
 /* Sv39 satp.MODE = 8, in the top 4 bits of the 64-bit CSR. */
 #define SATP_MODE_SV39 (8UL << 60)
@@ -271,6 +273,13 @@ static void page_fault_handler(struct regs *r) {
 		}
 		return; /* sret retries the faulting instruction, which now succeeds */
 	}
+
+	/* Linux-style lazy user stack: exec reserves an address range but maps
+	 * only its top pages. A user fault below the committed portion allocates
+	 * one zero page; the faulting instruction is then retried. */
+	if (!(r->sstatus & SSTATUS_SPP) && (!pte || !(*pte & 1)) &&
+	    process_handle_stack_fault(fault_addr))
+		return;
 
 fatal:
 	kprintf("\n!! PAGE FAULT at %p (scause=%lu stval=%p %s)\n", (void *)fault_addr,

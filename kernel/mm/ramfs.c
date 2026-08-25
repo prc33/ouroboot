@@ -87,14 +87,17 @@ static const char *basename_of(const char *path) {
 	return base;
 }
 
-/* Strips a single leading '/' if present, otherwise passes `path`
- * through unchanged -- "/tcc/tcc.c" and "tcc/tcc.c" name the same
+/* Strips a leading root slash and any leading "./" components --
+ * "/tcc/tcc.c" and "tcc/tcc.c", or "./wtest" and "wtest", name the same
  * dynamic file (see ramfs.h's own comment on struct ramfs_dynamic_file),
- * matching how sys_openat/execve already treat this ramfs as having
- * just the one root. Anything after that first character (more slashes
- * included) is kept verbatim -- real path segments, not stripped. */
+ * matching how sys_openat/execve treat this ramfs as having one root.
+ * Other path components are kept verbatim. */
 static const char *normalize_path(const char *path) {
-	return (path[0] == '/') ? path + 1 : path;
+	if (path[0] == '/')
+		path++;
+	while (path[0] == '.' && path[1] == '/')
+		path += 2;
+	return path;
 }
 
 const struct ramfs_file *ramfs_lookup(const char *path) {
