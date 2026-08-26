@@ -40,6 +40,7 @@
 #include "mm/ramfs.h"
 #include "sched/process.h"
 #include "syscall_common.h"
+#include "riscv64_memmap.h"
 
 #define SYS_ioctl             29
 #define SYS_sched_yield      124
@@ -76,9 +77,17 @@
 #define SYS_unlinkat                                                                                   35
 #define SYS_dup3                                                                                           24
 #define SYS_faccessat                                                                                          48
+#define SYS_ouro_fetch 1000
 
 #define ENOSYS  38
 #define ENOENT   2
+#define EIO       5
+#define EINVAL   22
+#define ENOMEM   12
+
+#define FETCH ((volatile unsigned int *)0x10000100UL)
+
+static char fetch_url[1024];
 
 /* --- register accessors syscall_posix.c calls through --- */
 unsigned long sys_arg(struct regs *r, int n) {
@@ -179,6 +188,29 @@ static void resolve_user_path(char *out, const char *user_path) {
 	resolve_path(out, input, process_current_cwd());
 }
 
+static void sys_ouro_fetch(struct regs *r) {
+	const char *url = (const char *)sys_arg(r, 0);
+	char path[PATH_MAX_LOCAL];
+	resolve_user_path(path, (const char *)sys_arg(r, 1));
+	unsigned int n = 0;
+	while (url[n] && n < sizeof(fetch_url)) { fetch_url[n] = url[n]; n++; }
+	if (!n || n == sizeof(fetch_url)) { sys_ret(r, (unsigned long)-EINVAL); return; }
+	FETCH[1] = (unsigned int)(unsigned long)fetch_url;
+	FETCH[2] = n;
+	FETCH[3] = (unsigned int)RV64_FETCH_BUFFER;
+	FETCH[4] = (unsigned int)RV64_FETCH_BUFFER_SIZE;
+	FETCH[0] = 1;
+	while (FETCH[0] == 1) { }
+	if (FETCH[0] != 2) { FETCH[0] = 0; sys_ret(r, (unsigned long)-EIO); return; }
+	struct ramfs_dynamic_file *f = ramfs_dynamic_open_or_create(path);
+	if (!f) { FETCH[0] = 0; sys_ret(r, (unsigned long)-ENOMEM); return; }
+	ramfs_dynamic_truncate(f);
+	unsigned int length = FETCH[5];
+	int failed = ramfs_dynamic_write(f, 0, (const unsigned char *)RV64_FETCH_BUFFER, length);
+	FETCH[0] = 0;
+	sys_ret(r, failed ? (unsigned long)-ENOMEM : length);
+}
+
 static void sys_newfstatat(struct regs *r) {
 	/* a0=dirfd, a1=path, a2=statbuf, a3=flags. */
 	char path[PATH_MAX_LOCAL];
@@ -249,6 +281,7 @@ static void syscall_dispatch(struct regs *r) {
 	case SYS_unlinkat:                                                                                           sys_unlinkat(r); return;
 	case SYS_dup3:                                                                                                  sys_dup3(r); return;
 	case SYS_faccessat:                                                                                               sys_faccessat(r); return;
+	case SYS_ouro_fetch:                                                                                                  sys_ouro_fetch(r); return;
 	default:
 		kprintf("FATAL: unimplemented syscall %lu\n", r->a7);
 		r->a0 = (unsigned long)-ENOSYS;
@@ -261,5 +294,5 @@ void syscall_init(void) {
 		"brk, mmap, mremap, munmap, ioctl, sched_yield, set_tid_address, "
 		"clone, wait4, rt_sigprocmask, gettid, openat, close, read, execve, "
 		"getcwd, chdir, newfstatat, rt_sigaction, getppid, geteuid, "
-		"getpid, fcntl, getdents64, lseek, unlinkat, dup3, faccessat)\n");
+		"getpid, fcntl, getdents64, lseek, unlinkat, dup3, faccessat, ouro_fetch)\n");
 }

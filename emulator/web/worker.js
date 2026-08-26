@@ -2,6 +2,32 @@
 
 let rv;
 let running = false;
+let fetching = false;
+
+function ramOffset(address) {
+    return rv.rv_ram() + (address >>> 0) - 0x80000000;
+}
+
+async function serviceFetch() {
+    if (fetching || rv.rv_fetch_status() !== 1) return;
+    fetching = true;
+    try {
+        const address = ramOffset(rv.rv_fetch_url());
+        const length = rv.rv_fetch_url_length();
+        const url = new TextDecoder().decode(new Uint8Array(rv.memory.buffer, address, length));
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const bytes = new Uint8Array(await response.arrayBuffer());
+        if (bytes.length > rv.rv_fetch_capacity()) throw new Error('response exceeds guest buffer');
+        new Uint8Array(rv.memory.buffer).set(bytes, ramOffset(rv.rv_fetch_destination()));
+        rv.rv_fetch_complete(bytes.length, 2);
+    } catch (error) {
+        rv.rv_fetch_complete(0, 3);
+        postMessage({ type: 'output', bytes: [...new TextEncoder().encode(`fetch: ${error.message}\r\n`)] });
+    } finally {
+        fetching = false;
+    }
+}
 
 function loadElf(bytes) {
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -43,6 +69,7 @@ function runChunk() {
     try {
         rv.rv_run(200000, 100);
         flushOutput();
+        serviceFetch();
         setTimeout(runChunk, 0);
     } catch (error) {
         running = false;

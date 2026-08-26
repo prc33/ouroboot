@@ -140,4 +140,10 @@
  * pages elsewhere, not read in place from this reserved region). */
 #define RV64_INITRD_MAX_SIZE   0x1000000UL /* 16MB */
 
+/* Browser fetch responses are staged here by the emulator before the kernel
+ * copies them into ramfs. It deliberately reuses the 16 MiB immediately after
+ * the initrd reservation, leaving the remaining 32 MiB for ordinary pages. */
+#define RV64_FETCH_BUFFER      0x85000000UL
+#define RV64_FETCH_BUFFER_SIZE 0x1000000UL
+
 #endif

@@ -126,6 +126,7 @@ void kmain(unsigned long hartid, unsigned long dtb) {
 	 * above, so nothing else can be handed this memory before
 	 * tar_load_initrd() below gets to read whatever's actually there. */
 	pmm_reserve_range((unsigned int)RV64_INITRD_BASE, (unsigned int)(RV64_INITRD_BASE + RV64_INITRD_MAX_SIZE));
+	pmm_reserve_range((unsigned int)RV64_FETCH_BUFFER, (unsigned int)(RV64_FETCH_BUFFER + RV64_FETCH_BUFFER_SIZE));
 	run_pmm_reserve_test();
 	paging_init(RV64_MEM_TOP);
 

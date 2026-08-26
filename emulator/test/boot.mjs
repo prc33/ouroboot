@@ -43,12 +43,31 @@ rv.rv_init(entry);
 if (initrdPath) loadInitrd(await readFile(initrdPath), rv.memory, rv.rv_ram());
 for (const byte of new TextEncoder().encode(input)) rv.rv_input(byte);
 
+async function serviceFetch() {
+    if (rv.rv_fetch_status() !== 1) return;
+    const ram = new Uint8Array(rv.memory.buffer);
+    const offset = address => rv.rv_ram() + (address >>> 0) - 0x80000000;
+    const url = new TextDecoder().decode(ram.subarray(
+        offset(rv.rv_fetch_url()), offset(rv.rv_fetch_url()) + rv.rv_fetch_url_length()));
+    try {
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const bytes = new Uint8Array(await response.arrayBuffer());
+        if (bytes.length > rv.rv_fetch_capacity()) throw new Error('response exceeds guest buffer');
+        ram.set(bytes, offset(rv.rv_fetch_destination()));
+        rv.rv_fetch_complete(bytes.length, 2);
+    } catch {
+        rv.rv_fetch_complete(0, 3);
+    }
+}
+
 let output = '';
 let instructions = 0;
 const started = performance.now();
 while (instructions < maxInstructions && !expected.every(text => output.includes(text))) {
     const batch = Math.min(200_000, maxInstructions - instructions);
     rv.rv_run(batch, 100);
+    await serviceFetch();
     instructions += batch;
     while (rv.rv_output_count()) output += String.fromCharCode(rv.rv_output());
 }
