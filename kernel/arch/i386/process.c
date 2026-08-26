@@ -64,10 +64,24 @@ void process_arch_save_trapframe(struct process *p) {
  * needed whether p is resuming its own frozen call stack (process_schedule())
  * or is about to be entered fresh via i386_trap_return (process_arch_trampoline(),
  * below). Doesn't touch the trapframe itself -- see this file's own
- * header comment for why i386 doesn't need to. */
+ * header comment for why i386 doesn't need to.
+ *
+ * Re-installs p's own TLS descriptor too -- real bug, found running
+ * real self-hosted TCC for the first time: unlike everything else
+ * here, GDT slot 6 (arch/i386/gdt.c's gdt_set_tls_entry(), what
+ * SYS_set_thread_area installs into) is a single global, CPU-wide
+ * resource, not per-process state a trapframe save/restore touches at
+ * all. Without this, whichever process last called set_thread_area()
+ * (i.e. whichever real binary started up most recently) "won" the
+ * slot for everyone -- any other process resuming afterward read its
+ * own TLS pointer (%gs:0, e.g. musl's own pthread_self()/errno)
+ * through a descriptor pointing at a *different* process's TLS block
+ * entirely, faulting the instant it dereferenced anything through it.
+ * See struct process's own tls_base comment for the full story. */
 void process_arch_activate_and_restore(struct process *p) {
 	paging_activate(p->root_table);
 	tss_set_kernel_stack((unsigned int)(unsigned long)&p->kernel_stack[PROC_KSTACK_WORDS]);
+	gdt_set_tls_entry(6, (unsigned int)p->tls_base);
 }
 
 /* ra target for a process's hand-built initial kernel stack frame --

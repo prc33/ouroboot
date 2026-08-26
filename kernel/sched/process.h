@@ -67,6 +67,26 @@ struct process {
 	unsigned long user_stack_limit;    /* lowest address to which it may grow */
 	unsigned long user_brk;
 	unsigned long user_mmap_next;
+	/* checkpoint 19: i386 only in practice (riscv64's own TLS is just
+	 * the `tp` GPR, part of the ordinary trapframe process_arch_save_trapframe/
+	 * process_arch_activate_and_restore already save/restore -- no
+	 * separate field needed there). i386's TLS is a GDT descriptor
+	 * (GDT slot 6, arch/i386/gdt.c's gdt_set_tls_entry()) -- a single
+	 * global, CPU-wide resource, not something a trapframe save/
+	 * restore touches at all. Real bug, found running real self-hosted
+	 * TCC for the first time (this checkpoint's own closure test, the
+	 * first real multi-fork-then-exec i386 workload): every process
+	 * that calls set_thread_area() (musl's own _start, on every real
+	 * binary) overwrote the *same* global slot, so whichever process
+	 * ran last "won" -- any other process resuming afterward read its
+	 * TLS pointer (%gs:0, e.g. errno/pthread_self()) through a
+	 * descriptor now pointing at a *different* process's TLS block,
+	 * landing on garbage the instant it dereferenced anything through
+	 * it. arch/i386/process.c's process_arch_activate_and_restore()
+	 * now re-installs *this* field on every switch, restoring the
+	 * illusion of "your own private TLS" the same way real per-CPU
+	 * hardware TLS state would. */
+	unsigned long tls_base;
 	unsigned long kernel_sp;           /* switch_context()-managed, see arch/risc/riscv64_switch_context.S */
 	unsigned long kernel_stack[PROC_KSTACK_WORDS];
 	struct regs user_regs;             /* saved U-mode context when this process isn't the one currently running */

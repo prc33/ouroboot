@@ -54,7 +54,8 @@
 #define SYS_getppid                                                  64
 #define SYS_munmap                                                      91
 #define SYS_wait4                                                          114
-#define SYS_writev                                                            146
+#define SYS__llseek                                                           140 /* real bug, found running real self-hosted TCC for the first time -- see sys_llseek's own comment: musl-i386's own lseek() always uses this instead of plain SYS_lseek above */
+#define SYS_writev                                                              146
 #define SYS_sched_yield                                                          158
 #define SYS_mremap                                                                  163
 #define SYS_getcwd                                                                     183
@@ -91,6 +92,8 @@
 
 #define ENOSYS  38
 #define ENOENT   2
+#define EBADF    9
+#define EINVAL  22
 
 /* --- register accessors syscall_posix.c calls through --- */
 unsigned long sys_arg(struct regs *r, int n) {
@@ -226,6 +229,54 @@ static void sys_lstat(struct regs *r) {
 	sys_stat(r);
 }
 
+/* arg0=fd, arg1=offset_high, arg2=offset_low, arg3=result (a real
+ * user pointer to an 8-byte off_t, written on success), arg4=whence
+ * -- SYS__llseek, real bug found running real self-hosted TCC for the
+ * first time (checkpoint 19's own closure test): musl-i386's own
+ * src/unistd/lseek.c *always* prefers this over plain SYS_lseek
+ * whenever it's defined for the target arch, which it is for i386 (a
+ * legacy 32-bit-off_t-vs-real-64-bit-off_t compatibility syscall, not
+ * something riscv64 -- 64-bit off_t natively, no such split -- has any
+ * equivalent of), so sys_lseek (syscall_posix.c, shared, and correct
+ * on its own terms) was simply never reached by anything real. Not
+ * shared with syscall_posix.c's own sys_lseek: the argument shape
+ * (offset split across two registers, the result handed back through
+ * a pointer instead of the return register) is different enough that
+ * sharing would mean *this* function reassembling the split offset
+ * and re-deriving syscall_posix.c's return convention right back out
+ * again -- there isn't a meaningful "generic body" left once that's
+ * accounted for, just this. */
+static void sys_llseek(struct regs *r) {
+	unsigned long fd = sys_arg(r, 0);
+	unsigned int offset_high = (unsigned int)sys_arg(r, 1);
+	unsigned int offset_low = (unsigned int)sys_arg(r, 2);
+	unsigned long long *result = (unsigned long long *)sys_arg(r, 3);
+	unsigned long whence = sys_arg(r, 4);
+
+	struct fd_entry *entry = fd >= 3 ? process_fd_get((int)fd - 3) : 0;
+	if (!entry) {
+		sys_ret(r, (unsigned long)-EBADF);
+		return;
+	}
+	unsigned long long size = entry->dynfile ? entry->dynfile->size : entry->size;
+	long long offset = ((long long)offset_high << 32) | (long long)offset_low;
+	long long new_pos;
+	switch (whence) {
+		case 0: new_pos = offset; break;                          /* SEEK_SET */
+		case 1: new_pos = (long long)entry->pos + offset; break;  /* SEEK_CUR */
+		case 2: new_pos = (long long)size + offset; break;        /* SEEK_END */
+		default: sys_ret(r, (unsigned long)-EINVAL); return;
+	}
+	if (new_pos < 0) {
+		sys_ret(r, (unsigned long)-EINVAL);
+		return;
+	}
+	entry->pos = (unsigned long)new_pos;
+	paging_ensure_writable((unsigned long)result, sizeof(*result));
+	*result = (unsigned long long)new_pos;
+	sys_ret(r, 0);
+}
+
 /* arg0=fd, arg1=statbuf -- SYS_fstat (fstat64), reached via musl's
  * fstat(fd,...) wrapper (src/stat/fstat.c: __fstatat(fd, "",
  * AT_EMPTY_PATH), which fstatat_kstat() turns into a direct
@@ -301,15 +352,26 @@ static void sys_set_thread_area(struct regs *r) {
 	 * that specific relocation 3 bytes short of the real target
 	 * (confirmed directly: linked a minimal reproduction, checked the
 	 * actual .data address against the relocated immediate by hand).
-	 * The value musl reads back is garbage as a result. Since this
-	 * kernel only ever supports one TLS user at a time anyway and
-	 * always hands out slot 6 regardless of what was requested, the
-	 * simplest correct fix is to just not require entry_number to be
-	 * meaningful -- every real call only cares that base_addr is
-	 * right, which it is. */
+	 * The value musl reads back is garbage as a result. Since every
+	 * real caller only ever gets handed slot 6 anyway (checkpoint 19's
+	 * own struct process.tls_base comment: only one slot is real, per
+	 * process now, not globally), the simplest correct fix is to just
+	 * not require entry_number to be meaningful -- every real call
+	 * only cares that base_addr is right, which it is. */
 	int slot = 6;
 	gdt_set_tls_entry(slot, base_addr);
 	desc[0] = (unsigned int)slot; /* kernel writes the allocated slot back */
+
+	/* checkpoint 19: remember it against *this* process -- see struct
+	 * process's own tls_base comment for the real bug this fixes.
+	 * process_get_current() is 0 for the original one-shot P4/P5
+	 * ring3 test (predates process_init() entirely, same as every
+	 * other process_get_current()-checking call site in this kernel),
+	 * which never needed more than one live TLS user to begin with. */
+	struct process *p = process_get_current();
+	if (p)
+		p->tls_base = base_addr;
+
 	sys_ret(r, 0);
 }
 
@@ -344,6 +406,7 @@ static void syscall_dispatch(struct regs *r) {
 	case SYS_close:                                                                            sys_close(r); return;
 	case SYS_read:                                                                                sys_read(r); return;
 	case SYS_lseek:                                                                                  sys_lseek(r); return;
+	case SYS__llseek:                                                                                 sys_llseek(r); return;
 	case SYS_unlink:                                                                                    sys_unlink(r); return;
 	case SYS_execve:                                                                                       sys_execve(r); return;
 	case SYS_getcwd:                                                                                          sys_getcwd(r); return;

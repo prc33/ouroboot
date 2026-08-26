@@ -96,7 +96,8 @@ $(error unknown ARCH '$(ARCH)' -- expected i386 or riscv64)
 endif
 
 .PHONY: all test test-wasm shell-wasm test-initrd test-initrd-wasm \
-	test-selfhost tcc-initrd selfhost-initrd test-busybox clean
+	test-selfhost tcc-initrd selfhost-initrd selfhost-initrd-i386 \
+	test-busybox clean
 
 all: kernel.elf
 
@@ -231,6 +232,38 @@ test-busybox: kernel.elf user_test/busybox_i386.elf
 		--must-contain "process: all processes exited" \
 		--must-not-contain "FATAL" \
 		--must-not-contain "UNHANDLED EXCEPTION" \
+		--must-not-contain "PAGE FAULT"
+
+# checkpoint 19's closure: the same "TCC compiles TCC, inside our
+# kernel" proof riscv64's own test-selfhost has had since checkpoint
+# 14, now for i386 -- see that target's own comment (below, in the
+# riscv64 branch) for what each piece is and why. Mirrors it file for
+# file: test/build-selfhost-initrd-i386.sh in place of
+# test/build-selfhost-initrd.sh, compiler/stage1/tcc built TARGET=i386
+# instead of TARGET=riscv64, musl-i386 instead of musl-riscv64.
+selfhost-initrd-i386: user_test/busybox_i386.elf
+	$(MAKE) -C ../compiler clean
+	$(MAKE) -C ../compiler TARGET=i386 stage1
+	sh test/build-selfhost-initrd-i386.sh .. $@.tar
+
+I386_SELFHOST_INPUT := \r\rls\rls tcc-src\rcd tcc-src\rpwd\rcd /\rash /selfhost.sh\rexit 7\r
+
+test-selfhost: kernel.elf
+	$(MAKE) selfhost-initrd-i386
+	python3 test/boot_test.py kernel.elf \
+		--qemu-arg=-initrd --qemu-arg=selfhost-initrd-i386.tar \
+		--mem 128 --timeout 60 \
+		--stdin-input "$(I386_SELFHOST_INPUT)" \
+		--must-contain "SELFHOST: stage1 compiling TCC" \
+		--must-contain "tcc-src" \
+		--must-contain "musl" \
+		--must-contain "/tcc-src" \
+		--must-contain "SELFHOST: stage2 runs" \
+		--must-contain "tcc version 0.9.27-rv64min (i386 Linux)" \
+		--must-contain "hello from stage2 tcc" \
+		--must-contain "SELFHOST: complete" \
+		--must-contain "process: all processes exited" \
+		--must-not-contain "FATAL" \
 		--must-not-contain "PAGE FAULT"
 else
 # Shared between `test` (QEMU) and `test-wasm` (our C/Wasm emulator --

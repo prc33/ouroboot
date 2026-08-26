@@ -470,6 +470,7 @@ int process_fork(struct regs *r) {
 	child->user_stack_limit = parent->user_stack_limit;
 	child->user_brk = parent->user_brk;
 	child->user_mmap_next = parent->user_mmap_next;
+	child->tls_base = parent->tls_base; /* real fork() semantics: the child keeps running with the parent's own TLS until/unless it execve()s -- see struct process's own comment */
 	for (int i = 0; i < 128; i++) child->cwd[i] = parent->cwd[i];
 
 	/* Real fork() semantics: open file descriptors survive into the
@@ -719,6 +720,13 @@ int process_execve(struct regs *r, const char *path, char **argv, char **envp) {
 	 * sys_brk shrink path), and every process in this checkpoint's
 	 * tests execve()s at most once. */
 	p->root_table = new_root;
+	/* the old program's TLS pointer is meaningless in the new address
+	 * space it was never mapped into -- see struct process's own
+	 * tls_base comment. The new program gets a clean slate, same as a
+	 * brand new process_create_from_elf_argv()'d one; it'll install
+	 * its own via set_thread_area() during its own startup, same as
+	 * every real binary does. */
+	p->tls_base = 0;
 
 	process_arch_execve_rewrite(r, entry, sp);
 
