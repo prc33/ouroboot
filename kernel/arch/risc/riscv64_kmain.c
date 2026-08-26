@@ -91,6 +91,10 @@ void run_checkpoint_boot(void);
  * comment, and docs/kernel-complexity-review.md sections 1-2 for why
  * this split exists and how the syscall/scheduler layers were
  * decoupled from checkpoint numbering to make it possible. */
+void arch_halt_forever(void) {
+	for (;;) __builtin_riscv_wfi();
+}
+
 void kmain(unsigned long hartid, unsigned long dtb) {
 	(void)hartid;
 	(void)dtb;

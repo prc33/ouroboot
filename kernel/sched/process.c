@@ -282,7 +282,7 @@ void process_set_drain_hook(void (*hook)(void)) {
 void process_halt(void) {
 	kprintf("process: all processes exited\n");
 	kprintf("halting.\n");
-	for (;;) __builtin_riscv_wfi();
+	arch_halt_forever();
 }
 
 void process_exit_current(int exit_code) {
@@ -312,7 +312,7 @@ void process_exit_current(int exit_code) {
 	struct process *old = current_process;
 	current_process = next;
 	switch_context(&old->kernel_sp, next->kernel_sp);
-	for (;;) __builtin_riscv_wfi(); /* unreachable */
+	arch_halt_forever(); /* unreachable */
 }
 
 void process_run(struct process *first) {

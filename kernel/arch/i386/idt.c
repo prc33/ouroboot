@@ -21,6 +21,7 @@ static struct idt_ptr ip;
 static void (*isr_handlers[32])(struct regs *);
 static void (*irq_handlers[16])(struct regs *);
 static void (*syscall_handler)(struct regs *);
+static struct regs *current_trapframe; /* see this file's own idt_current_trapframe() */
 
 /* declared in isr_stubs.S, one label per vector */
 extern void isr0(void), isr1(void), isr2(void), isr3(void), isr4(void),
@@ -64,6 +65,7 @@ static const char *exception_names[32] = {
  * 128 is neither an exception (0-31) nor a remapped IRQ (32-47), so
  * it's special-cased here rather than fitting either dispatch table. */
 void isr_handler(struct regs *r) {
+	current_trapframe = r;
 	if (r->int_no == 128) {
 		if (syscall_handler)
 			syscall_handler(r);
@@ -87,6 +89,7 @@ void isr_handler(struct regs *r) {
 void irq_handler(struct regs *r) {
 	extern void pic_send_eoi(unsigned char irq);
 	int irq_no = r->int_no - 32;
+	current_trapframe = r;
 	if (irq_no >= 0 && irq_no < 16 && irq_handlers[irq_no])
 		irq_handlers[irq_no](r);
 	pic_send_eoi((unsigned char)irq_no);
@@ -104,6 +107,10 @@ void irq_register_handler(int n, void (*handler)(struct regs *)) {
 
 void syscall_set_handler(void (*handler)(struct regs *)) {
 	syscall_handler = handler;
+}
+
+struct regs *idt_current_trapframe(void) {
+	return current_trapframe;
 }
 
 void idt_init(void) {

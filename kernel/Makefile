@@ -49,7 +49,9 @@ LDFLAGS := -B$(TCCDIR) -nostdlib -static -Wl,-Ttext=0x100000
 OBJS := arch/i386/boot.o arch/i386/kmain.o arch/i386/serial.o drivers/kprintf.o \
         arch/i386/gdt.o arch/i386/idt.o arch/i386/isr_stubs.o arch/i386/pic.o arch/i386/pit.o \
         arch/i386/usermode.o arch/i386/syscall_stub.o arch/i386/syscall.o syscall_common.o \
-        mm/pmm.o arch/i386/paging.o mm/elf.o arch/i386/task.o arch/i386/switch_context.o \
+        mm/pmm.o arch/i386/paging.o mm/paging_common.o mm/elf.o mm/ramfs.o \
+        arch/i386/task.o arch/i386/switch_context.o \
+        arch/i386/process.o arch/i386/i386_process_return.o sched/process.o \
         arch/i386/kend.o
 else ifeq ($(ARCH),riscv64)
 CFLAGS  += -DKERNEL_ARCH_RISCV64

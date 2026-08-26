@@ -7,6 +7,13 @@ void serial_puts(const char *s);
 
 void kprintf(const char *fmt, ...);
 
+/* "cli;hlt" forever vs "wfi" forever -- the one halt-the-CPU primitive
+ * genuinely generic code (sched/process.c's process_halt()) needs but
+ * can't spell itself, since __builtin_riscv_wfi() doesn't exist for
+ * i386 and vice versa. One line per arch (arch/i386/kmain.c,
+ * arch/risc/riscv64_kmain.c). */
+void arch_halt_forever(void) __attribute__((noreturn));
+
 #ifndef KERNEL_ARCH_RISCV64
 void kmain(unsigned int magic, unsigned int mb_info);
 

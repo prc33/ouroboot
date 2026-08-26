@@ -209,6 +209,10 @@ static void task_b(void) {
 	task_body('B');
 }
 
+void arch_halt_forever(void) {
+	for (;;) __asm__ volatile ("cli\n hlt");
+}
+
 void kmain(unsigned int magic, unsigned int mb_info_addr) {
 	serial_init();
 
