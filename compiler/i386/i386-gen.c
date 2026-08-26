@@ -79,7 +79,7 @@ enum {
 #else /* ! TARGET_DEFS_ONLY */
 /******************************************************/
 #define USING_GLOBALS
-#include "tcc.h"
+#include "../tcc.h"
 
 /* define to 1/0 to [not] have EBX as 4th register */
 #define USE_EBX 0

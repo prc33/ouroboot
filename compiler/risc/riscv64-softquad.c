@@ -6,9 +6,8 @@
  * this target (lib/libtcc1.c has no riscv64 support at all -- it errors
  * "unsupported CPU type"), and musl does not provide them either.
  *
- * These implementations back `long double` with a plain `double`, which
- * is exactly the tradeoff already made for x87 on the i386 target (see
- * plan decision D9). Consequence: `long double` has double precision,
+ * These implementations back `long double` with a plain `double` (see plan
+ * decision D9). Consequently, `long double` has double precision,
  * not quad. That is visible only in printf("%.20Lf")-style output and
  * in libm's *l() functions; nothing in the kernel, busybox, or TCC
  * itself depends on quad precision.

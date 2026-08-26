@@ -221,15 +221,15 @@ extern long double strtold (const char *__nptr, char **__endptr);
 
 #define TARGET_DEFS_ONLY
 #ifdef TCC_TARGET_I386
-# include "i386-gen.c"
-# include "i386-link.c"
+# include "i386/i386-gen.c"
+# include "i386/i386-link.c"
 #elif defined(TCC_TARGET_RISCV64)
-# include "riscv64-gen.c"
-# include "riscv64-link.c"
-# include "riscv64-asm.c"
+# include "risc/riscv64-gen.c"
+# include "risc/riscv64-link.c"
+# include "risc/riscv64-asm.c"
 #elif defined(TCC_TARGET_WASM32)
-# include "wasm-gen.c"
-# include "wasm-link.c"
+# include "wasm/wasm-gen.c"
+# include "wasm/wasm-link.c"
 #else
 #error unknown target
 #endif

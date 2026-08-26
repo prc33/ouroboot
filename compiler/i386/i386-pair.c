@@ -285,7 +285,7 @@ static void gen_opl(int op)
         else if (op1 == TOK_GE)
             op1 = TOK_UGE;
         gen_op(op1);
-#if 0//def TCC_TARGET_I386
+#if 0
         if (op == TOK_NE) { gsym(b); break; }
         if (op == TOK_EQ) { gsym(a); break; }
 #endif

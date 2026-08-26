@@ -20,7 +20,7 @@
 #else /* !TARGET_DEFS_ONLY */
 
 //#define DEBUG_RELOC
-#include "tcc.h"
+#include "../tcc.h"
 
 /* Returns 1 for a code relocation, 0 for a data relocation. For unknown
    relocations, returns -1. */

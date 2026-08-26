@@ -20,7 +20,7 @@
 
 #else /* !TARGET_DEFS_ONLY */
 
-#include "tcc.h"
+#include "../tcc.h"
 
 #ifndef ELF_OBJ_ONLY
 /* Returns 1 for a code relocation, 0 for a data relocation. For unknown

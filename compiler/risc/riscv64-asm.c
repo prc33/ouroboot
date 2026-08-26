@@ -17,7 +17,7 @@ ST_FUNC void gen_le32(int c);
 #else
 /*************************************************************/
 #define USING_GLOBALS
-#include "tcc.h"
+#include "../tcc.h"
 
 static void asm_error(void)
 {

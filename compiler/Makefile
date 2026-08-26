@@ -33,6 +33,20 @@ ifneq ($(TARGET),wasm32)
 DEFS    += -DCONFIG_TCC_ASM
 endif
 
+ifeq ($(TARGET),i386)
+BACKEND_SRCS = i386/i386-gen.c i386/i386-link.c i386/i386-asm.c \
+               i386/i386-asm.h i386/i386-pair.c i386/i386-tok.h
+RUNTIME_SRCS = i386/alloca86.S i386/alloca86-bt.S
+else ifeq ($(TARGET),riscv64)
+BACKEND_SRCS = risc/riscv64-gen.c risc/riscv64-link.c risc/riscv64-asm.c
+RUNTIME_SRCS = risc/riscv64-softquad.c
+else ifeq ($(TARGET),wasm32)
+BACKEND_SRCS = wasm/wasm-gen.c wasm/wasm-link.c wasm/wasm-backend.h \
+               wasm/tccwasm.c
+else
+$(error unsupported TARGET '$(TARGET)')
+endif
+
 .PHONY: all clean selfcheck stage1
 
 # NOTE: both targets build to the same filename (./tcc) -- run
@@ -56,36 +70,33 @@ endif
 # replaced an earlier nine-file separate-compilation build that turned
 # out to be silently linking only one of its own objects.
 tcc: tcc.c tcc.h libtcc.c libtcc.h tccpp.c tccgen.c tccelf.c \
-     tccasm.c tcctools.c \
-     i386-gen.c i386-link.c i386-asm.c \
-     riscv64-gen.c riscv64-link.c riscv64-asm.c \
-     wasm-gen.c wasm-link.c wasm-backend.h tccwasm.c
+     tccasm.c tcctools.c $(BACKEND_SRCS)
 	$(CC) $(CFLAGS) $(DEFS) -o $@ tcc.c -lm -lpthread -ldl
 
 wasm32-tcc: tcc.c tcc.h libtcc.c libtcc.h tccpp.c tccgen.c tccelf.c \
-     tccasm.c tcctools.c wasm-gen.c wasm-link.c wasm-backend.h tccwasm.c
+     tccasm.c tcctools.c $(BACKEND_SRCS)
 	$(CC) $(CFLAGS) $(DEFS) -o $@ tcc.c -lm -lpthread -ldl
 
 # --- runtime helper archive ---
 # i386: integer divide/shift helpers the ISA has no instruction for,
-# long-double<->int conversion (lib/libtcc1.c, lib/alloca86*.S).
+# long-double<->int conversion (lib/libtcc1.c, i386/alloca86*.S).
 # riscv64: quad-precision (128-bit long double) soft-float helpers
-# (lib/riscv64-softquad.c) plus the same libtcc1.c integer helpers,
+# (risc/riscv64-softquad.c) plus the same libtcc1.c integer helpers,
 # which needed portable C versions added (upstream only ships x86
 # inline-asm ones) -- see docs/riscv-port-findings.md.
 ifeq ($(TARGET),i386)
-LIBTCC1_OBJS = lib/libtcc1.o lib/alloca86.o lib/alloca86-bt.o lib/dsohandle.o
+LIBTCC1_OBJS = lib/libtcc1.o i386/alloca86.o i386/alloca86-bt.o lib/dsohandle.o
 else
-LIBTCC1_OBJS = lib/libtcc1.o lib/riscv64-softquad.o lib/dsohandle.o
+LIBTCC1_OBJS = lib/libtcc1.o risc/riscv64-softquad.o lib/dsohandle.o
 endif
 
-libtcc1.a: tcc
+libtcc1.a: tcc lib/libtcc1.c lib/dsohandle.c $(RUNTIME_SRCS)
 	./tcc -B. -c lib/libtcc1.c -o lib/libtcc1.o -I.
 ifeq ($(TARGET),i386)
-	./tcc -B. -c lib/alloca86.S -o lib/alloca86.o -I.
-	./tcc -B. -c lib/alloca86-bt.S -o lib/alloca86-bt.o -I.
+	./tcc -B. -c i386/alloca86.S -o i386/alloca86.o -I.
+	./tcc -B. -c i386/alloca86-bt.S -o i386/alloca86-bt.o -I.
 else
-	./tcc -B. -c lib/riscv64-softquad.c -o lib/riscv64-softquad.o -I.
+	./tcc -B. -c risc/riscv64-softquad.c -o risc/riscv64-softquad.o -I.
 endif
 	./tcc -B. -c lib/dsohandle.c -o lib/dsohandle.o -I.
 	./tcc -ar rcs $@ $(LIBTCC1_OBJS)
@@ -183,5 +194,5 @@ ifeq ($(TARGET),riscv64)
 endif
 
 clean:
-	rm -f tcc wasm32-tcc lib/*.o libtcc1.a
+	rm -f tcc wasm32-tcc lib/*.o i386/*.o risc/*.o libtcc1.a
 	rm -rf stage1

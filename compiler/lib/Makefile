@@ -4,7 +4,7 @@
 
 TOP = ..
 include $(TOP)/Makefile
-VPATH = $(TOPSRC)/lib $(TOPSRC)/win32/lib
+VPATH = $(TOPSRC)/lib $(TOPSRC)/i386 $(TOPSRC)/risc
 T = $(or $(CROSS_TARGET),$(NATIVE_TARGET),unknown)
 X = $(if $(CROSS_TARGET),$(CROSS_TARGET)-)
 

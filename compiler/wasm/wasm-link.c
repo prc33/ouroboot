@@ -25,7 +25,7 @@
 
 #else /* !TARGET_DEFS_ONLY */
 
-#include "tcc.h"
+#include "../tcc.h"
 
 ST_FUNC int code_reloc(int reloc_type)
 {

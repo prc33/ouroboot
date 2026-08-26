@@ -22,7 +22,7 @@
 #include "tccpp.c"
 #include "tccgen.c"
 #ifdef TCC_TARGET_I386
-#include "i386-pair.c"
+#include "i386/i386-pair.c"
 #endif
 #include "tccelf.c"
 /* tccrun.c (the -run JIT-execute-in-memory mode) deliberately removed
@@ -35,17 +35,17 @@
  * comment below and docs/self-hosting-system-plan.md's own
  * fork-and-strip precedent (PE/COFF, other backends, etc). */
 #ifdef TCC_TARGET_I386
-#include "i386-gen.c"
-#include "i386-link.c"
-#include "i386-asm.c"
+#include "i386/i386-gen.c"
+#include "i386/i386-link.c"
+#include "i386/i386-asm.c"
 #elif defined(TCC_TARGET_RISCV64)
-#include "riscv64-gen.c"
-#include "riscv64-link.c"
-#include "riscv64-asm.c"
+#include "risc/riscv64-gen.c"
+#include "risc/riscv64-link.c"
+#include "risc/riscv64-asm.c"
 #elif defined(TCC_TARGET_WASM32)
-#include "wasm-gen.c"
-#include "wasm-link.c"
-#include "tccwasm.c"
+#include "wasm/wasm-gen.c"
+#include "wasm/wasm-link.c"
+#include "wasm/tccwasm.c"
 #else
 #error unknown target
 #endif
@@ -742,7 +742,7 @@ LIBTCCAPI TCCState *tcc_new(void)
     /* musl's <alloca.h> does '#define alloca __builtin_alloca',
      * expecting the compiler to recognize __builtin_alloca as a true
      * builtin. Unlike i386/x86_64 (which satisfy plain alloca() via a
-     * real linked function, lib/alloca86.S), riscv64 has no such
+     * real linked function, i386/alloca86.S), riscv64 has no such
      * helper -- alloca must be inlined into the caller's own frame
      * (see riscv_gen_alloca in riscv64-gen.c), which only our
      * TOK_alloca intrinsic does. This predefine routes

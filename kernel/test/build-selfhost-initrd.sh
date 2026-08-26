@@ -6,7 +6,8 @@ output=${2:-selfhost-initrd.tar}
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
 
-mkdir -p "$stage/tcc-src/include" "$stage/musl/obj/include" \
+mkdir -p "$stage/tcc-src/include" "$stage/tcc-src/i386" \
+    "$stage/tcc-src/risc" "$stage/tcc-src/wasm" "$stage/musl/obj/include" \
     "$stage/musl/include" "$stage/musl/arch/riscv64" \
     "$stage/musl/arch/generic" "$stage/musl/lib"
 
@@ -22,6 +23,10 @@ cp "$root/kernel/user_test/busybox_riscv64.elf" "$stage/busybox"
 
 cp "$root"/compiler/*.c "$root"/compiler/*.h "$stage/tcc-src/"
 cp "$root"/compiler/*.def "$stage/tcc-src/"
+cp "$root"/compiler/i386/*.c "$root"/compiler/i386/*.h \
+    "$root"/compiler/i386/*.S "$stage/tcc-src/i386/"
+cp "$root"/compiler/risc/*.c "$root"/compiler/risc/*.S "$stage/tcc-src/risc/"
+cp "$root"/compiler/wasm/*.c "$root"/compiler/wasm/*.h "$stage/tcc-src/wasm/"
 cp "$root"/compiler/include/*.h "$stage/tcc-src/include/"
 cp "$root"/compiler/libtcc1.a "$stage/tcc-src/"
 cp "$root"/compiler/stage1/tcc "$stage/tcc"

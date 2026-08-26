@@ -33,15 +33,13 @@
 
 #define CHAR_IS_UNSIGNED
 
-/* Register width and pointer width happen to match on RV64, but keeping the
-   capabilities explicit lets wasm32 share the native long-long path without
-   pretending its pointers are 64-bit. */
+/* Register width and pointer width both match the native 64-bit integer. */
 #define TCC_NATIVE_I64
 #define TCC_SIGN_EXTENDS_I32
 
 #else
 #define USING_GLOBALS
-#include "tcc.h"
+#include "../tcc.h"
 #include <assert.h>
 
 #define XLEN 8

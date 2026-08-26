@@ -53,7 +53,7 @@ enum {
 #else /* !TARGET_DEFS_ONLY */
 
 #define USING_GLOBALS
-#include "tcc.h"
+#include "../tcc.h"
 #include "wasm-backend.h"
 
 ST_DATA const char * const target_machine_defs =

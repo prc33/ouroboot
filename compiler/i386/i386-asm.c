@@ -20,7 +20,7 @@
  */
 
 #define USING_GLOBALS
-#include "tcc.h"
+#include "../tcc.h"
 
 #define MAX_OPERANDS 3
 

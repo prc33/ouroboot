@@ -5,7 +5,7 @@
  */
 
 #define USING_GLOBALS
-#include "tcc.h"
+#include "../tcc.h"
 #include "wasm-backend.h"
 
 typedef struct WasmBuf {
