@@ -85,7 +85,7 @@ OBJS := arch/risc/riscv64_boot.o arch/risc/riscv64_entry.o arch/risc/riscv64_kma
         arch/risc/riscv64_trap_entry.o arch/risc/riscv64_trap.o arch/risc/riscv64_timer.o \
         arch/risc/riscv64_usermode.o arch/risc/riscv64_syscall.o arch/risc/riscv64_process.o \
         syscall_common.o \
-        mm/pmm.o arch/risc/riscv64_paging.o mm/elf.o mm/ramfs.o mm/tar.o \
+        mm/pmm.o arch/risc/riscv64_paging.o mm/paging_common.o mm/elf.o mm/ramfs.o mm/tar.o \
         arch/risc/riscv64_switch_context.o \
         sched/process.o \
         arch/risc/riscv64_kend.o
