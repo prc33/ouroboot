@@ -4,6 +4,7 @@
 #include "mm/paging.h"
 #include "mm/elf.h"
 #include "sched/task.h"
+#include "syscall_common.h"
 #include "user_test_payload.h"
 #include "hello_elf_payload.h"
 
@@ -100,6 +101,24 @@ static volatile unsigned int g_switches = 0;
  * nothing to load it from yet. */
 static unsigned char kernel_stack[4096] __attribute__((aligned(16)));
 
+/* checkpoint 18: syscall_posix.c's own sys_exit_impl (SYS_exit's real
+ * handler, shared with riscv64) used to be this file's own
+ * arch/i386/syscall.c, and unconditionally chained straight into
+ * run_elf_test() with its own hardcoded "P5 checkpoint 1 OK" message
+ * -- exactly the checkpoint-numbered hardcoding process.h's own
+ * syscall_set_pre_process_exit_hook() exists to let generic code avoid
+ * (docs/kernel-arch-split-plan.md; test/riscv64_checkpoints.c already
+ * used this same mechanism for its own longer chain). Registering it
+ * here, right before the ring3 transition, is what makes the *generic*
+ * sys_exit() reach checkpoint 2 at all -- and this file, not
+ * syscall.c, is the right place to know checkpoint 1 is even a
+ * "checkpoint" instead of just "how a process exits". */
+static void checkpoint1_to_checkpoint2(void) {
+	kprintf("ring3 test OK\n");
+	kprintf("P5 checkpoint 1 OK\n");
+	run_elf_test();
+}
+
 static void run_ring3_test(void) {
 	syscall_init();
 	tss_set_kernel_stack((unsigned int)(unsigned long)&kernel_stack[sizeof(kernel_stack)]);
@@ -114,6 +133,7 @@ static void run_ring3_test(void) {
 	unsigned int user_stack_va = 0x900000u;
 	paging_map_page(user_stack_va, stack_phys, PTE_PRESENT | PTE_WRITABLE | PTE_USER);
 
+	syscall_set_pre_process_exit_hook(checkpoint1_to_checkpoint2);
 	kprintf("ring3: entering userspace at %p...\n", (void *)(unsigned long)USER_TEST_ENTRY);
 	enter_usermode(USER_TEST_ENTRY, user_stack_va + PAGE_SIZE);
 	/* never reached: enter_usermode transitions permanently to ring3;
@@ -143,6 +163,19 @@ static void conclude_scheduler_test(void) {
  *   [esp+16] auxv[0] = {AT_NULL, 0}
  * placed near the top of a 2-page stack, leaving room below for real
  * stack growth during musl's startup path and main(). */
+/* Checkpoint 2's own conclusion -- see checkpoint1_to_checkpoint2()'s
+ * comment above for why this lives here instead of syscall.c. This is
+ * the *last* checkpoint in i386's current chain, so unlike
+ * checkpoint1_to_checkpoint2() this one halts on its own (the hook's
+ * documented contract, process.h's own comment) rather than chaining
+ * anywhere further. */
+static void conclude_checkpoint2(void) {
+	kprintf("ring3 test OK\n");
+	kprintf("P5 checkpoint 2 OK\n");
+	kprintf("halting.\n");
+	arch_halt_forever();
+}
+
 void run_elf_test(void) {
 	unsigned int entry = elf_load(hello_elf_payload, HELLO_ELF_SIZE);
 	if (!entry) {
@@ -177,6 +210,7 @@ void run_elf_test(void) {
 	sp[4] = 0;                              /* auxv[0].a_type = AT_NULL */
 	sp[5] = 0;                              /* auxv[0].a_val */
 
+	syscall_set_pre_process_exit_hook(conclude_checkpoint2);
 	kprintf("elf: entering userspace at %p, esp=%p...\n",
 		(void *)(unsigned long)entry, (void *)sp);
 	enter_usermode(entry, (unsigned int)(unsigned long)sp);

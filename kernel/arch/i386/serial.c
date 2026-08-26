@@ -41,3 +41,21 @@ void serial_puts(const char *s) {
 	while (*s)
 		serial_putc(*s++);
 }
+
+/* checkpoint 18: real blocking stdin read (syscall_posix.c's own
+ * sys_read, shared with riscv64 -- see that function's own comment)
+ * needs a way to poll for an available byte and then take it, the
+ * i386 counterpart to arch/risc/riscv64_serial.c's own pair. Line
+ * status register bit 0 ("Data Ready") is the standard 16550 way to
+ * ask "is there a byte waiting" without blocking; interrupts stay
+ * disabled the same way serial_init() always left them (this kernel's
+ * own SYS_read polls cooperatively, the same "spin-yield" technique
+ * process_schedule()'s own callers already use elsewhere, rather than
+ * waiting on a real RX interrupt). */
+int serial_rx_ready(void) {
+	return inb(COM1 + 5) & 0x01;
+}
+
+unsigned char serial_getc(void) {
+	return inb(COM1);
+}

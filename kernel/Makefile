@@ -48,7 +48,7 @@ ifeq ($(ARCH),i386)
 LDFLAGS := -B$(TCCDIR) -nostdlib -static -Wl,-Ttext=0x100000
 OBJS := arch/i386/boot.o arch/i386/kmain.o arch/i386/serial.o drivers/kprintf.o \
         arch/i386/gdt.o arch/i386/idt.o arch/i386/isr_stubs.o arch/i386/pic.o arch/i386/pit.o \
-        arch/i386/usermode.o arch/i386/syscall_stub.o arch/i386/syscall.o syscall_common.o \
+        arch/i386/usermode.o arch/i386/syscall_stub.o arch/i386/syscall.o syscall_common.o syscall_posix.o \
         mm/pmm.o arch/i386/paging.o mm/paging_common.o mm/elf.o mm/ramfs.o \
         arch/i386/task.o arch/i386/switch_context.o \
         arch/i386/process.o arch/i386/i386_process_return.o sched/process.o \
@@ -86,7 +86,7 @@ OBJS := arch/risc/riscv64_boot.o arch/risc/riscv64_entry.o arch/risc/riscv64_kma
         arch/risc/riscv64_serial.o drivers/kprintf.o \
         arch/risc/riscv64_trap_entry.o arch/risc/riscv64_trap.o arch/risc/riscv64_timer.o \
         arch/risc/riscv64_usermode.o arch/risc/riscv64_syscall.o arch/risc/riscv64_process.o \
-        syscall_common.o \
+        syscall_common.o syscall_posix.o \
         mm/pmm.o arch/risc/riscv64_paging.o mm/paging_common.o mm/elf.o mm/ramfs.o mm/tar.o \
         arch/risc/riscv64_switch_context.o \
         sched/process.o \

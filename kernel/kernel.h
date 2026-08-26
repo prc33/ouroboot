@@ -29,6 +29,8 @@ void pic_send_eoi(unsigned char irq);
 void pic_set_mask(unsigned char irq);
 void pic_clear_mask(unsigned char irq);
 void pit_init(unsigned int hz);
+int serial_rx_ready(void);   /* arch/i386/serial.c -- checkpoint 18, blocking stdin reads (shared sys_read, syscall_posix.c) */
+unsigned char serial_getc(void);
 #else
 /* -- riscv64: see arch/risc/riscv64_trap.h/.c, arch/risc/riscv64_timer.c,
  * arch/risc/riscv64_syscall.c, arch/risc/riscv64_usermode.S. No GDT/PIC/PIT
