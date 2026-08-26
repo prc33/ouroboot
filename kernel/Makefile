@@ -49,7 +49,7 @@ LDFLAGS := -B$(TCCDIR) -nostdlib -static -Wl,-Ttext=0x100000
 OBJS := arch/i386/boot.o arch/i386/kmain.o arch/i386/serial.o drivers/kprintf.o \
         arch/i386/gdt.o arch/i386/idt.o arch/i386/isr_stubs.o arch/i386/pic.o arch/i386/pit.o \
         arch/i386/usermode.o arch/i386/syscall_stub.o arch/i386/syscall.o syscall_common.o syscall_posix.o \
-        mm/pmm.o arch/i386/paging.o mm/paging_common.o mm/elf.o mm/ramfs.o \
+        mm/pmm.o arch/i386/paging.o mm/paging_common.o mm/elf.o mm/ramfs.o mm/tar.o \
         arch/i386/task.o arch/i386/switch_context.o \
         arch/i386/process.o arch/i386/i386_process_return.o sched/process.o \
         arch/i386/kend.o
@@ -127,6 +127,19 @@ $(RISCV64_USER_ELFS): user_test/%_riscv64.elf: user_test/%_riscv64.c
 user_test/user_test_riscv64.elf: user_test/user_test_riscv64.c
 	$(TCC) -B$(TCCDIR) -nostdinc -nostdlib -static -Wl,-Ttext=0x800000 -o $@ $<
 
+# i386 counterpart of the riscv64 rule above -- same shape, different
+# musl tree (checkpoint 19, docs/kernel-arch-split-plan.md). $(TCC)
+# itself must already be built TARGET=i386 for this to link correctly
+# (same "rebuild the compiler for the ARCH you're about to build"
+# discipline the rest of this Makefile's own comments describe).
+MUSL_DIR_I386 := ../musl-i386
+user_test/%_i386.elf: user_test/%_i386.c
+	$(TCC) -B$(TCCDIR) -I$(TCCINC) -I$(MUSL_DIR_I386)/obj/include \
+		-I$(MUSL_DIR_I386)/include -I$(MUSL_DIR_I386)/arch/i386 \
+		-I$(MUSL_DIR_I386)/arch/generic -nostdinc -static -nostdlib -o $@ \
+		$(MUSL_DIR_I386)/lib/crt1.o $(MUSL_DIR_I386)/lib/crti.o $< \
+		$(MUSL_DIR_I386)/lib/libc.a $(TCCDIR)/libtcc1.a $(MUSL_DIR_I386)/lib/crtn.o
+
 ifeq ($(ARCH),i386)
 test: kernel.elf
 	python3 test/boot_test.py kernel.elf \
@@ -155,6 +168,32 @@ test: kernel.elf
 		--must-contain "syscall: dispatch installed" \
 		--must-contain "hello from musl+tcc, sum=285" \
 		--must-contain "P5 checkpoint 2 OK" \
+		--must-not-contain "FATAL" \
+		--must-not-contain "UNHANDLED EXCEPTION" \
+		--must-not-contain "PAGE FAULT"
+
+# checkpoint 19: real process table + real fork()/wait4()/COW, driven
+# by a genuine Multiboot module -- QEMU's own `-initrd` flag, unlike
+# riscv64's `-device loader,addr=...` (i386 has no fixed physical
+# initrd address the way arch/risc/riscv64_memmap.h's RV64_INITRD_BASE
+# is; a Multiboot module's address is whatever the loader picks,
+# discovered at runtime via kmain.c's own multiboot_info parsing).
+# Packaged under the name "busybox" -- not a real BusyBox build yet
+# (that's the next step), just the same filename the product boot path
+# (run_process_table_test(), arch/i386/kmain.c) will eventually load
+# for real, so this test target won't need to change shape once it is.
+test-initrd: kernel.elf user_test/proc_fork_test_i386.elf
+	rm -rf /tmp/initrd-i386-stage && mkdir -p /tmp/initrd-i386-stage
+	cp user_test/proc_fork_test_i386.elf /tmp/initrd-i386-stage/busybox
+	tar cf initrd-i386.tar -C /tmp/initrd-i386-stage busybox
+	python3 test/boot_test.py kernel.elf \
+		--qemu-arg=-initrd --qemu-arg=initrd-i386.tar \
+		--must-contain "multiboot: initrd module at" \
+		--must-contain "initrd: 1 file(s) loaded from tar" \
+		--must-contain "P6 checkpoint: real process table" \
+		--must-contain "child counter=42" \
+		--must-contain "parent counter=1 reaped_pid_ok=1 child_status=7" \
+		--must-contain "process: all processes exited" \
 		--must-not-contain "FATAL" \
 		--must-not-contain "UNHANDLED EXCEPTION" \
 		--must-not-contain "PAGE FAULT"

@@ -412,9 +412,41 @@ void process_set_current_cwd(const char *path) {
  * anything outside these three windows still wouldn't survive a fork
  * -- true of every real program this checkpoint actually runs, but
  * not the general case, same spirit as mm/elf.c's own "no filesystem
- * yet" caveat elsewhere in this kernel. */
+ * yet" caveat elsewhere in this kernel.
+ *
+ * checkpoint 19: FORK_CLONE_LO/HI is the one real arch-specific value
+ * in this otherwise fully generic function -- not because fork()
+ * itself differs, but because where a real ELF actually loads
+ * genuinely differs between the two arches' address layouts. riscv64
+ * puts user code at small virtual addresses (0x100b0 in this
+ * checkpoint's own test payloads) nowhere near arch/risc/riscv64_paging.c's
+ * own kernel-shared region (which starts at RV64_RAM_BASE,
+ * 0x80000000), so [0, 16MB) never collides with it. i386 is the
+ * opposite: standard i386 ELF binaries load at 0x08048000+ (musl's
+ * own convention, confirmed by every real test payload's own printed
+ * entry address), which *would* fall inside [0, 16MB) -- and
+ * arch/i386/paging.c's own kernel-shared region *also* starts at 0,
+ * not some higher base. Cloning [0, 16MB) on i386 doesn't just miss
+ * the real ELF (wrong window, silently incomplete) -- it's much worse:
+ * paging_fork_cow() would COW-mark *shared kernel page-table pages*
+ * (the ones arch/i386/paging.c's paging_new_addrspace() copied PDE
+ * pointers to, not copies), corrupting every address space's view of
+ * that memory the instant anything touched it. Real bug, found
+ * running this exact checkpoint on i386 for the first time: a page
+ * fault deep inside the kernel's own fork() handling itself,
+ * eventually a triple fault, confirmed via QEMU's own `-d int` trace
+ * rather than guessed. i386's own window instead starts at 0x08000000
+ * (128MB) -- arch/i386/paging.c's own MAX_SHARED_MB cap guarantees the
+ * kernel-shared region never reaches that high regardless of how much
+ * RAM QEMU is given, so this is safely disjoint by construction, not
+ * by coincidence. */
+#ifndef KERNEL_ARCH_RISCV64
+#define FORK_CLONE_LO 0x08000000UL /* 128MB -- see this function's own comment */
+#define FORK_CLONE_HI 0x09000000UL /* +16MB */
+#else
 #define FORK_CLONE_LO 0x0UL
 #define FORK_CLONE_HI 0x1000000UL   /* 16MB */
+#endif
 #define FORK_MMAP_LO 0x60000000UL  /* arch/risc/riscv64_syscall.c's MMAP_BASE */
 #define FORK_MMAP_HI 0x60100000UL  /* 1MB -- comfortably past what any real fork()+mmap() test here actually uses */
 
