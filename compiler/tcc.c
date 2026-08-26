@@ -60,9 +60,6 @@ static const char help[] =
 #ifdef CONFIG_TCC_BCHECK
     "  -b           compile with built-in memory and bounds checker (implies -g)\n"
 #endif
-#ifdef CONFIG_TCC_BACKTRACE
-    "  -bt[N]       link with backtrace (stack dump) support [show max N callers]\n"
-#endif
     "Misc. options:\n"
     "  -x[c|a|b|n]  specify type of the next infile (C,ASM,BIN,NONE)\n"
     "  -nostdinc    do not use standard system include paths\n"

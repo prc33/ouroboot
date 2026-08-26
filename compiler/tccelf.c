@@ -93,15 +93,10 @@ ST_FUNC void tccelf_bounds_new(TCCState *s)
 ST_FUNC void tccelf_stab_new(TCCState *s)
 {
     TCCState *s1 = s;
-    int shf = 0;
-#ifdef CONFIG_TCC_BACKTRACE
-    if (s->do_backtrace)
-        shf = SHF_ALLOC;
-#endif
-    stab_section = new_section(s, ".stab", SHT_PROGBITS, shf);
+    stab_section = new_section(s, ".stab", SHT_PROGBITS, 0);
     stab_section->sh_entsize = sizeof(Stab_Sym);
     stab_section->sh_addralign = sizeof ((Stab_Sym*)0)->n_value;
-    stab_section->link = new_section(s, ".stabstr", SHT_STRTAB, shf);
+    stab_section->link = new_section(s, ".stabstr", SHT_STRTAB, 0);
     /* put first entry */
     put_stabs(s, "", 0, 0, 0, 0);
 }
@@ -1274,67 +1269,6 @@ ST_FUNC void tcc_add_bcheck(TCCState *s1)
 }
 #endif
 
-#ifdef CONFIG_TCC_BACKTRACE
-static void put_ptr(TCCState *s1, Section *s, int offs)
-{
-    int c;
-    c = set_global_sym(s1, NULL, s, offs);
-    s = data_section;
-    put_elf_reloc (s1->symtab, s, s->data_offset, R_DATA_PTR, c);
-    section_ptr_add(s, PTR_SIZE);
-}
-
-/* set symbol to STB_LOCAL and resolve. The point is to not export it as
-   a dynamic symbol to allow so's to have one each with a different value. */
-static void set_local_sym(TCCState *s1, const char *name, Section *s, int offset)
-{
-    int c = find_elf_sym(s1->symtab, name);
-    if (c) {
-        ElfW(Sym) *esym = (ElfW(Sym)*)s1->symtab->data + c;
-        esym->st_info = ELFW(ST_INFO)(STB_LOCAL, STT_NOTYPE);
-        esym->st_value = offset;
-        esym->st_shndx = s->sh_num;
-    }
-}
-
-ST_FUNC void tcc_add_btstub(TCCState *s1)
-{
-    Section *s;
-    int n, o;
-    CString cstr;
-
-    s = data_section;
-    o = s->data_offset;
-    /* Build the runtime backtrace descriptor. */
-    put_ptr(s1, stab_section, 0);
-    put_ptr(s1, stab_section, -1);
-    put_ptr(s1, stab_section->link, 0);
-    section_ptr_add(s, 3 * PTR_SIZE);
-    /* prog_base */
-    /* XXX this relocation is wrong, it uses sym-index 0 (local,undef) */
-    put_elf_reloc(s1->symtab, s, s->data_offset, R_DATA_PTR, 0);
-    section_ptr_add(s, PTR_SIZE);
-    n = 2 * PTR_SIZE;
-#ifdef CONFIG_TCC_BCHECK
-    if (s1->do_bounds_check) {
-        put_ptr(s1, bounds_section, 0);
-        n -= PTR_SIZE;
-    }
-#endif
-    section_ptr_add(s, n);
-
-    cstr_new(&cstr);
-    cstr_printf(&cstr,
-        " extern void __bt_init(),*__rt_info[],__bt_init_dll();"
-        "__attribute__((constructor)) static void __bt_init_rt(){");
-    cstr_printf(&cstr, "__bt_init(__rt_info,%d, 0);}",
-        s1->output_type == TCC_OUTPUT_DLL ? 0 : s1->rt_num_callers + 1);
-    tcc_compile_string(s1, cstr.data);
-    cstr_free(&cstr);
-    set_local_sym(s1, &"___rt_info"[!s1->leading_underscore], s, o);
-}
-#endif
-
 /* add tcc runtime libraries */
 ST_FUNC void tcc_add_runtime(TCCState *s1)
 {
@@ -1361,15 +1295,6 @@ ST_FUNC void tcc_add_runtime(TCCState *s1)
             tcc_add_library_err(s1, "pthread");
             tcc_add_library_err(s1, "dl");
             tcc_add_support(s1, "bcheck.o");
-        }
-#endif
-#ifdef CONFIG_TCC_BACKTRACE
-        if (s1->do_backtrace) {
-            if (s1->output_type == TCC_OUTPUT_EXE)
-                tcc_add_support(s1, "bt-exe.o");
-            if (s1->output_type != TCC_OUTPUT_DLL)
-                tcc_add_support(s1, "bt-log.o");
-            tcc_add_btstub(s1);
         }
 #endif
         tcc_add_support(s1, TCC_LIBTCC1);

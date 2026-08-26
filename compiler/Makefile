@@ -36,7 +36,7 @@ endif
 ifeq ($(TARGET),i386)
 BACKEND_SRCS = i386/i386-gen.c i386/i386-link.c i386/i386-asm.c \
                i386/i386-asm.h i386/i386-pair.c i386/i386-tok.h
-RUNTIME_SRCS = i386/alloca86.S i386/alloca86-bt.S
+RUNTIME_SRCS = i386/alloca86.S
 else ifeq ($(TARGET),riscv64)
 BACKEND_SRCS = risc/riscv64-gen.c risc/riscv64-link.c risc/riscv64-asm.c
 RUNTIME_SRCS = risc/riscv64-softquad.c
@@ -83,7 +83,7 @@ wasm32-tcc: tcc.c tcc.h libtcc.c libtcc.h tccpp.c tccgen.c tccelf.c \
 # which needed portable C versions added (upstream only ships x86
 # inline-asm ones) -- see docs/riscv-port-findings.md.
 ifeq ($(TARGET),i386)
-LIBTCC1_OBJS = lib/libtcc1.o i386/alloca86.o i386/alloca86-bt.o lib/dsohandle.o
+LIBTCC1_OBJS = lib/libtcc1.o i386/alloca86.o lib/dsohandle.o
 else
 LIBTCC1_OBJS = lib/libtcc1.o risc/riscv64-softquad.o lib/dsohandle.o
 endif
@@ -92,7 +92,6 @@ libtcc1.a: tcc lib/libtcc1.c lib/dsohandle.c $(RUNTIME_SRCS)
 	./tcc -B. -c lib/libtcc1.c -o lib/libtcc1.o -I.
 ifeq ($(TARGET),i386)
 	./tcc -B. -c i386/alloca86.S -o i386/alloca86.o -I.
-	./tcc -B. -c i386/alloca86-bt.S -o i386/alloca86-bt.o -I.
 else
 	./tcc -B. -c risc/riscv64-softquad.c -o risc/riscv64-softquad.o -I.
 endif

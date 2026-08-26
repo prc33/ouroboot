@@ -587,7 +587,6 @@ struct TCCState {
 
     /* compile with debug symbol (and use them if error during execution) */
     unsigned char do_debug;
-    unsigned char do_backtrace;
 #ifdef CONFIG_TCC_BCHECK
     /* compile with built-in memory and bounds checker */
     unsigned char do_bounds_check;
@@ -726,10 +725,6 @@ struct TCCState {
     int dt_verneednum;
     Section *versym_section;
     Section *verneed_section;
-#endif
-
-#ifdef CONFIG_TCC_BACKTRACE
-    int rt_num_callers;
 #endif
 
     int fd, cc; /* used by tcc_load_ldscript */
@@ -1088,9 +1083,6 @@ ST_FUNC int tcc_add_crt(TCCState *s, const char *filename);
 ST_FUNC int tcc_add_dll(TCCState *s, const char *filename, int flags);
 #ifdef CONFIG_TCC_BCHECK
 ST_FUNC void tcc_add_bcheck(TCCState *s1);
-#endif
-#ifdef CONFIG_TCC_BACKTRACE
-ST_FUNC void tcc_add_btstub(TCCState *s1);
 #endif
 ST_FUNC void tcc_add_pragma_libs(TCCState *s1);
 PUB_FUNC int tcc_add_library_err(TCCState *s, const char *f);

@@ -1336,9 +1336,7 @@ enum {
     TCC_OPTION_B,
     TCC_OPTION_l,
     TCC_OPTION_bench,
-    TCC_OPTION_bt,
     TCC_OPTION_b,
-    TCC_OPTION_ba,
     TCC_OPTION_g,
     TCC_OPTION_c,
     TCC_OPTION_dumpversion,
@@ -1396,9 +1394,6 @@ static const TCCOption tcc_options[] = {
     { "B", TCC_OPTION_B, TCC_OPTION_HAS_ARG },
     { "l", TCC_OPTION_l, TCC_OPTION_HAS_ARG },
     { "bench", TCC_OPTION_bench, 0 },
-#ifdef CONFIG_TCC_BACKTRACE
-    { "bt", TCC_OPTION_bt, TCC_OPTION_HAS_ARG | TCC_OPTION_NOSEP },
-#endif
 #ifdef CONFIG_TCC_BCHECK
     { "b", TCC_OPTION_b, 0 },
 #endif
@@ -1622,17 +1617,9 @@ reparse:
         case TCC_OPTION_bench:
             s->do_bench = 1;
             break;
-#ifdef CONFIG_TCC_BACKTRACE
-        case TCC_OPTION_bt:
-            s->rt_num_callers = atoi(optarg);
-            s->do_backtrace = 1;
-            s->do_debug = 1;
-            break;
-#endif
 #ifdef CONFIG_TCC_BCHECK
         case TCC_OPTION_b:
             s->do_bounds_check = 1;
-            s->do_backtrace = 1;
             s->do_debug = 1;
             break;
 #endif

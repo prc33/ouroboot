@@ -8,7 +8,7 @@
 @end direntry
 @c %**end of header
 
-@include config.texi
+@set VERSION 0.9.27
 
 @iftex
 @titlepage
@@ -311,13 +311,6 @@ Try to continue in case of a bound checking error.
 @end table
 
 Availability of @option{-b} depends on the compiler build configuration.
-
-@item -bt[N]
-Display N callers in stack traces. This is useful with @option{-g} or @option{-b}.
-With executables, additional support for stack traces is included.
-
-A function @code{ int tcc_backtrace(const char *fmt, ...); } is provided
-to trigger a stack trace with a message on demand.
 
 @end table
 
