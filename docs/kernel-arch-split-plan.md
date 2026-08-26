@@ -304,3 +304,167 @@ review §11 — decide i386's future, now on accurate information
 ```
 
 Phase 1 is independent of everything and can be done immediately.
+
+---
+
+## Status as of 2026-08-26
+
+Done, verified, committed (`c605aa3`, `d997b60`, `34cbf69`):
+
+- `kernel-complexity-review.md` §1/§2 (checkpoint chain moved out of
+  the product boot) and §3 (one canonical `build_user_stack()`) — the
+  two prerequisites this doc's own "do first" note above asked for.
+- The process-layer half of Phase 3: `sched/process.c` (generic) +
+  `arch/riscv64_process.c` (the real ~6%: `struct regs`'s own layout,
+  CSR/SSTATUS bits, the trap-return mechanism, the hand-built
+  kernel-stack-frame convention), talking through seven
+  `process_arch_*()` functions declared in `sched/process.h`'s own
+  "arch seam" section.
+
+Not done: Phases 1/2 (the free `mm/ramfs.o`/`mm/tar.o` win and the
+wholesale directory moves), the syscall-layer half of Phase 3
+(`arch/riscv64_syscall.c`'s handler bodies still read `r->aN` directly
+— unmixing them needs an `arch_syscall_arg()`-style accessor and a
+genuinely large, regression-risky rewrite of ~35 handlers; deferred
+rather than rushed), Phases 4-6, and everything below.
+
+## The real remaining piece: i386 self-hosting
+
+This turned out to be substantially larger than "apply the same split
+to i386", because i386 doesn't have the *foundation* riscv64's process
+layer was built on top of: real per-address-space paging.
+`mm/paging.c` today is one fixed page directory, one fixed pool of
+page tables (`page_tables[32][1024]`), no COW-across-processes concept
+at all — the i386 kernel is still architecturally at the "P5, one
+shared address space" stage, not "P6, a real process table". Measured
+directly (2026-08-26):
+
+```
+mm/paging.h's i386 branch declares 3 functions.
+mm/paging.h's riscv64 branch declares 10.
+```
+
+Missing: `paging_new_addrspace`, `paging_activate`, `paging_active_root`,
+`paging_map_page_in`, `paging_get_phys_in`, `paging_fork_cow`,
+`paging_get_flags`, `paging_ensure_writable`. `sched/process.c` calls
+five of those unconditionally (by design — see this doc's own note on
+why that's the right choice, not an oversight), so it genuinely cannot
+link for i386 until they exist, independent of anything else.
+
+### The paging port itself
+
+Same shape as `mm/riscv64_paging.c` (see that file's own extensive
+comments — a real, working reference to port *from*, not from
+scratch), adapted to i386's 2-level (page directory → page table)
+scheme instead of Sv39's 3-level one:
+
+1. **Dynamic table allocation.** The current fixed `page_tables[32][1024]`
+   pool assumes one address space. A new address space needs its own
+   page directory *and* its own page tables — `alloc_table()` needs to
+   come from `pmm_alloc_page()` (already used this way by
+   `mm/riscv64_paging.c`'s own `alloc_table()`), not the static pool.
+   The pool can stay for the *kernel's own* root table (mirroring
+   riscv64's `root_table[]`) or go entirely — either is fine, but the
+   per-process tables must be dynamic.
+2. **Kernel-sharing granularity — checked, and it's simpler than
+   riscv64's was.** i386's kernel identity-maps `[0, 128MB)` at 4MB
+   page-directory-entry granularity (`MAX_TABLES=32`, confirmed in
+   `mm/paging.c`). The real musl+TCC ELF test binary loads at
+   `0x08048198` — **exactly 128MB**, the first address *past* the
+   shared region — so sharing all 32 kernel PD entries with every new
+   address space, at PD-entry (not finer) granularity, does not
+   reproduce riscv64 checkpoint 6's real bug (process addresses
+   aliasing onto the same page tables as the kernel or each other):
+   the boundary is clean, not scattered. One real constraint this
+   creates: **any new per-process test must place its ELF/stack above
+   128MB** (`0x08000000`) — the P1-P5 tests' own addresses
+   (`kmain.c`'s `USER_TEST_ENTRY = 0x800000`, `user_stack_va =
+   0x900000`) are *inside* the shared region and must not be reused
+   for a real per-process design; they're fine as-is for what they
+   are (single-shared-address-space, pre-checkpoint-6 tests, staying
+   unconverged the same way `run_elf_test()` does on the riscv64 side).
+3. **`page_fault_handler` gains the COW-copy and lazy-stack-growth
+   paths** `mm/riscv64_paging.c`'s already has (`fix_cow_page()` +
+   `process_handle_stack_fault()` calls) — i386's current handler only
+   has the COW half (`kmain.c`'s own `run_cow_test`), not the stack
+   growth half (nothing needs it yet).
+4. **CR3, not `satp`** — `paging_activate()` becomes `load_cr3()` plus
+   a TLB flush (i386 has no single-instruction `sfence.vma`-equivalent
+   for "flush everything"; a full `movl %cr3,%eax; movl %eax,%cr3`
+   reload is the standard idiom and already used by `enable_paging()`).
+
+This is real, novel, first-attempt kernel code with no existing i386
+implementation to diff against (unlike everything ported *to* riscv64
+in this project, which at least had upstream Linux/musl behavior to
+check against) — treat it as its own checkpoint, with its own COW
+regression test (mirroring `run_cow_test`/`run_cow_user_test`) before
+anything downstream depends on it.
+
+### After paging: what's genuinely reusable vs. what's new
+
+**Reusable, close to free**, once `mm/paging.c` implements the same
+interface: `sched/process.c` (this doc's own Phase 3 work above) —
+zero changes needed, it already only calls `paging_*` by name.
+`mm/ramfs.c`/`mm/tar.c` — already confirmed compiling clean for i386
+(`kernel-complexity-review.md` §12). Just `arch/i386_process.c` (the
+seven `process_arch_*()` functions, i386-flavored: `struct regs`'s own
+field names, `eflags`/ring-0-to-3 transition instead of SSTATUS/sret,
+`arch/usermode.S`'s existing mechanism for the trap-return equivalent)
+needs writing — comparable in size to `arch/riscv64_process.c` (~180
+lines).
+
+**Genuinely new, no shortcut:**
+
+- **~20 syscalls**, i386's own `int 0x80` convention (`eax`=number,
+  `ebx`/`ecx`/`edx`/`esi`/`edi`/`ebp`=args 1-6, `eax`=return — `arch/syscall.c`
+  has exactly 10 today: write, writev, exit, exit_group, brk, mmap2,
+  munmap, ioctl, set_thread_area, set_tid_address). Missing, matching
+  riscv64's own list: `openat`, `close`, `read`, `execve`, `getcwd`,
+  `chdir`, `newfstatat`, `getdents64`, `lseek`, `unlinkat`, `dup3`,
+  `clone`, `wait4`, `rt_sigprocmask`, `rt_sigaction`, `sched_yield`,
+  `gettid`, `fcntl`, `faccessat`, `getppid`/`geteuid`/`getuid`/`getgid`/`getegid`/`getpid`.
+  The handler *logic* for most of these already exists in
+  `arch/riscv64_syscall.c` and is arch-neutral in spirit (ramfs lookup,
+  dirent formatting, fd table access) — porting means copying that
+  logic against i386's own register names, not reinventing it. (This
+  is also the concrete case for doing this doc's deferred
+  syscall-layer split first, if that work happens before this: it
+  would make "port the logic" literally "link the same object".)
+- **An initrd mechanism.** riscv64 uses a fixed physical address plus
+  QEMU's `-device loader,addr=...`; i386 has no such placement
+  primitive at that address on real Multiboot hardware/QEMU's
+  Multiboot path. The natural fit is a **Multiboot module** (`grub`/
+  QEMU's `-initrd` convention, or a second `-device loader` at a
+  fixed address if staying QEMU-specific is acceptable) — genuinely a
+  different mechanism, not a different address, which is exactly why
+  it's behind `arch_initrd_base()`/`arch_initrd_size()` in this doc's
+  original interface sketch rather than assumed to be `RV64_INITRD_BASE`-shaped.
+- **An i386 BusyBox build.** Real head start here:
+  `demo/build-busybox-i386.sh` and a matching compat patch already
+  exist and are referenced as proven in `docs/busybox-findings.md` —
+  this is re-running/re-verifying an existing asset, not writing one.
+  `musl-i386` is also already built and present in this sandbox.
+- **An i386 self-hosting test**, mirroring `test-selfhost` — needs TCC
+  built with `TARGET=i386` (already proven: `make TARGET=i386
+  selfcheck` passes) linked against `musl-i386`, packaged the same way
+  `test/build-selfhost-initrd.sh` does, run through whatever the i386
+  initrd mechanism turns out to be.
+
+### Suggested phase order for this piece specifically
+
+1. i386 paging port + its own COW regression test (checkpoint-6
+   equivalent) — the one everything else is blocked on.
+2. `arch/i386_process.c` + wiring `sched/process.c` into i386's `OBJS` —
+   at this point i386 has a real process table and can run the
+   existing P1-P5-style tests through it, provable with the *existing*
+   `hello`/ring3 fixtures before any new syscall exists.
+3. The ~20 syscalls, ported from `arch/riscv64_syscall.c`'s own logic.
+4. The Multiboot initrd mechanism + `mm/ramfs.c`/`mm/tar.c` wired into
+   i386's `OBJS` (already proven to compile; this is the linking step).
+5. i386 BusyBox build re-verified in this sandbox.
+6. The i386 self-hosting test.
+
+Each step has its own real regression test and should be committed and
+verified independently, the same discipline every riscv64 checkpoint
+in this project's history used — this is not a "do it all in one
+commit" undertaking, and shouldn't be treated as one.
