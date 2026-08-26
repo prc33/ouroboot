@@ -1367,28 +1367,6 @@ ST_FUNC void resolve_common_syms(TCCState *s1)
     tcc_add_linker_symbols(s1);
 }
 
-static void tcc_output_binary(TCCState *s1, FILE *f,
-                              const int *sec_order)
-{
-    Section *s;
-    int i, offset, size;
-
-    offset = 0;
-    for(i=1;i<s1->nb_sections;i++) {
-        s = s1->sections[sec_order[i]];
-        if (s->sh_type != SHT_NOBITS &&
-            (s->sh_flags & SHF_ALLOC)) {
-            while (offset < s->sh_offset) {
-                fputc(0, f);
-                offset++;
-            }
-            size = s->sh_size;
-            fwrite(s->data, 1, size, f);
-            offset += size;
-        }
-    }
-}
-
 #ifndef ELF_OBJ_ONLY
 ST_FUNC void fill_got_entry(TCCState *s1, ElfW_Rel *rel)
 {
@@ -1662,8 +1640,7 @@ static int layout_sections(TCCState *s1, ElfW(Phdr) *phdr, int phnum,
     file_type = s1->output_type;
     sh_order_index = 1;
     file_offset = 0;
-    if (s1->output_format == TCC_OUTPUT_FORMAT_ELF)
-        file_offset = sizeof(ElfW(Ehdr)) + phnum * sizeof(ElfW(Phdr));
+    file_offset = sizeof(ElfW(Ehdr)) + phnum * sizeof(ElfW(Phdr));
     s_align = ELF_PAGE_SIZE;
     if (s1->section_align)
         s_align = s1->section_align;
@@ -1796,17 +1773,9 @@ static int layout_sections(TCCState *s1, ElfW(Phdr) *phdr, int phnum,
             ph->p_filesz = file_offset - ph->p_offset;
             ph->p_memsz = addr - ph->p_vaddr;
             ph++;
-            if (j == 0) {
-                if (s1->output_format == TCC_OUTPUT_FORMAT_ELF) {
-                    /* if in the middle of a page, we duplicate the page in
-                       memory so that one copy is RX and the other is RW */
-                    if ((addr & (s_align - 1)) != 0)
-                        addr += s_align;
-                } else {
-                    addr = (addr + s_align - 1) & ~(s_align - 1);
-                    file_offset = (file_offset + s_align - 1) & ~(s_align - 1);
-                }
-            }
+            if (j == 0 && (addr & (s_align - 1)) != 0)
+                /* Duplicate a partial page so one copy is RX and one is RW. */
+                addr += s_align;
         }
     }
 
@@ -2085,7 +2054,7 @@ static void tcc_output_elf(TCCState *s1, FILE *f, int phnum, ElfW(Phdr) *phdr,
     }
 }
 
-/* Write an elf, coff or "binary" file */
+/* Write an ELF file. */
 static int tcc_write_elf_file(TCCState *s1, const char *filename, int phnum,
                               ElfW(Phdr) *phdr, int file_offset, int *sec_order)
 {
@@ -2107,10 +2076,7 @@ static int tcc_write_elf_file(TCCState *s1, const char *filename, int phnum,
     if (s1->verbose)
         printf("<- %s\n", filename);
 
-    if (s1->output_format == TCC_OUTPUT_FORMAT_ELF)
-        tcc_output_elf(s1, f, phnum, phdr, file_offset, sec_order);
-    else
-        tcc_output_binary(s1, f, sec_order);
+    tcc_output_elf(s1, f, phnum, phdr, file_offset, sec_order);
     fclose(f);
 
     return 0;
@@ -2165,7 +2131,7 @@ static void tidy_section_headers(TCCState *s1, int *sec_order)
 #endif
 
 
-/* Output an elf, coff or binary file */
+/* Output an ELF file. */
 /* XXX: suppress unneeded sections */
 static int elf_output_file(TCCState *s1, const char *filename)
 {

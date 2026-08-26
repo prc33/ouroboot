@@ -567,9 +567,6 @@ struct TCCState {
 
     /* output type, see TCC_OUTPUT_XXX */
     int output_type;
-    /* output format, see TCC_OUTPUT_FORMAT_xxx */
-    int output_format;
-
     /* C language options */
     unsigned char char_is_unsigned;
     unsigned char leading_underscore;
@@ -1075,8 +1072,6 @@ ST_FUNC int tcc_add_file_internal(TCCState *s1, const char *filename, int flags)
 #define AFF_BINTYPE_REL 1
 #define AFF_BINTYPE_DYN 2
 #define AFF_BINTYPE_AR  3
-#define AFF_BINTYPE_C67 4
-
 #ifndef ELF_OBJ_ONLY
 ST_FUNC int tcc_add_crt(TCCState *s, const char *filename);
 #endif
@@ -1257,12 +1252,7 @@ ST_DATA int func_bound_add_epilog;
 
 /* ------------ tccelf.c ------------ */
 
-#define TCC_OUTPUT_FORMAT_ELF    0 /* default output format: ELF */
-#define TCC_OUTPUT_FORMAT_BINARY 1 /* binary image output */
-#define TCC_OUTPUT_FORMAT_COFF   2 /* COFF */
-#define TCC_OUTPUT_FORMAT_WASM   3 /* WebAssembly module */
-
-#define ARMAG  "!<arch>\012"    /* For COFF and a.out archives */
+#define ARMAG  "!<arch>\012"    /* Unix archive magic */
 
 typedef struct {
     unsigned int n_strx;         /* index into string table of name */

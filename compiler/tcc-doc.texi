@@ -256,15 +256,6 @@ Put custom search path for dynamic libraries into executable.
 When putting a custom search path for dynamic libraries into the executable,
 create the new ELF dynamic tag DT_RUNPATH instead of the old legacy DT_RPATH.
 
-@item -Wl,--oformat=fmt
-Use @var{fmt} as output format. The supported output formats are:
-@table @code
-@item elf32-i386
-ELF output format (default)
-@item binary
-Binary image (only for executable output)
-@end table
-
 @item -Wl,--export-all-symbols
 @item -Wl,--export-dynamic
 Export global symbols to the dynamic linker. It is useful when a library

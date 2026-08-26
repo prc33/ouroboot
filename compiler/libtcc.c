@@ -873,15 +873,6 @@ LIBTCCAPI int tcc_set_output_type(TCCState *s, int output_type)
 {
     s->output_type = output_type;
 
-    /* wasm is a final module even when the driver uses its ordinary
-       compile-only path; native targets continue to produce ELF objects. */
-#ifdef TCC_TARGET_WASM32
-    s->output_format = TCC_OUTPUT_FORMAT_WASM;
-#else
-    if (output_type == TCC_OUTPUT_OBJ)
-        s->output_format = TCC_OUTPUT_FORMAT_ELF;
-#endif
-
     if (s->char_is_unsigned)
         tcc_define_symbol(s, "__CHAR_UNSIGNED__", NULL);
 
@@ -1270,18 +1261,6 @@ static int tcc_set_linker(TCCState *s, const char *option)
         } else if (link_option(option, "init=", &p)) {
             copy_linker_arg(&s->init_symbol, p, 0);
             ignoring = 1;
-        } else if (link_option(option, "oformat=", &p)) {
-#if   PTR_SIZE == 8
-            if (strstart("elf64-", &p)) {
-#else
-            if (strstart("elf32-", &p)) {
-#endif
-                s->output_format = TCC_OUTPUT_FORMAT_ELF;
-            } else if (!strcmp(p, "binary")) {
-                s->output_format = TCC_OUTPUT_FORMAT_BINARY;
-            } else
-                goto err;
-
         } else if (link_option(option, "as-needed", &p)) {
             ignoring = 1;
         } else if (link_option(option, "O", &p)) {

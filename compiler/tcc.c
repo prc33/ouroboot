@@ -113,7 +113,6 @@ static const char help2[] =
     "  -enable-new-dtags             set DT_RUNPATH instead of DT_RPATH\n"
     "  -soname=                      set DT_SONAME elf tag\n"
     "  -Bsymbolic                    set DT_SYMBOLIC elf tag\n"
-    "  -oformat=[elf32/64-* binary]  set executable output format\n"
     "  -init= -fini= -as-needed -O   (ignored)\n"
     "Predefined macros:\n"
     "  tcc -E -dM - < /dev/null\n"

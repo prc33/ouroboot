@@ -29,7 +29,6 @@ int code_reloc (int reloc_type)
 {
     switch (reloc_type) {
 	case R_386_RELATIVE:
-	case R_386_16:
         case R_386_32:
 	case R_386_GOTPC:
 	case R_386_GOTOFF:
@@ -39,7 +38,6 @@ int code_reloc (int reloc_type)
 	case R_386_COPY:
             return 0;
 
-	case R_386_PC16:
 	case R_386_PC32:
 	case R_386_PLT32:
 	case R_386_JMP_SLOT:
@@ -55,7 +53,6 @@ int gotplt_entry_type (int reloc_type)
 {
     switch (reloc_type) {
 	case R_386_RELATIVE:
-	case R_386_16:
 	case R_386_GLOB_DAT:
 	case R_386_JMP_SLOT:
 	case R_386_COPY:
@@ -67,7 +64,6 @@ int gotplt_entry_type (int reloc_type)
 	       See our caller for comments.  */
             return AUTO_GOTPLT_ENTRY;
 
-	case R_386_PC16:
 	case R_386_PC32:
             return AUTO_GOTPLT_ENTRY;
 
@@ -203,18 +199,6 @@ void relocate(TCCState *s1, ElfW_Rel *rel, int type, unsigned char *ptr, addr_t 
         case R_386_GOT32X:
             /* we load the got offset */
             add32le(ptr, get_sym_attr(s1, sym_index, 0)->got_offset);
-            return;
-        case R_386_16:
-            if (s1->output_format != TCC_OUTPUT_FORMAT_BINARY) {
-            output_file:
-                tcc_error("can only produce 16-bit binary files");
-            }
-            write16le(ptr, read16le(ptr) + val);
-            return;
-        case R_386_PC16:
-            if (s1->output_format != TCC_OUTPUT_FORMAT_BINARY)
-                goto output_file;
-            write16le(ptr, read16le(ptr) + val - addr);
             return;
         case R_386_RELATIVE:
             /* do nothing */
