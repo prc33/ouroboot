@@ -1,11 +1,24 @@
 /* General process table -- checkpoint 6. Real, independent U-mode
  * processes: each gets its own address space (mm/paging.h's
  * paging_new_addrspace/paging_activate), its own kernel stack, and a
- * saved trapframe restored via arch/riscv64_trap_entry.S's
- * riscv64_trap_return label -- see that file's own comment for why
- * unifying "trap stack" and "process kernel stack" is what makes a
- * process able to genuinely block mid-syscall (this checkpoint's
- * SYS_sched_yield) and be resumed later exactly where it left off.
+ * saved trapframe restored via the architecture's own trap-return
+ * mechanism (process_arch_activate_and_restore() -- see this file's
+ * own "arch seam" comment in process.h) -- see arch/riscv64_trap_entry.S's
+ * own comment for why unifying "trap stack" and "process kernel
+ * stack" is what makes a process able to genuinely block mid-syscall
+ * (this checkpoint's SYS_sched_yield) and be resumed later exactly
+ * where it left off.
+ *
+ * checkpoint 16 (docs/kernel-arch-split-plan.md): this file used to be
+ * sched/riscv64_process.c, and was about 94% architecture-neutral
+ * already -- see docs/kernel-complexity-review.md section 12's own
+ * measurement. The genuinely riscv64-specific ~6% (struct regs's own
+ * layout, CSR/SSTATUS bits, the trap-return mechanism, the hand-built
+ * initial-kernel-stack-frame convention switch_context() expects) now
+ * lives in arch/riscv64_process.c instead, behind the small
+ * process_arch_*() interface declared in process.h. This file only
+ * ever touches `struct regs` opaquely (as a pointer to snapshot/pass
+ * along), never a named field of it.
  *
  * Two distinct "kernel-side execution" mechanisms coexist here, both
  * ultimately switch_context() (sched/riscv64_switch_context.S),
@@ -15,25 +28,23 @@
  *   1. A process being dispatched *for the first time*: its
  *      kernel_sp is a hand-built initial frame (same technique as
  *      sched/riscv64_task.c's task_init) whose `ra` is
- *      process_trampoline -- switch_context's `ret` jumps straight
- *      there, which activates the process's address space, seeds the
- *      global trapframe from its saved user_regs, and falls into
- *      riscv64_trap_return to actually enter U-mode.
+ *      process_arch_trampoline -- switch_context's `ret` jumps
+ *      straight there, which activates the process's address space,
+ *      seeds the global trapframe from its saved user_regs, and falls
+ *      into the architecture's own trap-return path to actually enter
+ *      U-mode.
  *   2. A process *resuming after a blocking syscall*: its kernel_sp
  *      is wherever process_schedule()'s own switch_context() call
  *      left off, deep inside that process's own C call stack (e.g.
  *      inside sys_sched_yield). Resuming here just continues that C
  *      code normally; it eventually returns out through
- *      syscall_dispatch/trap_dispatch and falls into trap_entry.S's
- *      restore-and-sret tail via the ordinary `jalr t0` call site,
- *      the same path every non-blocking syscall already used in
- *      P1-P5.
- * Both end up executing in U-mode via the exact same restore code
- * (arch/riscv64_trap_entry.S), just entered two different ways.
+ *      syscall_dispatch/trap_dispatch and falls into the trap entry
+ *      code's restore-and-return tail via the ordinary call site, the
+ *      same path every non-blocking syscall already used in P1-P5.
+ * Both end up executing in U-mode via the exact same restore code,
+ * just entered two different ways.
  */
 #include "kernel.h"
-#include "arch/riscv64_trap.h"
-#include "arch/riscv64_memmap.h"
 #include "mm/pmm.h"
 #include "mm/paging.h"
 #include "mm/elf.h"
@@ -41,22 +52,23 @@
 #include "sched/process.h"
 #include "mm/ramfs.h"
 
-#define CSR_SSTATUS 0x100
-#define SSTATUS_SPP  (1UL << 8)
-#define SSTATUS_SPIE (1UL << 5)
-#define SSTATUS_SIE  (1UL << 1)
 #define USER_BRK_BASE 0x40000000UL
 #define USER_MMAP_BASE 0x60000000UL
 #define USER_STACK_TOP 0xB1000000UL
 #define USER_STACK_LIMIT 0xB0000000UL
 #define USER_STACK_INITIAL_PAGES 2
 
-extern void riscv64_trap_return(void); /* arch/riscv64_trap_entry.S */
-
 static struct process processes[MAX_PROCESSES];
 static struct process *current_process;
 static int next_pid = 1;
 static int process_mode = 0;
+
+/* For arch/riscv64_process.c's own process_arch_trampoline() -- see
+ * process.h's own comment on why that reads this rather than taking a
+ * parameter. */
+struct process *process_get_current(void) {
+	return current_process;
+}
 
 static struct process *alloc_slot(void) {
 	for (int i = 0; i < MAX_PROCESSES; i++)
@@ -71,63 +83,6 @@ void process_init(void) {
 	current_process = 0;
 }
 
-/* struct assignment would ask TCC's codegen for memmove(), which this
- * freestanding kernel has never linked (every other byte copy in it,
- * e.g. mm/riscv64_paging.c's COW handler, is a plain word/byte loop
- * for the same reason) -- copy by hand instead. */
-static void copy_regs(struct regs *dst, const struct regs *src) {
-	const unsigned long *s = (const unsigned long *)src;
-	unsigned long *d = (unsigned long *)dst;
-	for (unsigned int i = 0; i < sizeof(struct regs) / sizeof(unsigned long); i++)
-		d[i] = s[i];
-}
-
-/* Snapshots the live global trapframe into p->user_regs -- called on
- * a process's way *out* (process_schedule(), right before handing the
- * CPU to someone else), since RV64_TRAPFRAME_BASE is a single shared
- * slot every process's own traps overwrite; without this, whatever
- * p was doing at the moment it yielded would be lost the instant a
- * second process trapped. */
-static void save_trapframe(struct process *p) {
-	copy_regs(&p->user_regs, (struct regs *)RV64_TRAPFRAME_BASE);
-}
-
-/* The other half of save_trapframe(), and the one thing every path
- * that makes `p` "the process about to run in U-mode" must do before
- * that happens, whether p has never run before (process_trampoline)
- * or is resuming after a previous save_trapframe() (process_schedule(),
- * right after its switch_context() call returns): reactivate p's own
- * address space, restore its own saved trapframe over whatever's
- * currently in the shared slot, and point the trap-stack indirection
- * (arch/riscv64_trap_entry.S's own comment) at p's own kernel stack,
- * so if p traps again it lands on ITS stack, not whoever's was
- * current a moment ago. Getting this step (or save_trapframe) wrong
- * showed up, the first time this file was written, as both test
- * processes' output printing the *second* process's label rather than
- * their own -- state which never actually belonged to A "resuming" at
- * all, since nothing had reasserted A's own saved context before its
- * call chain fell back through the shared trap-return path with B's
- * data still sitting in the shared slot. */
-static void activate_and_restore(struct process *p) {
-	paging_activate(p->root_table);
-	copy_regs((struct regs *)RV64_TRAPFRAME_BASE, &p->user_regs);
-	*(unsigned long *)RV64_CURRENT_KSTACK_PTR = (unsigned long)&p->kernel_stack[PROC_KSTACK_WORDS];
-}
-
-/* ra target for a process's hand-built initial kernel stack frame --
- * see the file comment's mechanism (1). Reads current_process rather
- * than taking a parameter: switch_context()'s restore sequence lands
- * here via a bare `ret`, the same shape as sched/riscv64_task.c's
- * task_a/task_b entry functions, which take no arguments for the same
- * reason. process_schedule()/process_run() always set current_process
- * before switching in, so it's correct here by construction. */
-static void process_trampoline(void) {
-	activate_and_restore(current_process);
-	riscv64_trap_return();
-	/* never reached: riscv64_trap_return ends in sret */
-	for (;;) __builtin_riscv_wfi();
-}
-
 /* checkpoint 15: the single canonical user-stack/argv/envp/auxv
  * builder -- process_create_from_elf() and process_execve() used to
  * each hand-roll their own nearly-identical version (see
@@ -137,8 +92,7 @@ static void process_trampoline(void) {
  * been stress-tested end to end -- every self-hosted TCC compile
  * (kernel/test/selfhost.sh) runs its own deeply recursive parser
  * through exactly this stack, including its lazy growth
- * (process_handle_stack_fault(), mm/riscv64_paging.c) down to
- * USER_STACK_LIMIT.
+ * (process_handle_stack_fault(), below) down to USER_STACK_LIMIT.
  *
  * kernel/test/riscv64_checkpoints.c's own run_elf_test() deliberately
  * stays unconverged -- see that file's own comment for why (it runs
@@ -232,39 +186,7 @@ struct process *process_create_from_elf_argv(const unsigned char *elf_data, unsi
 	p->cwd[1] = 0;
 
 	unsigned long sp = build_user_stack(p, argv, argc);
-
-	/* Saved U-mode context this process starts at -- process_trampoline
-	 * seeds the real trapframe from this the first time it runs.
-	 * Every GPR except sp starts zeroed: a fresh process's ABI
-	 * contract only promises a valid sp and entry pc. */
-	struct regs *ur = &p->user_regs;
-	for (unsigned long *w = (unsigned long *)ur; w < (unsigned long *)(ur + 1); w++)
-		*w = 0;
-	ur->sepc = entry;
-	ur->sp = (unsigned long)sp;
-	unsigned long sstatus = __builtin_riscv_csrr(CSR_SSTATUS);
-	sstatus &= ~SSTATUS_SPP;  /* sret drops to U-mode */
-	/* SPIE inherits the *current* global SIE, not a hardcoded 1: real
-	 * sret semantics copy SPIE into SIE, and this kernel has no
-	 * per-process interrupt-enable state of its own (arch/riscv64_timer.c's
-	 * own comment) -- SIE is one global CPU-wide policy, so a freshly
-	 * created process should come up under whatever that policy
-	 * currently is, not silently override it back on. Real bug, found
-	 * running real *paced* interactive input: hardcoding SPIE=1 here
-	 * meant every new process's first launch re-enabled interrupts
-	 * regardless of arch/riscv64_timer.c's timer_disable() (called once,
-	 * right after the P4 scheduler checkpoint) -- the timer came back
-	 * the moment checkpoint 5 created its first process, and stayed
-	 * back for every process after, defeating timer_disable() entirely
-	 * and leaving every syscall's busy-wait loop (sys_read's above all
-	 * -- the one paced real-world delays actually exercise) exposed to
-	 * the exact nested-trap corruption timer_disable() exists to
-	 * prevent (see its own comment for the full mechanism). */
-	if (sstatus & SSTATUS_SIE)
-		sstatus |= SSTATUS_SPIE;
-	else
-		sstatus &= ~SSTATUS_SPIE;
-	ur->sstatus = sstatus;
+	process_arch_init_context(p, entry, sp);
 
 	p->root_table = new_root;
 	p->pid = next_pid++;
@@ -273,17 +195,7 @@ struct process *process_create_from_elf_argv(const unsigned char *elf_data, unsi
 	for (int fd = 0; fd < MAX_FDS; fd++)
 		p->fds[fd].used = 0;
 
-	/* Hand-built initial kernel-stack frame -- identical technique to
-	 * sched/riscv64_task.c's task_init: 13 fake callee-saved registers
-	 * (ra pointing at process_trampoline, s0-s11 unused/zero) plus 8
-	 * bytes padding for 16-byte alignment, matching
-	 * sched/riscv64_switch_context.S's `addi sp,sp,-112` exactly. */
-	unsigned long *top = &p->kernel_stack[PROC_KSTACK_WORDS];
-	unsigned long *frame = top - 14;
-	frame[0] = (unsigned long)process_trampoline;
-	for (int j = 1; j < 13; j++)
-		frame[j] = 0;
-	p->kernel_sp = (unsigned long)frame;
+	process_arch_kstack_frame_init(p);
 
 	p->state = PROC_RUNNABLE;
 
@@ -324,19 +236,19 @@ void process_schedule(void) {
 	}
 	if (!next || next == old)
 		return;
-	save_trapframe(old);
+	process_arch_save_trapframe(old);
 	current_process = next;
 	switch_context(&old->kernel_sp, next->kernel_sp);
 	/* Execution resumes here later, whenever `old` (== us: this whole
 	 * function's stack frame, locals included, is exactly what
 	 * switch_context() suspended and is now resuming) is switched
-	 * back to. Whoever ran in between has left satp/the shared
-	 * trapframe/the trap-stack pointer aimed at THEM -- reassert our
-	 * own before falling back through to trap_entry.S's restore-and-
-	 * sret tail, the same as process_trampoline() does for a process
-	 * running for the first time (see activate_and_restore's own
-	 * comment). */
-	activate_and_restore(old);
+	 * back to. Whoever ran in between has left the active address
+	 * space/the shared trapframe/the trap-stack pointer aimed at
+	 * THEM -- reassert our own before falling back through to the
+	 * trap-return path, the same as process_arch_trampoline() does
+	 * for a process running for the first time (see
+	 * process_arch_activate_and_restore()'s own comment). */
+	process_arch_activate_and_restore(old);
 }
 
 /* What to do once the process table completely drains (no RUNNABLE
@@ -538,8 +450,8 @@ int process_fork(struct regs *r) {
 	for (int fd = 0; fd < MAX_FDS; fd++) {
 		/* field-by-field, not a struct assignment -- TCC's codegen
 		 * would ask for memmove() for that, which this freestanding
-		 * kernel has never linked (same reason as process_trampoline's
-		 * own copy_regs() above). */
+		 * kernel has never linked (same reason as
+		 * arch/riscv64_process.c's own copy_regs()). */
 		child->fds[fd].used = parent->fds[fd].used;
 		child->fds[fd].data = parent->fds[fd].data;
 		child->fds[fd].size = parent->fds[fd].size;
@@ -565,29 +477,12 @@ int process_fork(struct regs *r) {
 		for (int i = 0; i < 128; i++) child->stdio_override[fd].path[i] = parent->stdio_override[fd].path[i];
 	}
 
-	/* Child's saved trapframe: an exact snapshot of the parent's live
-	 * regs at this ecall (same registers, same sepc -- both processes
-	 * resume right after the same `ecall` instruction), except a0,
-	 * fork()'s return value, forced to 0 -- "you are the child" is
-	 * the *only* thing that needs to differ between the two copies
-	 * for this to be a correct fork(). The parent's own a0 (this
-	 * child's pid) is set by arch/riscv64_syscall.c's sys_clone
-	 * itself, on its live `r`, same as any other syscall's return
-	 * value -- untouched by this copy. */
-	copy_regs(&child->user_regs, r);
-	child->user_regs.a0 = 0;
-
-	/* Hand-built initial kernel-stack frame -- identical technique to
-	 * process_create_from_elf: when this child is first scheduled, it
-	 * resumes via process_trampoline using the trapframe snapshot
-	 * just taken above, i.e. picks up exactly at the return-from-
-	 * fork() point, in its own address space, with a0=0. */
-	unsigned long *top = &child->kernel_stack[PROC_KSTACK_WORDS];
-	unsigned long *frame = top - 14;
-	frame[0] = (unsigned long)process_trampoline;
-	for (int j = 1; j < 13; j++)
-		frame[j] = 0;
-	child->kernel_sp = (unsigned long)frame;
+	/* Child resumes exactly where the parent's fork() call returns,
+	 * with a0=0 ("you are the child"); see
+	 * arch/riscv64_process.c's process_arch_fork_child() for how the
+	 * trapframe snapshot is taken. */
+	process_arch_fork_child(child, r);
+	process_arch_kstack_frame_init(child);
 
 	child->state = PROC_RUNNABLE;
 	return child->pid;
@@ -698,10 +593,8 @@ struct fd_entry *process_stdio_get(int fd) {
 void process_stdio_set(int fd, const struct fd_entry *src) {
 	if (!current_process || fd < 0 || fd > 2)
 		return;
-	/* field-by-field, not a struct assignment -- TCC's codegen would
-	 * ask for memmove() for that, which this freestanding kernel has
-	 * never linked (same reason as process_trampoline's own
-	 * copy_regs(), and process_fork's own fd-copy loop, above). */
+	/* field-by-field, not a struct assignment -- see process_fork's
+	 * own comment on why. */
 	struct fd_entry *dst = &current_process->stdio_override[fd];
 	dst->data = src->data;
 	dst->size = src->size;
@@ -795,23 +688,7 @@ int process_execve(struct regs *r, const char *path, char **argv, char **envp) {
 	 * tests execve()s at most once. */
 	p->root_table = new_root;
 
-	/* Rewrite the live trapframe in place -- this *is* what makes the
-	 * syscall "return" into the new program: every GPR real execve()
-	 * doesn't promise to preserve gets zeroed (stale values from the
-	 * old program have no business surviving into the new one), sp
-	 * and sepc get the new program's real values, sstatus is left
-	 * exactly as it already was (it's already correctly configured
-	 * for "return to U-mode" -- we got here via a real ecall *from*
-	 * U-mode, so SPP/SPIE are already right; recomputing it would
-	 * just reproduce what's already there). */
-	r->ra = 0; r->gp = 0; r->tp = 0;
-	r->t0 = 0; r->t1 = 0; r->t2 = 0;
-	r->s0 = 0; r->s1 = 0;
-	r->a0 = 0; r->a1 = 0; r->a2 = 0; r->a3 = 0; r->a4 = 0; r->a5 = 0; r->a6 = 0; r->a7 = 0;
-	r->s2 = 0; r->s3 = 0; r->s4 = 0; r->s5 = 0; r->s6 = 0; r->s7 = 0; r->s8 = 0; r->s9 = 0; r->s10 = 0; r->s11 = 0;
-	r->t3 = 0; r->t4 = 0; r->t5 = 0; r->t6 = 0;
-	r->sp = (unsigned long)sp;
-	r->sepc = entry;
+	process_arch_execve_rewrite(r, entry, sp);
 
 	return 0;
 }

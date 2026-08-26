@@ -62,18 +62,24 @@ LDFLAGS := -B$(TCCDIR) -nostdlib -static -Wl,-Ttext=0x80200000
 # _riscv64_entry must be the very first thing linked after that page).
 # arch/riscv64_kend.o must be last, same reason as i386's arch/kend.o.
 # sched/riscv64_task.o (the P4 fixed-2-task scheduler, superseded by
-# sched/riscv64_process.o from checkpoint 6 onward) is deliberately
-# *not* here -- the product kernel never calls it. It's added back for
+# sched/process.o from checkpoint 6 onward) is deliberately *not* here
+# -- the product kernel never calls it. It's added back for
 # RISCV64_CHECKPOINT_OBJS below, which the historical P1-P10 regression
 # chain (kernel/test/riscv64_checkpoints.c) still exercises. See
 # docs/kernel-complexity-review.md section 1.
+#
+# sched/process.o (the general process table -- generic, see its own
+# file comment) and arch/riscv64_process.o (the small riscv64-specific
+# half it calls through: struct regs, the trap-return mechanism, the
+# hand-built initial-kernel-stack-frame convention) used to be one
+# file, sched/riscv64_process.o -- see docs/kernel-arch-split-plan.md.
 OBJS := boot/riscv64_boot.o riscv64_entry.o riscv64_kmain.o \
         drivers/riscv64_serial.o drivers/kprintf.o \
         arch/riscv64_trap_entry.o arch/riscv64_trap.o arch/riscv64_timer.o \
-        arch/riscv64_usermode.o arch/riscv64_syscall.o \
+        arch/riscv64_usermode.o arch/riscv64_syscall.o arch/riscv64_process.o \
         mm/pmm.o mm/riscv64_paging.o mm/elf.o mm/ramfs.o mm/tar.o \
         sched/riscv64_switch_context.o \
-        sched/riscv64_process.o \
+        sched/process.o \
         arch/riscv64_kend.o
 else
 $(error unknown ARCH '$(ARCH)' -- expected i386 or riscv64)

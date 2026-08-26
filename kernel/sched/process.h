@@ -1,9 +1,22 @@
 #ifndef PROCESS_H
 #define PROCESS_H
 
+/* struct regs's own definition/layout is genuinely architecture-
+ * specific (see arch/riscv64_process.c's own file comment) -- process.h
+ * only ever needs it opaquely (a field of struct process below, and
+ * pointer parameters passed straight through to the process_arch_*()
+ * functions at the bottom of this file), so it just includes whichever
+ * arch's own trap header defines it, same convention kernel.h already
+ * uses. Not yet exercised for i386 (sched/process.c isn't in that
+ * ARCH's OBJS list -- see docs/kernel-arch-split-plan.md for why), but
+ * kept dual-arch-correct rather than hardcoded riscv64. */
+#ifndef KERNEL_ARCH_RISCV64
+#include "arch/idt.h"
+#else
 #include "arch/riscv64_trap.h"
+#endif
 
-/* General process table -- checkpoint 6 (see sched/riscv64_process.c
+/* General process table -- checkpoint 6 (see sched/process.c
  * for the full design). Distinct from sched/task.h's `struct task`:
  * that's the fixed-2, kernel-mode-only cooperative demo from P4,
  * never connected to U-mode/syscalls at all. This is real processes:
@@ -87,12 +100,12 @@ void process_init(void);
  * kernel/test/riscv64_checkpoints.c's own one-shot payloads) in its
  * own fresh address space, with the given real argv (NUL-terminated
  * strings, all already kernel-resident -- see
- * sched/riscv64_process.c's build_user_stack() for why). Returns 0 on
+ * sched/process.c's build_user_stack() for why). Returns 0 on
  * failure (table full, out of memory, bad ELF). */
 struct process *process_create_from_elf_argv(const unsigned char *elf_data, unsigned long elf_size, char *const argv[], int argc);
 
 /* Single-arg0 convenience wrapper (argv = {arg0, NULL}) -- see
- * sched/riscv64_process.c's own comment. */
+ * sched/process.c's own comment. */
 struct process *process_create_from_elf(const unsigned char *elf_data, unsigned long elf_size, const char *arg0);
 
 /* Cooperative round-robin over every RUNNABLE process, same technique
@@ -143,17 +156,17 @@ void process_set_current_cwd(const char *path);
 /* Runs once, the next time the process table completely drains (no
  * RUNNABLE process left) -- kernel/test/riscv64_checkpoints.c uses
  * this to chain each checkpoint into the next one in sequence, see
- * sched/riscv64_process.c's own comment. */
+ * sched/process.c's own comment. */
 void process_set_drain_hook(void (*hook)(void));
 
 /* The ordinary, checkpoint-agnostic "nothing left to schedule" halt --
  * every real boot (product included) reaches this the same way, once
  * its own last process exits with no drain hook registered to chain
  * into anything further. Declared here (not static in
- * sched/riscv64_process.c) so kernel/test/riscv64_checkpoints.c's own
+ * sched/process.c) so kernel/test/riscv64_checkpoints.c's own
  * final stage can call it after printing its own closing message --
  * see that file's finish_checkpoint_boot() and this function's own
- * comment in sched/riscv64_process.c. */
+ * comment in sched/process.c. */
 void process_halt(void) __attribute__((noreturn));
 
 /* Fires at most once, the next time a bare SYS_exit or a pre-process-
@@ -197,7 +210,7 @@ int process_fork(struct regs *r);
  * WNOHANG sweep with nothing left to reap spins forever indistinguishable
  * from "waiting for a child that will never exist". Otherwise blocks
  * (cooperatively -- see this function's own comment in
- * sched/riscv64_process.c) until a matching child becomes a zombie,
+ * sched/process.c) until a matching child becomes a zombie,
  * then reaps it (frees its process-table slot) and returns its pid,
  * with *status_out set to the same WIFEXITED/WEXITSTATUS-decodable
  * encoding real Linux uses. */
@@ -237,5 +250,35 @@ void process_stdio_clear(int fd);                            /* fd must be 0/1/2
  * address space is touched, since they live in memory this call is
  * about to replace. */
 int process_execve(struct regs *r, const char *path, char **argv, char **envp);
+
+/* --- arch seam (docs/kernel-arch-split-plan.md) ---
+ * sched/process.c is architecture-neutral except for the handful of
+ * operations below, which it calls but never implements: touching
+ * struct regs by name, the trap-return mechanism, and the hand-built
+ * initial-kernel-stack-frame convention switch_context() expects are
+ * all genuinely per-architecture. arch/riscv64_process.c is the only
+ * implementation today; a future arch/i386_process.c would need the
+ * same seven functions, plus mm/paging.h's own per-address-space API
+ * (paging_new_addrspace/paging_activate/paging_fork_cow/...), which
+ * sched/process.c calls directly since those are already
+ * arch-selected-at-link-time the same way paging_map_page always has
+ * been -- see docs/kernel-arch-split-plan.md for the concrete i386
+ * scope this doesn't cover yet. Everything else in sched/process.c
+ * (the process table, scheduling, wait4, the fd table, brk/mmap
+ * accounting, cwd, build_user_stack) needs nothing architecture-
+ * specific at all. */
+
+/* sched/process.c -- for arch code's own process_arch_trampoline(),
+ * which is reached via a bare `ret` (switch_context()'s restore
+ * sequence) and so can't take a parameter. */
+struct process *process_get_current(void);
+
+void process_arch_trampoline(void);                                   /* ra target for a freshly-scheduled process's first run */
+void process_arch_save_trapframe(struct process *p);                  /* live trapframe -> p->user_regs */
+void process_arch_activate_and_restore(struct process *p);            /* p->root_table/user_regs -> live (address space + trapframe + kernel-stack pointer) */
+void process_arch_kstack_frame_init(struct process *p);               /* hand-built initial kernel stack frame -> process_arch_trampoline */
+void process_arch_init_context(struct process *p, unsigned long entry, unsigned long sp); /* fresh U-mode context: zero GPRs, set entry/sp, set up initial privilege-return state */
+void process_arch_fork_child(struct process *child, struct regs *parent_regs);            /* snapshot parent's live trapframe into child, force the child's own return value to 0 */
+void process_arch_execve_rewrite(struct regs *r, unsigned long entry, unsigned long sp);  /* reset the live trapframe in place for execve()'s "returns into the new program" semantics */
 
 #endif
