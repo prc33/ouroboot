@@ -657,6 +657,18 @@ void sys_close(struct regs *r) {
 static unsigned long read_from_fd_entry(struct fd_entry *entry, unsigned char *buf, unsigned long count) {
 	const unsigned char *src = entry->dynfile ? entry->dynfile->data : entry->data;
 	unsigned long src_size = entry->dynfile ? entry->dynfile->size : entry->size;
+	/* Seeking past EOF is ordinary, POSIX-legal behaviour (sys_lseek
+	 * deliberately allows it), and a read from there must report EOF.
+	 * Without this check `src_size - entry->pos` underflows -- these
+	 * are unsigned -- to a huge `remaining`, so the copy loop below
+	 * runs for the caller's full `count`, reading straight off the end
+	 * of the file's backing store into whatever kernel memory follows
+	 * it and reporting those bytes as file contents. Found by probing
+	 * a real `lseek(fd, 10000, SEEK_SET); read(fd, buf, 8)` against a
+	 * 15-byte initrd file: the read returned 8 (not 0) and the buffer
+	 * came back holding kernel heap bytes. */
+	if (entry->pos >= src_size)
+		return 0;
 	unsigned long remaining = src_size - entry->pos;
 	unsigned long n = count < remaining ? count : remaining;
 	paging_ensure_writable((unsigned long)buf, n);
