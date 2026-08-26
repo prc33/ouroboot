@@ -10,7 +10,8 @@ The target builds a RISC-V64 stage-1 TCC with this repository's TCC, packs
 that compiler, the TCC sources, headers, runtime, and musl development files
 into a tar initrd, and boots the normal kernel under QEMU. Inside BusyBox ash:
 
-1. `/tcc` compiles `/tcc-src/tcc.c` and links `/tcc-stage2`;
+1. `/tcc` compiles and links the separate compiler units listed in
+   `/tcc-stage2.args` into `/tcc-stage2`;
 2. stage 2 runs and reports its version;
 3. stage 2 compiles and links a fresh program;
 4. that program runs and prints `hello from stage2 tcc`.
@@ -51,7 +52,7 @@ This remains a compact demonstration kernel, not a general Linux clone.
 than a VMA list, and the long-double runtime has double rather than quad
 precision. None weakens the closure proof above.
 
-The C/Wasm emulator can boot the same initrd and run stage 1, but compiling the
-unity-built TCC source requires more than one billion interpreted guest
-instructions in Node. QEMU is therefore used for the routine full-closure test;
-the browser/Node targets retain faster boot, shell, and real-initrd coverage.
+The C/Wasm emulator can boot the same initrd and run stage 1, but rebuilding
+the complete compiler requires a large number of interpreted guest
+instructions. QEMU is therefore used for the routine full-closure test; the
+browser/Node targets retain faster boot, shell, and real-initrd coverage.

@@ -16,7 +16,6 @@ From the repository root, build the RISC-V compiler and the kernel that boots
 directly into BusyBox `ash`:
 
 ```sh
-make -C compiler clean
 make -C compiler TARGET=riscv64
 make -C kernel ARCH=riscv64 kernel.elf
 make -C kernel ARCH=riscv64 tcc-initrd
@@ -24,15 +23,14 @@ make -C kernel ARCH=riscv64 tcc-initrd
 
 Use `make -C kernel ARCH=riscv64 kernel-checkpoints.elf` instead if you want
 the longer boot containing every historical test checkpoint before the shell.
-The compiler build must be cleaned when changing targets because its targets
-share generated filenames.
+Compiler objects are kept in target-specific build directories, so changing
+targets does not require a clean build.
 
 ## Browser demo
 
 Build the freestanding Wasm module with this repository's wasm32 TCC backend:
 
 ```sh
-make -C compiler clean
 make -C compiler TARGET=wasm32
 make -C emulator web/rv64.wasm
 ```

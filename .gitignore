@@ -17,3 +17,4 @@ user_test/user_test.bin
 user_test_riscv64.elf
 user_test_riscv64.bin
 kernel/initrd.tar
+kernel/*-initrd.tar
