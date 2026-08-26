@@ -34,8 +34,6 @@ void timer_set_tick_handler(void (*handler)(void)); /* arch/riscv64_timer.c */
 void timer_disable(void); /* arch/riscv64_timer.c -- see its own comment: only safe past the P4 scheduler checkpoint */
 void syscall_init(void);
 void enter_usermode(unsigned long entry, unsigned long user_sp);
-void run_elf_test(void); /* riscv64_kmain.c -- see arch/riscv64_syscall.c's sys_exit */
-void run_process_test(void); /* riscv64_kmain.c -- see arch/riscv64_syscall.c's sys_exit_group */
 int serial_rx_ready(void);   /* drivers/riscv64_serial.c -- checkpoint 8, blocking stdin reads */
 unsigned char serial_getc(void);
 #endif

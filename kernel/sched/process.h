@@ -136,10 +136,34 @@ const char *process_current_cwd(void);
 void process_set_current_cwd(const char *path);
 
 /* Runs once, the next time the process table completely drains (no
- * RUNNABLE process left) -- riscv64_kmain.c uses this to chain into
- * the next checkpoint's own test in sequence, see
+ * RUNNABLE process left) -- kernel/test/riscv64_checkpoints.c uses
+ * this to chain each checkpoint into the next one in sequence, see
  * sched/riscv64_process.c's own comment. */
 void process_set_drain_hook(void (*hook)(void));
+
+/* The ordinary, checkpoint-agnostic "nothing left to schedule" halt --
+ * every real boot (product included) reaches this the same way, once
+ * its own last process exits with no drain hook registered to chain
+ * into anything further. Declared here (not static in
+ * sched/riscv64_process.c) so kernel/test/riscv64_checkpoints.c's own
+ * final stage can call it after printing its own closing message --
+ * see that file's finish_checkpoint_boot() and this function's own
+ * comment in sched/riscv64_process.c. */
+void process_halt(void) __attribute__((noreturn));
+
+/* Fires at most once, the next time a bare SYS_exit or a pre-process-
+ * mode SYS_exit_group reaches arch/riscv64_syscall.c -- i.e. before
+ * process_init()/process_mode_active() exist at all (P1-P5's one-shot
+ * ring3/ELF-loader demos, kernel/test/riscv64_checkpoints.c's own
+ * run_ring3_test/run_elf_test). Generic counterpart to
+ * process_set_drain_hook() above for that earlier boot phase, so the
+ * syscall layer never has to hardcode which checkpoint runs next or
+ * print a checkpoint-numbered message itself -- see
+ * arch/riscv64_syscall.c's own comment on sys_exit_impl(). A no-op
+ * default (plain halt) if nothing ever registers one, which is every
+ * real boot: the product path calls process_init() before any process
+ * can exit, so it never reaches this hook at all. */
+void syscall_set_pre_process_exit_hook(void (*hook)(void));
 
 /* checkpoint 7: real fork(), via SYS_clone (arch/riscv64_syscall.c --
  * riscv64 has no separate SYS_fork; musl's fork() itself calls

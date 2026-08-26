@@ -10,13 +10,15 @@ mkdir -p "$stage/tcc-src/include" "$stage/musl/obj/include" \
     "$stage/musl/include" "$stage/musl/arch/riscv64" \
     "$stage/musl/arch/generic" "$stage/musl/lib"
 
+# busybox itself, and the tiny "ash -i" wrapper kmain.c's product boot
+# execve()s directly (see riscv64_kmain.c's own comment) -- kernel.elf
+# boots straight to an interactive shell now (no historical checkpoint
+# chain; see docs/kernel-complexity-review.md section 1), so none of
+# the *other* P4-P10 checkpoint fixtures (proc_test, init_test, etc.)
+# this initrd used to also carry are ever loaded, execve'd, or
+# referenced by RISCV64_SELFHOST_INPUT/selfhost.sh.
 cp "$root/kernel/user_test/busybox_riscv64.elf" "$stage/busybox"
-for name in user_test hello proc_test proc_fork_test proc_exec_test init_test interactive_test exec_target; do
-    cp "$root/kernel/user_test/${name}_riscv64.elf" "$stage/$name"
-done
-cp "$root/kernel/test/initrd-fixture/greeting" "$stage/greeting"
-cp "$root/kernel/test/initrd-fixture/test.sh" "$stage/test.sh"
-cp "$root/kernel/test/initrd-fixture/from-initrd.txt" "$stage/from-initrd.txt"
+cp "$root/kernel/user_test/interactive_test_riscv64.elf" "$stage/interactive_test"
 
 cp "$root"/compiler/*.c "$root"/compiler/*.h "$stage/tcc-src/"
 cp "$root"/compiler/*.def "$stage/tcc-src/"
@@ -33,6 +35,4 @@ cp "$root"/musl-riscv64/lib/crt1.o "$root"/musl-riscv64/lib/crti.o \
 cp "$root"/kernel/test/selfhost-hello.c "$stage/hello.c"
 cp "$root"/kernel/test/selfhost.sh "$stage/"
 
-tar cf "$output" -C "$stage" busybox user_test hello proc_test \
-    proc_fork_test proc_exec_test init_test interactive_test exec_target \
-    greeting test.sh from-initrd.txt tcc tcc-src musl hello.c selfhost.sh
+tar cf "$output" -C "$stage" busybox interactive_test tcc tcc-src musl hello.c selfhost.sh

@@ -143,8 +143,9 @@ struct process *process_create_from_elf(const unsigned char *elf_data, unsigned 
 		return 0;
 	}
 
-	/* User stack -- same layout/rationale as riscv64_kmain.c's
-	 * run_elf_test (argc=1, argv={arg0,NULL}, envp empty, one real
+	/* User stack -- same layout/rationale as
+	 * kernel/test/riscv64_checkpoints.c's own run_elf_test
+	 * (argc=1, argv={arg0,NULL}, envp empty, one real
 	 * auxv entry: AT_PAGESZ, which musl's __libc_start_main has no
 	 * fallback for -- see that function's comment for why it's not
 	 * optional). Each process gets its own copy at the same virtual
@@ -284,34 +285,35 @@ void process_schedule(void) {
 }
 
 /* What to do once the process table completely drains (no RUNNABLE
- * process left) -- riscv64_kmain.c sets this to chain into the next
- * checkpoint's own test (e.g. checkpoint 6's sched_yield test handing
- * off to checkpoint 7's fork test) the same way arch/riscv64_syscall.c's
- * sys_exit_group/sys_exit already chain P4->P5 checkpoint 1->P5
- * checkpoint 2. A hook is expected to create new processes and call
+ * process left) -- kernel/test/riscv64_checkpoints.c sets this to
+ * chain into the next checkpoint's own test (e.g. checkpoint 6's
+ * sched_yield test handing off to checkpoint 7's fork test) the same
+ * way arch/riscv64_syscall.c's own pre-process-exit hook chains
+ * P4->P5 checkpoint 1->P5 checkpoint 2, before there's a process table
+ * to drain at all. A hook is expected to create new processes and call
  * process_run() again (or not return at all, if it halts on its own);
  * it's cleared before being called so a *second* drain (this new
  * batch of processes finishing) falls through to the real halt below
- * rather than re-invoking the same hook. */
+ * rather than re-invoking the same hook. The product boot never
+ * registers one at all, so it always falls straight through to
+ * process_halt() the first time its own top-level process exits. */
 static void (*drain_hook)(void) = 0;
 
 void process_set_drain_hook(void (*hook)(void)) {
 	drain_hook = hook;
 }
 
-static void halt_process_test(void) __attribute__((noreturn));
-static void halt_process_test(void) {
-	/* Reached only once the process table has drained *and* no drain
-	 * hook chained in another test -- currently that means every
-	 * checkpoint 6-10 test has finished (riscv64_kmain.c's
-	 * run_process_test/run_fork_test/run_exec_test/run_init_test/
-	 * run_interactive_test), so this is genuinely the last checkpoint
-	 * in the chain right now. Will need the "P10" bumped (or replaced
-	 * with a hook-supplied string) if a checkpoint 11 ever chains in
-	 * after this one, same as every earlier "next checkpoint appends
-	 * here" point in this kernel's own history. */
+/* Reached whenever the process table drains (no RUNNABLE process left)
+ * with no drain hook registered to chain into anything further -- the
+ * ordinary end of any real boot, product included, once its one
+ * top-level process (or, for kernel/test/riscv64_checkpoints.c's own
+ * chain, its last checkpoint) exits. Deliberately knows nothing about
+ * checkpoints: kernel/test/riscv64_checkpoints.c's own
+ * finish_checkpoint_boot() prints its closing "P10 checkpoint OK"
+ * itself, via process_set_drain_hook(), before calling this -- see
+ * that file and process.h's own comment on process_halt(). */
+void process_halt(void) {
 	kprintf("process: all processes exited\n");
-	kprintf("P10 checkpoint OK\n");
 	kprintf("halting.\n");
 	for (;;) __builtin_riscv_wfi();
 }
@@ -333,7 +335,7 @@ void process_exit_current(int exit_code) {
 			drain_hook = 0;
 			hook();
 		}
-		halt_process_test();
+		process_halt();
 	}
 
 	/* `old` (the zombie we're leaving) is never resumed again, so its
@@ -352,7 +354,7 @@ void process_run(struct process *first) {
 	current_process = first;
 	switch_context(&discard_sp, first->kernel_sp);
 	/* not expected to return: every process's exit eventually reaches
-	 * halt_process_test() above */
+	 * process_halt() above */
 }
 
 int process_mode_active(void) {

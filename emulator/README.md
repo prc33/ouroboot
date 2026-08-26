@@ -18,13 +18,14 @@ directly into BusyBox `ash`:
 ```sh
 make -C compiler clean
 make -C compiler TARGET=riscv64
-make -C kernel ARCH=riscv64 kernel-shell.elf
+make -C kernel ARCH=riscv64 kernel.elf
 make -C kernel ARCH=riscv64 tcc-initrd
 ```
 
-Use `kernel/kernel.elf` instead if you want the longer boot containing every
-historical test checkpoint before the shell. The compiler build must be
-cleaned when changing targets because its targets share generated filenames.
+Use `make -C kernel ARCH=riscv64 kernel-checkpoints.elf` instead if you want
+the longer boot containing every historical test checkpoint before the shell.
+The compiler build must be cleaned when changing targets because its targets
+share generated filenames.
 
 ## Browser demo
 
@@ -48,7 +49,8 @@ kernel and `kernel/tcc-initrd.tar`, so `ls` includes the runnable `tcc`,
 compile the example, and run it.
 The ramfs exposes the source closure as normal directories: for example,
 `ls tcc-src`, `cd tcc-src`, and `pwd` work as expected.
-Use `?kernel=../../kernel/kernel.elf` to run every historical checkpoint first.
+Use `?kernel=../../kernel/kernel-checkpoints.elf` to run every historical
+checkpoint first.
 `tcc-initrd.tar` contains the complete source/header closure; the equivalent
 test artifact is available as `selfhost-initrd.tar`.
 The page obtains xterm.js from a CDN, so that first load needs network access.
@@ -71,7 +73,7 @@ with:
 ```sh
 cd emulator
 tcc -O2 -o rv64-run runner.c
-./rv64-run ../kernel/kernel-shell.elf ../kernel/tcc-initrd.tar
+./rv64-run ../kernel/kernel.elf ../kernel/tcc-initrd.tar
 ```
 
 From the repository root, the equivalent build is `make -C emulator
@@ -101,7 +103,9 @@ make -C kernel ARCH=riscv64 test-wasm
 ```
 
 It boots through every kernel checkpoint, drives `ash`, checks filesystem
-writes, and requires the P10 completion marker.
+writes, and requires the P10 completion marker. `make -C kernel ARCH=riscv64
+shell-wasm` is the equivalent check against the product boot (`kernel.elf`)
+instead -- the same `ash` session, without the checkpoint chain first.
 
 ## Layout
 

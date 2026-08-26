@@ -224,31 +224,56 @@ static void sys_writev(struct regs *r) {
 	r->a0 = total;
 }
 
-static void sys_exit_impl(struct regs *r, const char *which) {
+/* checkpoint 14: was a hardcoded call into whichever checkpoint runs
+ * next (run_elf_test()/run_process_test(), both then in
+ * riscv64_kmain.c), with the checkpoint's own closing message printed
+ * right here -- meaning the syscall layer had to know checkpoint
+ * numbers, and every build had to link the whole checkpoint chain
+ * whether it ever ran or not. Generic now: this fires at most once,
+ * before process_init() has ever been called (bare SYS_exit, or
+ * SYS_exit_group before there's a process table -- see sys_exit_group's
+ * own comment), and does nothing beyond that unless something has
+ * registered a hook. The product boot never does -- it calls
+ * process_init() before any process can exit, so it never reaches
+ * this hook at all, and a bare SYS_exit/pre-process-mode SYS_exit_group
+ * there just halts. kernel/test/riscv64_checkpoints.c registers one
+ * right before each one-shot ring3/ELF-loader test transitions to
+ * U-mode, to chain into (and print the closing message for) whichever
+ * checkpoint comes next -- see process.h's own comment on
+ * syscall_set_pre_process_exit_hook(). */
+static void (*pre_process_exit_hook)(void) = 0;
+
+void syscall_set_pre_process_exit_hook(void (*hook)(void)) {
+	pre_process_exit_hook = hook;
+}
+
+static void sys_exit_impl(struct regs *r) {
 	kprintf("\n[process exited with code %ld]\n", (long)r->a0);
-	kprintf("ring3 test OK\n");
-	kprintf("%s\n", which);
+	if (pre_process_exit_hook) {
+		void (*hook)(void) = pre_process_exit_hook;
+		pre_process_exit_hook = 0;
+		hook();
+		return; /* hooks don't return in practice, but this isn't noreturn */
+	}
+	kprintf("halting.\n");
+	for (;;) __builtin_riscv_wfi();
 }
 
 static void sys_exit(struct regs *r) {
-	sys_exit_impl(r, "P5 checkpoint 1 OK");
-	run_elf_test();
+	sys_exit_impl(r);
 }
 
 /* checkpoint 6: once sched/riscv64_process.c's process_run() has
  * started (process_mode_active()), exit_group means "this one process
  * is done", not "halt everything" -- process_exit_current() reschedules
  * to whatever else is still runnable, or halts only once nothing is
- * left. Before that point (every P4/P5 checkpoint), exit_group keeps
- * its original one-shot meaning unchanged: conclude P5 checkpoint 2
- * and hand off to run_process_test() (riscv64_kmain.c) instead of
- * halting outright -- this is the one call site that used to be the
- * kernel's final halt and is now where checkpoint 6 actually starts. */
+ * left (sched/riscv64_process.c's own process_halt()). Before that
+ * point, exit_group falls through to the same pre-process-exit-hook
+ * path bare SYS_exit uses above -- see sys_exit_impl's own comment. */
 static void sys_exit_group(struct regs *r) {
 	if (process_mode_active())
 		process_exit_current((int)r->a0); /* noreturn */
-	sys_exit_impl(r, "P5 checkpoint 2 OK");
-	run_process_test();
+	sys_exit_impl(r);
 }
 
 static void sys_sched_yield(struct regs *r) {

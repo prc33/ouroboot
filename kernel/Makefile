@@ -61,12 +61,18 @@ LDFLAGS := -B$(TCCDIR) -nostdlib -static -Wl,-Ttext=0x80200000
 # own comment) and riscv64_entry.o must be immediately next (its
 # _riscv64_entry must be the very first thing linked after that page).
 # arch/riscv64_kend.o must be last, same reason as i386's arch/kend.o.
+# sched/riscv64_task.o (the P4 fixed-2-task scheduler, superseded by
+# sched/riscv64_process.o from checkpoint 6 onward) is deliberately
+# *not* here -- the product kernel never calls it. It's added back for
+# RISCV64_CHECKPOINT_OBJS below, which the historical P1-P10 regression
+# chain (kernel/test/riscv64_checkpoints.c) still exercises. See
+# docs/kernel-complexity-review.md section 1.
 OBJS := boot/riscv64_boot.o riscv64_entry.o riscv64_kmain.o \
         drivers/riscv64_serial.o drivers/kprintf.o \
         arch/riscv64_trap_entry.o arch/riscv64_trap.o arch/riscv64_timer.o \
         arch/riscv64_usermode.o arch/riscv64_syscall.o \
         mm/pmm.o mm/riscv64_paging.o mm/elf.o mm/ramfs.o mm/tar.o \
-        sched/riscv64_task.o sched/riscv64_switch_context.o \
+        sched/riscv64_switch_context.o \
         sched/riscv64_process.o \
         arch/riscv64_kend.o
 else
@@ -214,7 +220,7 @@ RISCV64_TEST_ASSERTIONS := \
 	--must-not-contain "PAGE FAULT"
 
 # checkpoint 10: real commands fed to real interactive ash via real
-# stdin (kernel/riscv64_kmain.c's run_interactive_test) -- exactly
+# stdin (kernel/test/riscv64_checkpoints.c's run_interactive_test) -- exactly
 # what a person typing at the browser terminal would produce, just
 # delivered all at once instead of paced by real keystrokes (see
 # test/boot_test.py's and emulator/test/boot.mjs's own comments on their
@@ -297,8 +303,27 @@ RISCV64_INTERACTIVE_INPUT := \r\recho hello ash\rls\recho writable-fs-works > wt
 # had this problem -- only the real-QEMU path was under-provisioned.
 # Explicit here now so QEMU's real configuration actually matches what
 # the kernel has always assumed it has.
-test: kernel.elf initrd.tar
-	python3 test/boot_test.py kernel.elf \
+# kernel.elf itself is the product boot (riscv64_kmain.c's kmain(),
+# built with the default OBJS above) -- `test`/`test-wasm` need the
+# separate historical-checkpoint-chain variant below instead, since
+# that's what still exercises the P1-P10 sequence
+# (kernel/test/riscv64_checkpoints.c). See
+# docs/kernel-complexity-review.md section 1: this used to be inverted
+# (the checkpoint chain was the *default* kmain(), and a
+# KERNEL_DIRECT_SHELL flag opted into the product boot instead) -- the
+# product boot is unconditional now, so it's this variant that needs
+# the flag.
+RISCV64_CHECKPOINT_OBJS := $(patsubst riscv64_kmain.o,riscv64_kmain_checkpoints.o,$(OBJS)) \
+	sched/riscv64_task.o test/riscv64_checkpoints.o
+
+riscv64_kmain_checkpoints.o: riscv64_kmain.c kernel.h
+	$(TCC) $(CFLAGS) -DKERNEL_CHECKPOINTS -c -o $@ $<
+
+kernel-checkpoints.elf: $(RISCV64_CHECKPOINT_OBJS)
+	$(TCC) $(LDFLAGS) -o $@ $(RISCV64_CHECKPOINT_OBJS)
+
+test: kernel-checkpoints.elf initrd.tar
+	python3 test/boot_test.py kernel-checkpoints.elf \
 		--qemu-binary qemu-system-riscv64 \
 		--qemu-arg=-M --qemu-arg=virt \
 		--qemu-arg=-bios --qemu-arg=default \
@@ -310,29 +335,21 @@ test: kernel.elf initrd.tar
 
 # TCC-built C/Wasm emulator instead of QEMU. Reaching P10 implies that all
 # earlier boot, process, filesystem, and interactive-shell work completed.
-test-wasm: kernel.elf initrd.tar
+test-wasm: kernel-checkpoints.elf initrd.tar
 	$(MAKE) -C ../emulator web/rv64.wasm
-	node ../emulator/test/boot.mjs kernel.elf 340000000 \
+	node ../emulator/test/boot.mjs kernel-checkpoints.elf 340000000 \
 		"$(RISCV64_INTERACTIVE_INPUT)" 'P10 checkpoint OK' initrd.tar
 
-# Direct product boot used for interactive development and the emulator's
-# startup-time budget. It runs the exact same P10 process/BusyBox path while
-# leaving the full historical checkpoint sequence in `test-wasm` untouched.
-SHELL_OBJS := $(patsubst riscv64_kmain.o,riscv64_kmain_shell.o,$(OBJS))
-
-riscv64_kmain_shell.o: riscv64_kmain.c kernel.h
-	$(TCC) $(CFLAGS) -DKERNEL_DIRECT_SHELL -c -o $@ $<
-
-kernel-shell.elf: $(SHELL_OBJS)
-	$(TCC) $(LDFLAGS) -o $@ $(SHELL_OBJS)
-
-# Covers both properties this target exists for: real interactive use
-# (RISCV64_INTERACTIVE_INPUT's `echo`/`ls`/writable-file/`exit` round
-# trip actually runs and produces "hello ash" + a real ls listing + a
-# real created-and-read-back file + a clean process-table drain, not
-# just a prompt appearing -- reaching "built-in shell (ash)" alone
-# doesn't prove typed input is ever read).
-shell-wasm: kernel-shell.elf initrd.tar
+# Product boot, used for interactive development and the emulator's
+# startup-time budget: kernel.elf itself now, since it *is* the direct
+# path straight to an interactive shell -- no separate flag/variant
+# needed any more. Covers both properties this target exists for: real
+# interactive use (RISCV64_INTERACTIVE_INPUT's `echo`/`ls`/writable-
+# file/`exit` round trip actually runs and produces "hello ash" + a
+# real ls listing + a real created-and-read-back file + a clean
+# process-table drain, not just a prompt appearing -- reaching
+# "built-in shell (ash)" alone doesn't prove typed input is ever read).
+shell-wasm: kernel.elf initrd.tar
 	$(MAKE) -C ../emulator test-shell
 
 # The ordinary explicit filesystem image: BusyBox, the process-test fixtures,
@@ -356,7 +373,6 @@ test-initrd: kernel.elf initrd.tar
 		--must-contain "initrd: 12 file(s) loaded" \
 		--must-contain "hello from a real initrd tar" \
 		--must-contain "process: all processes exited" \
-		--must-contain "P10 checkpoint OK" \
 		--must-not-contain "FATAL" \
 		--must-not-contain "UNHANDLED EXCEPTION" \
 		--must-not-contain "UNHANDLED INTERRUPT" \
@@ -368,13 +384,17 @@ test-initrd-wasm: kernel.elf initrd.tar
 	$(MAKE) -C ../emulator web/rv64.wasm
 	node ../emulator/test/boot.mjs kernel.elf 200000000 \
 		"\r\rcat from-initrd.txt\rexit 7\r" \
-		'initrd: 12 file(s) loaded\nhello from a real initrd tar\nP10 checkpoint OK' \
+		'initrd: 12 file(s) loaded\nhello from a real initrd tar\nprocess: all processes exited' \
 		initrd.tar
 
 # Full closure test: build a riscv64 TCC with this repository's TCC, place
 # that compiler, its own sources, and its musl build environment in the real
 # tar initrd, then have it compile and link TCC again inside this kernel.
-selfhost-initrd tcc-initrd: user_test/user_test_riscv64.elf $(RISCV64_USER_ELFS)
+# Only needs BusyBox and the "ash -i" wrapper from the ordinary
+# fixture set -- kernel.elf boots straight to an interactive shell now
+# (no checkpoint chain to feed proc_test/proc_fork_test/etc to first),
+# so test/build-selfhost-initrd.sh no longer packages the rest of them.
+selfhost-initrd tcc-initrd: user_test/busybox_riscv64.elf user_test/interactive_test_riscv64.elf
 	$(MAKE) -C ../compiler clean
 	$(MAKE) -C ../compiler TARGET=riscv64 stage1
 	sh test/build-selfhost-initrd.sh .. $@.tar
@@ -399,13 +419,14 @@ test-selfhost: kernel.elf
 		--must-contain "tcc version 0.9.27-rv64min (riscv64 Linux)" \
 		--must-contain "hello from stage2 tcc" \
 		--must-contain "SELFHOST: complete" \
-		--must-contain "P10 checkpoint OK" \
+		--must-contain "process: all processes exited" \
 		--must-not-contain "FATAL" \
 		--must-not-contain "PAGE FAULT"
 
 endif
 
 clean:
-	rm -f kernel.elf kernel-shell.elf riscv64_kmain_shell.o initrd.tar \
+	rm -f kernel.elf kernel-checkpoints.elf riscv64_kmain_checkpoints.o \
+		sched/riscv64_task.o test/riscv64_checkpoints.o initrd.tar \
 		tcc-initrd.tar selfhost-initrd.tar $(RISCV64_USER_ELFS) \
 		user_test/user_test_riscv64.elf $(OBJS)

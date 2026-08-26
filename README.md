@@ -113,7 +113,7 @@ boots all the way to a real busybox ash prompt that accepts real
 typed input:
 
 ```
-cd kernel && make ARCH=riscv64 kernel-shell.elf
+cd kernel && make ARCH=riscv64 kernel.elf
 make ARCH=riscv64 tcc-initrd             # explicit filesystem with TCC
 cd ..                                    # repo root -- index.html
                                           # fetches both files from kernel/,
@@ -136,12 +136,15 @@ Run `ash /selfhost.sh` to have TCC rebuild itself, build the hello-world source,
 and execute the resulting program. This compilation is much faster under QEMU
 than under the instruction-interpreting browser emulator.
 
-Headless equivalent (same checkpoints, including a scripted shell
+Headless equivalent (the same direct-shell boot, a scripted shell
 session, asserted against QEMU's own output so the two can't silently
-drift apart): `cd kernel && make ARCH=riscv64 test-wasm`. See
-`emulator/README.md` for both in more detail.
+drift apart): `cd kernel && make ARCH=riscv64 shell-wasm`. The full
+historical checkpoint chain (P1-P10) still exists too, just as a
+separate regression build rather than part of every boot -- `make
+ARCH=riscv64 test-wasm`. See `emulator/README.md` for both in more
+detail.
 
 The same emulator also has a C command-line front end, so Wasm and a browser
 are optional. On an i386 machine or VM containing this project's TCC, run
 `cd emulator && tcc -O2 -o rv64-run runner.c`, then
-`./rv64-run ../kernel/kernel-shell.elf ../kernel/tcc-initrd.tar`.
+`./rv64-run ../kernel/kernel.elf ../kernel/tcc-initrd.tar`.

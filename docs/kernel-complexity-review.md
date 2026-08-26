@@ -30,6 +30,19 @@ one issue accounts for most of the cross-module coupling in the tree.
 
 ## 1. The checkpoint chain is wired through the syscall layer and the scheduler
 
+> **Fixed 2026-08-26.** The P1-P10 chain moved to
+> `kernel/test/riscv64_checkpoints.c`, compiled in only under
+> `-DKERNEL_CHECKPOINTS` (`kernel-checkpoints.elf`, used by
+> `test`/`test-wasm`). `kernel.elf` — the default, unconditional build —
+> is now the product boot this section describes: bring up hardware/mm/
+> the filesystem, then straight to an interactive shell. `kernel.h` no
+> longer declares `run_elf_test`/`run_process_test`; the syscall layer's
+> coupling was replaced with a generic `syscall_set_pre_process_exit_hook()`
+> (mirroring `process_set_drain_hook()`, already generic), and the
+> scheduler's `halt_process_test()` became the checkpoint-agnostic
+> `process_halt()`. Read on for the problem this solved; it is no longer
+> present in the tree.
+
 **Severity: high — this is the tree's main structural coupling.**
 
 Booting to a shell currently runs through this chain, which crosses

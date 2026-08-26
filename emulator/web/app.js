@@ -32,7 +32,7 @@ term.onData((data) => {
 });
 
 const params = new URLSearchParams(location.search);
-const kernelPath = params.get('kernel') || '../../kernel/kernel-shell.elf';
+const kernelPath = params.get('kernel') || '../../kernel/kernel.elf';
 const initrdPath = params.get('initrd') || '../../kernel/tcc-initrd.tar';
 
 Promise.all([kernelPath, initrdPath].map((path) => fetch(path).then((r) => {
