@@ -96,7 +96,7 @@ $(error unknown ARCH '$(ARCH)' -- expected i386 or riscv64)
 endif
 
 .PHONY: all test test-wasm shell-wasm test-initrd test-initrd-wasm \
-	test-selfhost tcc-initrd selfhost-initrd clean
+	test-selfhost tcc-initrd selfhost-initrd test-busybox clean
 
 all: kernel.elf
 
@@ -178,10 +178,13 @@ test: kernel.elf
 # initrd address the way arch/risc/riscv64_memmap.h's RV64_INITRD_BASE
 # is; a Multiboot module's address is whatever the loader picks,
 # discovered at runtime via kmain.c's own multiboot_info parsing).
-# Packaged under the name "busybox" -- not a real BusyBox build yet
-# (that's the next step), just the same filename the product boot path
-# (run_process_table_test(), arch/i386/kmain.c) will eventually load
-# for real, so this test target won't need to change shape once it is.
+# Packaged under the name "busybox" -- deliberately, even though this
+# specific target still uses the smaller, deterministic fork/wait4/COW
+# test payload rather than a real BusyBox (test-busybox below is that
+# one): it's the exact same filename the product boot path
+# (run_process_table_test(), arch/i386/kmain.c) actually loads, so this
+# target keeps exercising process_create_from_elf_argv()'s own real
+# code path, not a parallel one.
 test-initrd: kernel.elf user_test/proc_fork_test_i386.elf
 	rm -rf /tmp/initrd-i386-stage && mkdir -p /tmp/initrd-i386-stage
 	cp user_test/proc_fork_test_i386.elf /tmp/initrd-i386-stage/busybox
@@ -193,6 +196,38 @@ test-initrd: kernel.elf user_test/proc_fork_test_i386.elf
 		--must-contain "P6 checkpoint: real process table" \
 		--must-contain "child counter=42" \
 		--must-contain "parent counter=1 reaped_pid_ok=1 child_status=7" \
+		--must-contain "process: all processes exited" \
+		--must-not-contain "FATAL" \
+		--must-not-contain "UNHANDLED EXCEPTION" \
+		--must-not-contain "PAGE FAULT"
+
+# checkpoint 19: a real upstream BusyBox (demo/build-busybox-i386.sh --
+# see docs/busybox-findings.md for how it's built and made to link
+# under our own stripped TCC), interactively driving real ash, real
+# fork()/exec() (`expr` is BusyBox's own separate applet dispatch, not
+# a shell builtin), and the writable ramfs (`echo ... > file`) -- the
+# fullest exercise of this whole i386 self-hosting phase's syscall
+# surface short of actually self-hosting TCC itself (that's
+# test-selfhost's own job, riscv64-only so far).
+#
+# user_test/busybox_i386.elf isn't built by this Makefile (same as
+# user_test/busybox_riscv64.elf never has been -- see .gitignore, both
+# are real ~500KB+ binaries, deliberately not committed): run
+# `demo/build-busybox-i386.sh` (needs `../compiler/tcc` already built
+# TARGET=i386 and ../musl-i386 already built) and copy the resulting
+# demo/busybox/busybox_unstripped here first.
+test-busybox: kernel.elf user_test/busybox_i386.elf
+	rm -rf /tmp/initrd-i386-bb-stage && mkdir -p /tmp/initrd-i386-bb-stage
+	cp user_test/busybox_i386.elf /tmp/initrd-i386-bb-stage/busybox
+	tar cf initrd-i386-bb.tar -C /tmp/initrd-i386-bb-stage busybox
+	python3 test/boot_test.py kernel.elf \
+		--qemu-arg=-initrd --qemu-arg=initrd-i386-bb.tar \
+		--stdin-input "\r\recho hello ash\rexpr 6 \\* 7\recho writable-fs-works > wtest\rcat wtest\rls\rexit 7\r" \
+		--must-contain "BusyBox v1.36.1" \
+		--must-contain "hello ash" \
+		--must-contain "42" \
+		--must-contain "writable-fs-works" \
+		--must-contain "wtest" \
 		--must-contain "process: all processes exited" \
 		--must-not-contain "FATAL" \
 		--must-not-contain "UNHANDLED EXCEPTION" \

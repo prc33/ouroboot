@@ -49,9 +49,7 @@
 #define SYS_getpid                                 20
 #define SYS_access                                    33
 #define SYS_brk                                          45
-#define SYS_getegid                                        50 /* getegid32, see this file's own header comment */
 #define SYS_ioctl                                             54
-#define SYS_fcntl                                               55 /* fcntl64, see this file's own header comment */
 #define SYS_dup2                                                  63
 #define SYS_getppid                                                  64
 #define SYS_munmap                                                      91
@@ -62,11 +60,14 @@
 #define SYS_getcwd                                                                     183
 #define SYS_mmap2                                                                         192
 #define SYS_stat                                                                             195 /* stat64, see this file's own header comment */
+#define SYS_lstat                                                                             196 /* lstat64 */
 #define SYS_fstat                                                                               197 /* fstat64 */
 #define SYS_getuid                                                                                 199 /* getuid32 */
 #define SYS_getgid                                                                                    200 /* getgid32 */
 #define SYS_geteuid                                                                                      201 /* geteuid32 */
+#define SYS_getegid                                                                                        202 /* getegid32 -- real bug, found running real busybox ash for the first time: was mistakenly 50 (a stray leftover), a real command's very first PATH lookup hit ash's own getegid() call and got a loud "unimplemented syscall" for a syscall that was actually dispatched, just to the wrong number */
 #define SYS_getdents64                                                                                      220
+#define SYS_fcntl                                                                                              221 /* fcntl64 -- real bug, found running real busybox ash's own `ls`: was mistakenly the legacy single-number 55 (never actually reached, same mistake as SYS_getegid above), so real fcntl()s (F_DUPFD_CLOEXEC on ash's own script fd, same as riscv64's own checkpoint 9) hit the loud default case instead */
 #define SYS_gettid                                                                                             224
 #define SYS_set_thread_area                                                                                       243
 #define SYS_exit_group                                                                                       252
@@ -75,6 +76,10 @@
 #define SYS_newfstatat                                                                                               300 /* fstatat64 */
 #define SYS_faccessat                                                                                                        307
 #define SYS_dup3                                                                                                                330
+/* Not dispatched to a handler at all -- see the default case's own
+ * comment on why this one specific unimplemented number is silenced
+ * rather than a real gap. */
+#define SYS_statx                                                                                                                   383
 /* SYS_clone, SYS_rt_sigprocmask, SYS_rt_sigaction: real numbers, but
  * musl-i386's own preferences (SYS_fork/legacy signal syscalls -- see
  * this file's header comment) mean these two are dispatched only as a
@@ -139,10 +144,10 @@ static void fill_stat(unsigned char *sb, unsigned int mode, unsigned long size) 
 }
 
 /* Looks a ramfs path up and fills `sb` -- the actual logic shared by
- * sys_stat/sys_newfstatat below (both take a path; sys_fstat looks up
- * an already-open fd instead, a genuinely different kind of lookup,
- * kept separate). Returns 0 on success, -ENOENT if nothing by that
- * name exists. */
+ * sys_stat/sys_lstat/sys_newfstatat below (all take a path; sys_fstat
+ * looks up an already-open fd instead, a genuinely different kind of
+ * lookup, kept separate). Returns 0 on success, -ENOENT if nothing by
+ * that name exists. */
 static int stat_path(const char *ramfs_path, unsigned char *sb) {
 	if (ramfs_is_dir(ramfs_path)) {
 		fill_stat(sb, S_IFDIR | 0755, 0);
@@ -159,18 +164,66 @@ static int stat_path(const char *ramfs_path, unsigned char *sb) {
 	return 0;
 }
 
+/* Canonicalizes a user-supplied path against `base` (cwd, or a dirfd's
+ * own stored path) into the ramfs key form (no leading slash, '.'/'..'
+ * resolved) -- shared by sys_stat/sys_lstat/sys_newfstatat below. Real
+ * bug this fixes, found running real busybox ash's own `ls` for the
+ * first time: sys_stat used to skip this entirely ("every real caller
+ * passes an absolute path"), true of every one-shot P4/P5 test but not
+ * of real coreutils -- `ls` calls stat(".") directly, no fstatat/
+ * dirfd involved at all, and "." with no cwd resolution isn't a path
+ * this ramfs has any entry for. */
+static void resolve_i386_path(char *out, const char *user_path, const char *base) {
+	char path[128];
+	int i = 0;
+	while (user_path[i] && i < 127) { path[i] = user_path[i]; i++; }
+	path[i] = 0;
+
+	unsigned int n = 0, j = 0;
+	if (path[0] != '/') {
+		const char *b = base[0] == '/' ? base + 1 : base;
+		while (b[n] && n < 127) { out[n] = b[n]; n++; }
+	}
+	while (path[j]) {
+		while (path[j] == '/') j++;
+		unsigned int start = j;
+		while (path[j] && path[j] != '/') j++;
+		unsigned int len = j - start;
+		if (!len || (len == 1 && path[start] == '.')) continue;
+		if (len == 2 && path[start] == '.' && path[start + 1] == '.') {
+			while (n && out[n - 1] != '/') n--;
+			if (n) n--;
+			continue;
+		}
+		if (n && n < 127) out[n++] = '/';
+		for (unsigned int k = 0; k < len && n < 127; k++) out[n++] = path[start + k];
+	}
+	out[n] = 0;
+}
+
 /* arg0=path, arg1=statbuf -- SYS_stat (stat64), i386's own preferred
  * real syscall for a plain absolute/cwd-relative stat() (see this
- * file's own header comment). No cwd-relative resolution here (unlike
- * syscall_posix.c's own resolve_user_path): every real caller in this
- * kernel's tests passes an absolute path to this specific syscall. */
+ * file's own header comment on why i386 needs this at all, unlike
+ * riscv64). */
 static void sys_stat(struct regs *r) {
-	const char *path = (const char *)sys_arg(r, 0);
+	char path[128];
 	unsigned char *sb = (unsigned char *)sys_arg(r, 1);
 	paging_ensure_writable((unsigned long)sb, ST_STRUCT_SIZE);
-	const char *ramfs_path = path[0] == '/' ? path + 1 : path;
-	int ret = stat_path(ramfs_path, sb);
+	resolve_i386_path(path, (const char *)sys_arg(r, 0), process_current_cwd());
+	int ret = stat_path(path, sb);
 	sys_ret(r, ret < 0 ? (unsigned long)ret : 0);
+}
+
+/* arg0=path, arg1=statbuf -- SYS_lstat (lstat64), musl-i386's own
+ * preferred real syscall for a plain (non-fd-relative) lstat(), same
+ * "legacy single-number form i386 still has" reasoning as sys_stat.
+ * This ramfs has no real symlink *targets* to resolve differently from
+ * a plain stat() (mm/ramfs.h's own dir-entry synthesis just marks a
+ * name DT_LNK for display -- see syscall_posix.c's own
+ * sys_getdents64()), so lstat() and stat() are honestly the same
+ * lookup here. */
+static void sys_lstat(struct regs *r) {
+	sys_stat(r);
 }
 
 /* arg0=fd, arg1=statbuf -- SYS_fstat (fstat64), reached via musl's
@@ -213,47 +266,19 @@ static void sys_fstat(struct regs *r) {
  * genuinely needed here, unlike sys_stat/sys_fstat above, since a
  * caller reaching this specific syscall might be doing exactly that. */
 static void sys_newfstatat(struct regs *r) {
-	char path[128];
-	int i = 0;
 	const char *user_path = (const char *)sys_arg(r, 1);
-	while (user_path[i] && i < 127) { path[i] = user_path[i]; i++; }
-	path[i] = 0;
 	unsigned char *sb = (unsigned char *)sys_arg(r, 2);
 	paging_ensure_writable((unsigned long)sb, ST_STRUCT_SIZE);
 
 	const char *base = process_current_cwd();
 	long dirfd = (long)sys_arg(r, 0);
-	if (path[0] != '/' && dirfd != -100 /* AT_FDCWD */) {
+	if (user_path[0] != '/' && dirfd != -100 /* AT_FDCWD */) {
 		struct fd_entry *df = dirfd >= 3 ? process_fd_get((int)dirfd - 3) : 0;
 		if (!df || !df->is_dir) { sys_ret(r, (unsigned long)-9 /* EBADF */); return; }
 		base = df->path;
 	}
-	/* cwd-relative resolution, same shape as syscall_posix.c's own
-	 * resolve_path (duplicated rather than shared: that one is
-	 * `static` to this file's sibling, and this is the one place in
-	 * arch/i386/syscall.c that needs it). */
 	char resolved[128];
-	unsigned int n = 0, j = 0;
-	if (path[0] != '/') {
-		const char *b = base[0] == '/' ? base + 1 : base;
-		while (b[n] && n < sizeof(resolved) - 1) { resolved[n] = b[n]; n++; }
-	}
-	while (path[j]) {
-		while (path[j] == '/') j++;
-		unsigned int start = j;
-		while (path[j] && path[j] != '/') j++;
-		unsigned int len = j - start;
-		if (!len || (len == 1 && path[start] == '.')) continue;
-		if (len == 2 && path[start] == '.' && path[start + 1] == '.') {
-			while (n && resolved[n - 1] != '/') n--;
-			if (n) n--;
-			continue;
-		}
-		if (n && n < sizeof(resolved) - 1) resolved[n++] = '/';
-		for (unsigned int k = 0; k < len && n < sizeof(resolved) - 1; k++) resolved[n++] = path[start + k];
-	}
-	resolved[n] = 0;
-
+	resolve_i386_path(resolved, user_path, base);
 	int ret = stat_path(resolved, sb);
 	sys_ret(r, ret < 0 ? (unsigned long)ret : 0);
 }
@@ -324,6 +349,7 @@ static void syscall_dispatch(struct regs *r) {
 	case SYS_getcwd:                                                                                          sys_getcwd(r); return;
 	case SYS_chdir:                                                                                             sys_chdir(r); return;
 	case SYS_stat:                                                                                                 sys_stat(r); return;
+	case SYS_lstat:                                                                                                sys_lstat(r); return;
 	case SYS_fstat:                                                                                                   sys_fstat(r); return;
 	case SYS_newfstatat:                                                                                              sys_newfstatat(r); return;
 	case SYS_getdents64:                                                                                                 sys_getdents64(r); return;
@@ -332,6 +358,25 @@ static void syscall_dispatch(struct regs *r) {
 	case SYS_dup3:                                                                                                                sys_dup3(r); return;
 	case SYS_access:                                                                                                                 sys_access(r); return;
 	case SYS_faccessat:                                                                                                                 sys_faccessat(r); return;
+	/* Real bug, found running real busybox ash for the first time:
+	 * musl's own src/stat/fstatat.c always tries SYS_statx *first*
+	 * (unconditionally on every real stat()/fstat()/fstatat() call --
+	 * confirmed by reading it, this file's own header comment already
+	 * covers why), and only falls back to SYS_stat/SYS_fstat/
+	 * SYS_newfstatat (all implemented above, and already proven
+	 * correct on their own) once statx itself reports -ENOSYS. Every
+	 * ash PATH lookup calls this at least once, so leaving it to fall
+	 * through to the loud default case below would print "FATAL:" on
+	 * every single command typed -- alarming, and would fail this
+	 * kernel's own --must-not-contain "FATAL" test convention, for a
+	 * syscall whose *correct* answer really is "not implemented, try
+	 * something else" (implementing statx for real would mean a whole
+	 * second struct-stat-shaped layout, `struct statx`, for something
+	 * every real caller here already gets an equally correct answer
+	 * from one syscall later). */
+	case SYS_statx:
+		r->eax = (unsigned int)-ENOSYS;
+		return;
 	default:
 		kprintf("FATAL: unimplemented syscall %u\n", r->eax);
 		r->eax = (unsigned int)-ENOSYS;
