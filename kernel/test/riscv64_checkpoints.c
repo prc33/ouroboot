@@ -9,13 +9,13 @@
  * exactly what riscv64_kmain.c used to run unconditionally, on every
  * boot, including the product one -- see docs/kernel-complexity-review.md
  * section 1 for why that was real, load-bearing complexity in the
- * wrong place (arch/riscv64_syscall.c's sys_exit/sys_exit_group used
+ * wrong place (arch/risc/riscv64_syscall.c's sys_exit/sys_exit_group used
  * to call run_elf_test()/run_process_test() directly, and
  * sched/riscv64_process.c's halt path printed "P10 checkpoint OK"
  * unconditionally -- both fixed generically, via hooks, rather than
  * by teaching the syscall/scheduler layers about checkpoints). */
 #include "../kernel.h"
-#include "../arch/riscv64_trap.h"
+#include "../arch/risc/riscv64_trap.h"
 #include "../mm/pmm.h"
 #include "../mm/paging.h"
 #include "../mm/elf.h"
@@ -69,7 +69,7 @@ static void run_cow_test(void) {
 	kprintf("COW test: parent=%d child=%d OK\n", parent_val, child_val);
 }
 
-/* Regression test for a real bug (mm/riscv64_paging.c's
+/* Regression test for a real bug (arch/risc/riscv64_paging.c's
  * page_fault_handler, see its own comment): the COW-copy remap used
  * to hardcode PTE_PRESENT|PTE_WRITABLE, dropping PTE_USER entirely.
  * Invisible in run_cow_test() above -- it never sets PTE_USER on its
@@ -126,13 +126,13 @@ static void timer_tick(void) {
  * See kmain.c's run_ring3_test for the full rationale. No tss_set_
  * kernel_stack equivalent needed here: unlike i386 (which needs the
  * TSS to tell the CPU where the kernel stack is on a privilege-level
- * change), arch/riscv64_trap_entry.S already unconditionally switches
+ * change), arch/risc/riscv64_trap_entry.S already unconditionally switches
  * to the same dedicated trap stack on *every* trap regardless of
  * origin -- one less thing this transition needs to set up. */
 static void run_elf_test(void); /* forward -- P5 checkpoint 1 chains into it */
 
 static void ring3_test_done(void) {
-	/* Fires once, via arch/riscv64_syscall.c's pre-process-mode exit
+	/* Fires once, via arch/risc/riscv64_syscall.c's pre-process-mode exit
 	 * hook -- see that file's own comment. Prints exactly what
 	 * sys_exit()/sys_exit_impl() used to hardcode, now supplied by the
 	 * test that actually cares about it instead of the syscall layer

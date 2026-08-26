@@ -1,6 +1,6 @@
 /* Sv39 paging: 3-level radix tree, 9+9+9 bits of VPN plus a 12-bit
  * page offset, 4KB pages throughout. Same design simplification as
- * i386's mm/paging.c, stated there and equally true here: the whole
+ * i386's arch/i386/paging.c, stated there and equally true here: the whole
  * address space this kernel manages is identity-mapped, so there's
  * no separate phys->virt translation function anywhere in this file.
  *
@@ -19,17 +19,17 @@
  * until something calls paging_activate(), and still what every new
  * address space's kernel-region mapping is shared from -- see
  * paging_new_addrspace()). Every existing call site (paging_init
- * itself, mm/elf.c, arch/riscv64_syscall.c, kmain's COW/ring3 tests)
+ * itself, mm/elf.c, arch/risc/riscv64_syscall.c, kmain's COW/ring3 tests)
  * is unchanged and behaves exactly as before: there's still only ever
  * one *active* address space at a time from any single call site's
  * point of view, same as P1-P5's actual single-global-root behavior,
  * this just makes "which one" a variable instead of a constant.
  */
 #include "kernel.h"
-#include "arch/riscv64_trap.h"
-#include "arch/riscv64_memmap.h"
-#include "pmm.h"
-#include "paging.h"
+#include "riscv64_trap.h"
+#include "riscv64_memmap.h"
+#include "mm/pmm.h"
+#include "mm/paging.h"
 #include "sched/process.h"
 
 #define ENTRIES 512
@@ -289,7 +289,7 @@ fatal:
 }
 
 /* checkpoint 10: real bug, found running real interactive ash --
- * sys_read (arch/riscv64_syscall.c) writing a byte straight into a
+ * sys_read (arch/risc/riscv64_syscall.c) writing a byte straight into a
  * user-supplied buffer is completely ordinary syscall behavior, done
  * throughout this kernel, and *usually* safe since sstatus.SUM
  * already lets S-mode touch U-mode pages directly. But if that
@@ -301,10 +301,10 @@ fatal:
  * (always a real U-mode instruction faulting), this one happens
  * *while the kernel is already servicing an ecall trap*. A page
  * fault is itself a trap, routed through the exact same single
- * global trapframe (arch/riscv64_memmap.h's RV64_TRAPFRAME_BASE) the
+ * global trapframe (arch/risc/riscv64_memmap.h's RV64_TRAPFRAME_BASE) the
  * outer ecall is still using -- this kernel's entire trap design
  * assumes traps never nest (stated outright in
- * arch/riscv64_trap_entry.S's own comment), and a fault
+ * arch/risc/riscv64_trap_entry.S's own comment), and a fault
  * mid-syscall is exactly the nested trap that assumption rules out.
  * The inner fault's own trap entry clobbers the outer ecall's saved
  * context before the outer trap ever gets to restore it, and the
@@ -351,12 +351,12 @@ void paging_init(unsigned long mem_top) {
 	for (unsigned long addr = 0x80000000UL; addr < mem_top; addr += PAGE_SIZE)
 		paging_map_page(addr, addr, PTE_PRESENT | PTE_WRITABLE);
 
-	/* UART0 (drivers/riscv64_serial.c) is MMIO, far outside RAM --
+	/* UART0 (arch/risc/riscv64_serial.c) is MMIO, far outside RAM --
 	 * unlike i386's port-I/O serial console (a completely separate
 	 * address space paging can't affect at all), every kprintf/
 	 * serial_putc call on riscv64 is a real memory access that goes
 	 * through the page table once this is enabled. Forgetting this
-	 * mapping was this port's next bug after boot/riscv64_boot.S's:
+	 * mapping was this port's next bug after arch/risc/riscv64_boot.S's:
 	 * satp got written correctly, but the very first kprintf
 	 * afterward (reaching for the UART) instantly page-faulted --
 	 * and the fault handler's own kprintf faulted the same way,

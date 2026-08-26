@@ -2,7 +2,7 @@
 #define PROCESS_H
 
 /* struct regs's own definition/layout is genuinely architecture-
- * specific (see arch/riscv64_process.c's own file comment) -- process.h
+ * specific (see arch/risc/riscv64_process.c's own file comment) -- process.h
  * only ever needs it opaquely (a field of struct process below, and
  * pointer parameters passed straight through to the process_arch_*()
  * functions at the bottom of this file), so it just includes whichever
@@ -11,9 +11,9 @@
  * ARCH's OBJS list -- see docs/kernel-arch-split-plan.md for why), but
  * kept dual-arch-correct rather than hardcoded riscv64. */
 #ifndef KERNEL_ARCH_RISCV64
-#include "arch/idt.h"
+#include "arch/i386/idt.h"
 #else
-#include "arch/riscv64_trap.h"
+#include "arch/risc/riscv64_trap.h"
 #endif
 
 /* General process table -- checkpoint 6 (see sched/process.c
@@ -36,7 +36,7 @@ struct ramfs_dynamic_file; /* mm/ramfs.h -- forward-declared rather than
                              * #included, process.h doesn't otherwise need it */
 
 /* checkpoint 8: per-process file descriptors, fd numbers 3.. (0/1/2
- * are the UART console, handled specially in arch/riscv64_syscall.c's
+ * are the UART console, handled specially in arch/risc/riscv64_syscall.c's
  * sys_read/sys_write same as always -- never stored here). Two shapes,
  * distinguished by `dynfile`: an open mm/ramfs.h *fixed* file (read-only,
  * `data`+`size` point straight at that file's embedded bytes, `pos` is
@@ -44,7 +44,7 @@ struct ramfs_dynamic_file; /* mm/ramfs.h -- forward-declared rather than
  * (checkpoint 12) an open *dynamic* (real, writable, created-at-runtime)
  * file, `dynfile` non-NULL and `data`/`size` unused -- see
  * mm/ramfs.h's own struct ramfs_dynamic_file and
- * arch/riscv64_syscall.c's sys_openat/sys_write/sys_read. */
+ * arch/risc/riscv64_syscall.c's sys_openat/sys_write/sys_read. */
 #define MAX_FDS 32
 
 struct fd_entry {
@@ -67,7 +67,7 @@ struct process {
 	unsigned long user_stack_limit;    /* lowest address to which it may grow */
 	unsigned long user_brk;
 	unsigned long user_mmap_next;
-	unsigned long kernel_sp;           /* switch_context()-managed, see sched/riscv64_switch_context.S */
+	unsigned long kernel_sp;           /* switch_context()-managed, see arch/risc/riscv64_switch_context.S */
 	unsigned long kernel_stack[PROC_KSTACK_WORDS];
 	struct regs user_regs;             /* saved U-mode context when this process isn't the one currently running */
 	int exit_code;
@@ -77,7 +77,7 @@ struct process {
 	 * it onto fd 1, closes the original fd, *then* runs the command,
 	 * which just writes to fd 1 as always. fds[0..2] don't exist (0/1/2
 	 * are permanently the console, a hardcoded special case in
-	 * arch/riscv64_syscall.c's sys_read/sys_write/sys_close, never
+	 * arch/risc/riscv64_syscall.c's sys_read/sys_write/sys_close, never
 	 * stored in fds[] -- this struct's own comment), so dup3()ing onto
 	 * one of them needs somewhere else to record "fd N is temporarily
 	 * not the console". stdio_override[N].used gates it: sys_read/
@@ -109,7 +109,7 @@ struct process *process_create_from_elf_argv(const unsigned char *elf_data, unsi
 struct process *process_create_from_elf(const unsigned char *elf_data, unsigned long elf_size, const char *arg0);
 
 /* Cooperative round-robin over every RUNNABLE process, same technique
- * as sched/riscv64_task.c's task_yield -- switch_context() to the
+ * as arch/risc/riscv64_task.c's task_yield -- switch_context() to the
  * next one. Called both to kick off the very first process and, via
  * SYS_sched_yield, from inside a syscall to hand off to the next
  * process without exiting. Returns (i.e. is itself a coroutine yield
@@ -118,14 +118,14 @@ struct process *process_create_from_elf(const unsigned char *elf_data, unsigned 
 void process_schedule(void);
 
 /* Marks the *currently running* process ZOMBIE and reschedules --
- * never returns. arch/riscv64_syscall.c's sys_exit_group calls this
+ * never returns. arch/risc/riscv64_syscall.c's sys_exit_group calls this
  * once the general process table is in play (see that file's
  * comment for how it tells the two eras apart). */
 void process_exit_current(int exit_code) __attribute__((noreturn));
 
 /* Starts the scheduler running `first` -- the process-table
  * equivalent of sched/task.h's task_start_scheduler. Also flips
- * process_mode_active() on, which is how arch/riscv64_syscall.c's
+ * process_mode_active() on, which is how arch/risc/riscv64_syscall.c's
  * sys_exit_group tells the old P4/P5 one-shot exit chain apart from a
  * real process's exit (see that file's comment). */
 void process_run(struct process *first);
@@ -135,7 +135,7 @@ int process_mode_active(void);
 
 /* The real pid of whichever process is currently running -- 0 if
  * process_mode_active() is false (no process context exists yet).
- * arch/riscv64_syscall.c uses this for getpid()/gettid() (this kernel
+ * arch/risc/riscv64_syscall.c uses this for getpid()/gettid() (this kernel
  * has no real threads, so they're the same value -- correct, not a
  * simplification: that's true on real Linux too for a single-threaded
  * process) instead of the pre-checkpoint-6 hardcoded "tid 1" every
@@ -144,7 +144,7 @@ int process_current_pid(void);
 
 /* The real parent pid of whichever process is currently running -- 0
  * if there isn't one (created directly by kmain, not fork()) or no
- * process context exists yet. arch/riscv64_syscall.c's sys_getppid. */
+ * process context exists yet. arch/risc/riscv64_syscall.c's sys_getppid. */
 int process_current_ppid(void);
 unsigned long process_current_brk(void);
 void process_set_current_brk(unsigned long value);
@@ -170,20 +170,20 @@ void process_set_drain_hook(void (*hook)(void));
 void process_halt(void) __attribute__((noreturn));
 
 /* Fires at most once, the next time a bare SYS_exit or a pre-process-
- * mode SYS_exit_group reaches arch/riscv64_syscall.c -- i.e. before
+ * mode SYS_exit_group reaches arch/risc/riscv64_syscall.c -- i.e. before
  * process_init()/process_mode_active() exist at all (P1-P5's one-shot
  * ring3/ELF-loader demos, kernel/test/riscv64_checkpoints.c's own
  * run_ring3_test/run_elf_test). Generic counterpart to
  * process_set_drain_hook() above for that earlier boot phase, so the
  * syscall layer never has to hardcode which checkpoint runs next or
  * print a checkpoint-numbered message itself -- see
- * arch/riscv64_syscall.c's own comment on sys_exit_impl(). A no-op
+ * arch/risc/riscv64_syscall.c's own comment on sys_exit_impl(). A no-op
  * default (plain halt) if nothing ever registers one, which is every
  * real boot: the product path calls process_init() before any process
  * can exit, so it never reaches this hook at all. */
 void syscall_set_pre_process_exit_hook(void (*hook)(void));
 
-/* checkpoint 7: real fork(), via SYS_clone (arch/riscv64_syscall.c --
+/* checkpoint 7: real fork(), via SYS_clone (arch/risc/riscv64_syscall.c --
  * riscv64 has no separate SYS_fork; musl's fork() itself calls
  * SYS_clone(SIGCHLD, 0, ...), confirmed via a real strace, same
  * methodology as every other syscall in this kernel). Clones the
@@ -216,7 +216,7 @@ int process_fork(struct regs *r);
  * encoding real Linux uses. */
 long process_wait4(int pid, int *status_out, int options);
 
-/* checkpoint 8: fd-table access for arch/riscv64_syscall.c's
+/* checkpoint 8: fd-table access for arch/risc/riscv64_syscall.c's
  * sys_openat/sys_read/sys_close, all against the *currently running*
  * process. All index by the raw fds[] array position (0..MAX_FDS-1)
  * -- the syscall-visible fd number (index + 3, since 0/1/2 are always
@@ -256,7 +256,7 @@ int process_execve(struct regs *r, const char *path, char **argv, char **envp);
  * operations below, which it calls but never implements: touching
  * struct regs by name, the trap-return mechanism, and the hand-built
  * initial-kernel-stack-frame convention switch_context() expects are
- * all genuinely per-architecture. arch/riscv64_process.c is the only
+ * all genuinely per-architecture. arch/risc/riscv64_process.c is the only
  * implementation today; a future arch/i386_process.c would need the
  * same seven functions, plus mm/paging.h's own per-address-space API
  * (paging_new_addrspace/paging_activate/paging_fork_cow/...), which

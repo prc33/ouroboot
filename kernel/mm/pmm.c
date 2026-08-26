@@ -19,7 +19,7 @@
 #define MAX_PAGES (MAX_MEMORY_MB * 1024u * 1024u / PAGE_SIZE)
 #define BITMAP_WORDS (MAX_PAGES / 32)
 
-/* Provided by arch/kend.S (i386) or arch/riscv64_kend.S (riscv64) --
+/* Provided by arch/i386/kend.S (i386) or arch/risc/riscv64_kend.S (riscv64) --
  * see those files for why they must be the last object on the link
  * line to be accurate. Only its ADDRESS matters. */
 extern unsigned char kernel_end;

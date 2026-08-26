@@ -31,7 +31,7 @@
  * in OpenSBI's own boot banner ("Platform Timer Device : aclint-mtimer
  * @ 10000000Hz"), hardcoded rather than parsed from the devicetree,
  * same "we fully control the QEMU invocation" reasoning as
- * arch/riscv64_memmap.h. */
+ * arch/risc/riscv64_memmap.h. */
 #define TIMEBASE_HZ 10000000UL
 
 static unsigned long g_delta;
@@ -69,18 +69,18 @@ void timer_init(unsigned int hz) {
  * human typing in the browser demo, or Puppeteer simulating one --
  * every existing automated test feeds its scripted input all at once,
  * before the CPU even starts or over an instantly-drained pipe, so
- * arch/riscv64_syscall.c's sys_read (fd==0) never actually spins in
+ * arch/risc/riscv64_syscall.c's sys_read (fd==0) never actually spins in
  * its "while (!serial_rx_ready()) process_schedule();" wait for more
  * than a handful of instructions; a real keystroke's real gap is
  * plenty of *virtual* time -- at this 100Hz and the emulator's own
  * --time-advance 100 -- for many timer interrupts to come due while
  * still deep inside that loop). A timer interrupt is a trap like any
  * other, routed through the exact same single global trapframe
- * (arch/riscv64_memmap.h's RV64_TRAPFRAME_BASE) an outer ecall is
+ * (arch/risc/riscv64_memmap.h's RV64_TRAPFRAME_BASE) an outer ecall is
  * still relying on -- this kernel's whole trap design assumes traps
- * never nest (arch/riscv64_trap_entry.S's own comment), and an
+ * never nest (arch/risc/riscv64_trap_entry.S's own comment), and an
  * interrupt firing mid-syscall is exactly that nested trap. Unlike
- * mm/riscv64_paging.c's paging_ensure_writable() (the same class of
+ * arch/risc/riscv64_paging.c's paging_ensure_writable() (the same class of
  * bug via a page fault instead), there's no way to "pre-resolve" an
  * asynchronous interrupt before it can fire -- the only fix that
  * doesn't mean rewriting this kernel's trap handling for real nested

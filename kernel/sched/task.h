@@ -15,7 +15,7 @@ void task_register(int slot, struct task *t);
 void task_start_scheduler(struct task *first);
 void task_yield(void);
 
-/* implemented in sched/switch_context.S */
+/* implemented in arch/i386/switch_context.S */
 void switch_context(unsigned int *old_esp_store, unsigned int new_esp);
 #else
 #define TASK_STACK_WORDS 1024 /* 8KB per task -- words are 8 bytes here */
@@ -31,7 +31,7 @@ void task_register(int slot, struct task *t);
 void task_start_scheduler(struct task *first);
 void task_yield(void);
 
-/* implemented in sched/riscv64_switch_context.S */
+/* implemented in arch/risc/riscv64_switch_context.S */
 void switch_context(unsigned long *old_sp_store, unsigned long new_sp);
 #endif
 

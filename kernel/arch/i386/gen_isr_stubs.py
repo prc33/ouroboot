@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Generates arch/isr_stubs.S: 32 CPU exception entry points (0-31) plus
+Generates arch/i386/isr_stubs.S: 32 CPU exception entry points (0-31) plus
 16 IRQ entry points (32-47).
 
 Why generated rather than a .macro/.rept loop in the .S file: TCC's
@@ -13,7 +13,7 @@ what TCC actually compiles is plain, unambiguous assembly, not a loop
 whose correctness depends on assembler features we haven't verified.
 
 Re-run this and commit the output if the stub count or numbering ever
-needs to change:  python3 arch/gen_isr_stubs.py > arch/isr_stubs.S
+needs to change:  python3 arch/gen_isr_stubs.py > arch/i386/isr_stubs.S
 """
 
 # Exceptions where the CPU itself pushes an error code (i386 SDM vol 3,

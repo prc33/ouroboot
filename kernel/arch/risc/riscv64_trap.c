@@ -3,12 +3,12 @@
  * interrupts, and `ecall` (our syscall gate) alike -- so dispatch
  * happens entirely in software here, keyed on `scause`.
  *
- * arch/riscv64_trap_entry.S is the raw machine code `stvec` points
+ * arch/risc/riscv64_trap_entry.S is the raw machine code `stvec` points
  * at; it saves all GPRs + the four trap CSRs into the fixed global
  * struct regs at RV64_TRAPFRAME_BASE, switches to a dedicated trap
  * stack, and calls trap_dispatch() below via a function pointer this
  * file writes into RV64_TRAP_DISPATCH_PTR at init time -- see
- * arch/riscv64_memmap.h for why raw asm can't call trap_dispatch()
+ * arch/risc/riscv64_memmap.h for why raw asm can't call trap_dispatch()
  * directly (no relocation support for hand-written .S files). */
 #include "kernel.h"
 #include "riscv64_trap.h"
@@ -19,7 +19,7 @@
 #define SSTATUS_SUM  (1UL << 18)
 #define SCAUSE_INTERRUPT_BIT (1UL << 63)
 
-extern void riscv64_trap_entry(void); /* arch/riscv64_trap_entry.S */
+extern void riscv64_trap_entry(void); /* arch/risc/riscv64_trap_entry.S */
 
 /* Exceptions: scause low bits when the interrupt bit is clear.
  * Interrupts: scause low bits when the interrupt bit is set (only
@@ -97,7 +97,7 @@ void trap_init(void) {
 	 * before sched/riscv64_process.c used, until that subsystem starts
 	 * (right before it dispatches its first process) and repoints this
 	 * at whichever process is about to run -- see
-	 * arch/riscv64_trap_entry.S's own comment for why this indirection
+	 * arch/risc/riscv64_trap_entry.S's own comment for why this indirection
 	 * exists at all. Every trap before that point (the COW/ring3/ELF-
 	 * loader checkpoints) behaves exactly as it always did: this never
 	 * changes, so it's still effectively one fixed trap stack for
@@ -110,7 +110,7 @@ void trap_init(void) {
 	 * whose PTE has the U bit set -- a real security feature (stops
 	 * the kernel from accidentally trusting a raw user pointer), but
 	 * one this kernel's syscall handlers need disabled, since e.g.
-	 * arch/riscv64_syscall.c's sys_write_impl reads straight out of a
+	 * arch/risc/riscv64_syscall.c's sys_write_impl reads straight out of a
 	 * user-supplied buffer through the very same page table (there's
 	 * only one -- no separate per-process address spaces yet). Found
 	 * by booting the ring3 test: the first syscall (write) page-

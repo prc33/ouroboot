@@ -48,7 +48,7 @@
  *
  * Everything below is a hardcoded absolute address, not a linker
  * symbol -- required by arch/riscv64_boot.S and
- * arch/riscv64_trap_entry.S, which (being raw .long-encoded machine
+ * arch/risc/riscv64_trap_entry.S, which (being raw .long-encoded machine
  * code, not real assembly TCC can relocate -- see riscv64_boot.S's
  * comment) can only reference *numeric constants*, never symbols;
  * both were regenerated (arch/gen_riscv64_asm.sh, real riscv64-as,
@@ -62,12 +62,12 @@
 /* [0x80600000, 0x80604000): general S-mode stack -- used by
  * riscv64_entry.c's trampoline (the very first C code that runs) and
  * by every kernel task afterward until the scheduler installs its own
- * per-task stacks (sched/riscv64_task.c). sp starts at the top. */
+ * per-task stacks (arch/risc/riscv64_task.c). sp starts at the top. */
 #define RV64_BOOT_STACK_TOP    (RV64_SCRATCH_BASE + 0x4000UL) /* 0x80604000 */
 
 /* One 8-byte slot at 0x80605000: void (*)(struct regs *), written
- * once by arch/riscv64_trap.c's trap_init() before any trap can
- * occur, read by arch/riscv64_trap_entry.S on every trap. This is how
+ * once by arch/risc/riscv64_trap.c's trap_init() before any trap can
+ * occur, read by arch/risc/riscv64_trap_entry.S on every trap. This is how
  * raw asm calls into compiled C without needing a symbol relocation
  * it can't have -- populated at *runtime* by ordinary (fully
  * relocatable) C code, not baked in at generation time. */
@@ -75,7 +75,7 @@
 
 /* One 8-byte slot at 0x80605008, right after RV64_TRAP_DISPATCH_PTR:
  * the *top* of whichever process's kernel stack is current, read by
- * arch/riscv64_trap_entry.S on every trap instead of the single fixed
+ * arch/risc/riscv64_trap_entry.S on every trap instead of the single fixed
  * RV64_TRAP_STACK_TOP earlier checkpoints used. sched/riscv64_process.c
  * writes it every time a different process is about to run in
  * U-mode -- see that file's comment for why a single shared trap
@@ -90,7 +90,7 @@
  * for hand-written .S files). */
 #define RV64_CURRENT_KSTACK_PTR 0x80605008UL
 
-/* struct regs (arch/riscv64_trap.h): 35 8-byte fields = 280 bytes, at
+/* struct regs (arch/risc/riscv64_trap.h): 35 8-byte fields = 280 bytes, at
  * 0x80606000. One global instance -- safe because this kernel never
  * nests traps (matches i386's own cli-until-iret non-reentrancy). */
 #define RV64_TRAPFRAME_BASE    0x80606000UL
@@ -99,7 +99,7 @@
  * to unconditionally on every trap regardless of whether it
  * interrupted S-mode or U-mode code -- simpler than distinguishing
  * origins, and safe for the same non-nesting reason above (see
- * arch/riscv64_trap_entry.S). sp starts at the top. */
+ * arch/risc/riscv64_trap_entry.S). sp starts at the top. */
 #define RV64_TRAP_STACK_TOP    0x8060b000UL
 
 /* checkpoint 13: a real, separate boot module -- an uncompressed tar

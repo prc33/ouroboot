@@ -1,12 +1,12 @@
-/* Same 2-task cooperative round-robin scheduler as sched/task.c --
+/* Same 2-task cooperative round-robin scheduler as arch/i386/task.c --
  * see that file for the full rationale (fixed at 2 tasks for this
  * checkpoint, generalizing to N is a later concern). Only the
  * register set in the hand-built initial stack differs: riscv64's
  * calling convention has 13 callee-saved registers (ra + s0-s11) vs
- * i386's 4, matching sched/riscv64_switch_context.S's save/restore
+ * i386's 4, matching arch/risc/riscv64_switch_context.S's save/restore
  * list exactly. */
 #include "kernel.h"
-#include "task.h"
+#include "sched/task.h"
 
 #define NUM_TASKS 2
 
@@ -21,7 +21,7 @@ void task_init(struct task *t, int id, void (*entry)(void)) {
 	 * pointing straight at `entry`, s0-s11 all zero -- never read
 	 * before entry() runs its own thing), plus 8 bytes padding to
 	 * keep the frame a 16-byte-aligned 112 bytes, matching
-	 * sched/riscv64_switch_context.S's `addi sp,sp,-112` exactly.
+	 * arch/risc/riscv64_switch_context.S's `addi sp,sp,-112` exactly.
 	 * When this task is switched to for the first time, switch_context's
 	 * restore sequence loads these straight into the real registers
 	 * and `jalr x0,0(ra)` jumps into entry() directly -- no sret

@@ -34,7 +34,7 @@ extern void irq0(void), irq1(void), irq2(void), irq3(void), irq4(void),
 	irq5(void), irq6(void), irq7(void), irq8(void), irq9(void),
 	irq10(void), irq11(void), irq12(void), irq13(void), irq14(void),
 	irq15(void);
-extern void isr128(void); /* arch/syscall_stub.S -- the one user-callable (DPL=3) gate */
+extern void isr128(void); /* arch/i386/syscall_stub.S -- the one user-callable (DPL=3) gate */
 
 static void idt_set_gate(int n, unsigned int base, unsigned short sel, unsigned char flags) {
 	idt[n].base_low = base & 0xFFFF;
@@ -59,8 +59,8 @@ static const char *exception_names[32] = {
 	"Reserved", "Reserved", "Reserved", "Reserved",
 };
 
-/* Called from arch/isr_stubs.S:isr_common_stub for every CPU exception
- * -- and also, via arch/syscall_stub.S:isr128, for int $0x80. Vector
+/* Called from arch/i386/isr_stubs.S:isr_common_stub for every CPU exception
+ * -- and also, via arch/i386/syscall_stub.S:isr128, for int $0x80. Vector
  * 128 is neither an exception (0-31) nor a remapped IRQ (32-47), so
  * it's special-cased here rather than fitting either dispatch table. */
 void isr_handler(struct regs *r) {
@@ -81,7 +81,7 @@ void isr_handler(struct regs *r) {
 	for (;;) __asm__ volatile ("cli\n hlt");
 }
 
-/* Called from arch/isr_stubs.S:irq_common_stub for every PIC IRQ. PIC
+/* Called from arch/i386/isr_stubs.S:irq_common_stub for every PIC IRQ. PIC
  * EOI is sent here (by pic_send_eoi in the driver), not by hand-written
  * per-stub logic, so every IRQ handler gets it uniformly. */
 void irq_handler(struct regs *r) {

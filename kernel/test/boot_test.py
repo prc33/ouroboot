@@ -39,7 +39,7 @@ def boot_and_capture(kernel_path, timeout, mem_mb, extra_qemu_args=None, qemu_bi
 		cmd += extra_qemu_args
 	# `-serial stdio` maps the UART straight onto this process's own
 	# stdin/stdout -- checkpoint 10's real blocking stdin read
-	# (arch/riscv64_syscall.c's sys_read fd 0) means whatever we feed
+	# (arch/risc/riscv64_syscall.c's sys_read fd 0) means whatever we feed
 	# `input=` here is exactly what a real interactive session typed
 	# at a real terminal would produce, same UART byte protocol
 	# either way. Passed as one shot (not paced against wall time) --

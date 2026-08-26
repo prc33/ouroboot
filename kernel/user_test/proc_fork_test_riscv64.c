@@ -2,7 +2,7 @@
  * pipeline as every other user_test payload. Deliberately avoids
  * printf/malloc (this checkpoint doesn't touch brk/mmap, which are
  * still file-static globals shared across every process -- see
- * arch/riscv64_syscall.c's file comment -- so exercising them here
+ * arch/risc/riscv64_syscall.c's file comment -- so exercising them here
  * would be testing a pre-existing, documented simplification this
  * checkpoint doesn't fix, not fork() itself); write() and a tiny
  * hand-rolled decimal formatter are enough to prove what matters:
@@ -10,7 +10,7 @@
  *   - `counter` is a real global, written to 1 *before* fork(). The
  *     child then overwrites its own copy to 42 and exits with status
  *     7; if fork() really gave it a copy-on-write *clone* of the
- *     parent's address space (mm/riscv64_paging.c's paging_fork_cow)
+ *     parent's address space (arch/risc/riscv64_paging.c's paging_fork_cow)
  *     rather than e.g. accidentally sharing it, the parent's own
  *     `counter` is untouched by that write -- still 1 when the parent
  *     reads it back after wait4() returns.

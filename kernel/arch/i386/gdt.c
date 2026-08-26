@@ -76,7 +76,7 @@ void gdt_init(void) {
 
 	/* 0x30, 0x38, 0x40: TLS slots, Linux's GDT_ENTRY_TLS_MIN..MAX (6-8).
 	 * Left empty here -- filled in by set_thread_area at runtime (see
-	 * arch/syscall.c) the first time a process calls it. Existing
+	 * arch/i386/syscall.c) the first time a process calls it. Existing
 	 * unconditionally, whether or not anything ever uses them, exactly
 	 * matches real Linux's layout and is what set_thread_area's
 	 * "allocate slot 6/7/8" logic assumes is available. */
@@ -103,7 +103,7 @@ void tss_set_kernel_stack(unsigned int esp0) {
 	tss.esp0 = esp0;
 }
 
-/* Called by SYS_set_thread_area (arch/syscall.c). Installs a full
+/* Called by SYS_set_thread_area (arch/i386/syscall.c). Installs a full
  * 4GB present+writable ring3-accessible data descriptor at `base` into
  * GDT slot `index` (6, 7, or 8) -- no GDTR reload needed, since the
  * GDT's own base/limit in memory don't change, only one entry's

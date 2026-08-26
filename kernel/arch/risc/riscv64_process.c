@@ -4,33 +4,33 @@
  * the two sides talk (sched/process.h's own "arch seam" section,
  * right after struct process). Everything here is genuinely riscv64:
  * struct regs's own layout, CSR/SSTATUS bits, the S-mode trap-return
- * mechanism (arch/riscv64_trap_entry.S), and the hand-built initial
- * kernel-stack-frame convention sched/riscv64_switch_context.S's
+ * mechanism (arch/risc/riscv64_trap_entry.S), and the hand-built initial
+ * kernel-stack-frame convention arch/risc/riscv64_switch_context.S's
  * `addi sp,sp,-112` restore sequence expects.
  *
- * NOTE for a future arch/i386_process.c: i386's own mm/paging.c has no
+ * NOTE for a future arch/i386_process.c: i386's own arch/i386/paging.c has no
  * per-address-space API yet (paging_new_addrspace/paging_activate/
  * paging_fork_cow/paging_get_flags/paging_ensure_writable are all
  * riscv64-only today -- see mm/paging.h's own `#ifndef
  * KERNEL_ARCH_RISCV64` split), so sched/process.c can't actually link
  * for i386 until that's built too, independent of this file existing.
  * See docs/kernel-arch-split-plan.md for the concrete scope. */
-#include "../kernel.h"
+#include "kernel.h"
 #include "riscv64_trap.h"
 #include "riscv64_memmap.h"
-#include "../mm/paging.h"
-#include "../sched/process.h"
+#include "mm/paging.h"
+#include "sched/process.h"
 
 #define CSR_SSTATUS 0x100
 #define SSTATUS_SPP  (1UL << 8)
 #define SSTATUS_SPIE (1UL << 5)
 #define SSTATUS_SIE  (1UL << 1)
 
-extern void riscv64_trap_return(void); /* arch/riscv64_trap_entry.S */
+extern void riscv64_trap_return(void); /* arch/risc/riscv64_trap_entry.S */
 
 /* struct assignment would ask TCC's codegen for memmove(), which this
  * freestanding kernel has never linked (every other byte copy in it,
- * e.g. mm/riscv64_paging.c's COW handler, is a plain word/byte loop
+ * e.g. arch/risc/riscv64_paging.c's COW handler, is a plain word/byte loop
  * for the same reason) -- copy by hand instead. */
 static void copy_regs(struct regs *dst, const struct regs *src) {
 	const unsigned long *s = (const unsigned long *)src;
@@ -57,7 +57,7 @@ void process_arch_save_trapframe(struct process *p) {
  * switch_context() call returns): reactivate p's own address space,
  * restore its own saved trapframe over whatever's currently in the
  * shared slot, and point the trap-stack indirection
- * (arch/riscv64_trap_entry.S's own comment) at p's own kernel stack,
+ * (arch/risc/riscv64_trap_entry.S's own comment) at p's own kernel stack,
  * so if p traps again it lands on ITS stack, not whoever's was
  * current a moment ago. */
 void process_arch_activate_and_restore(struct process *p) {
@@ -70,7 +70,7 @@ void process_arch_activate_and_restore(struct process *p) {
  * see process_arch_kstack_frame_init()'s own comment. Reads
  * process_get_current() rather than taking a parameter:
  * switch_context()'s restore sequence lands here via a bare `ret`,
- * the same shape as sched/riscv64_task.c's task_a/task_b entry
+ * the same shape as arch/risc/riscv64_task.c's task_a/task_b entry
  * functions, which take no arguments for the same reason.
  * sched/process.c's process_schedule()/process_run() always set the
  * current process before switching in, so it's correct here by
@@ -83,10 +83,10 @@ void process_arch_trampoline(void) {
 }
 
 /* Hand-built initial kernel-stack frame -- identical technique to
- * sched/riscv64_task.c's task_init: 13 fake callee-saved registers
+ * arch/risc/riscv64_task.c's task_init: 13 fake callee-saved registers
  * (ra pointing at process_arch_trampoline, s0-s11 unused/zero) plus 8
  * bytes padding for 16-byte alignment, matching
- * sched/riscv64_switch_context.S's `addi sp,sp,-112` exactly. Shared
+ * arch/risc/riscv64_switch_context.S's `addi sp,sp,-112` exactly. Shared
  * by sched/process.c's process_create_from_elf_argv() (a brand new
  * process) and process_fork() (a child resuming right where its
  * parent's fork() call returns, via the trapframe
@@ -114,13 +114,13 @@ void process_arch_init_context(struct process *p, unsigned long entry, unsigned 
 	sstatus &= ~SSTATUS_SPP;  /* sret drops to U-mode */
 	/* SPIE inherits the *current* global SIE, not a hardcoded 1: real
 	 * sret semantics copy SPIE into SIE, and this kernel has no
-	 * per-process interrupt-enable state of its own (arch/riscv64_timer.c's
+	 * per-process interrupt-enable state of its own (arch/risc/riscv64_timer.c's
 	 * own comment) -- SIE is one global CPU-wide policy, so a freshly
 	 * created process should come up under whatever that policy
 	 * currently is, not silently override it back on. Real bug, found
 	 * running real *paced* interactive input: hardcoding SPIE=1 here
 	 * meant every new process's first launch re-enabled interrupts
-	 * regardless of arch/riscv64_timer.c's timer_disable() (called once,
+	 * regardless of arch/risc/riscv64_timer.c's timer_disable() (called once,
 	 * right after the P4 scheduler checkpoint) -- the timer came back
 	 * the moment checkpoint 5 created its first process, and stayed
 	 * back for every process after, defeating timer_disable() entirely
@@ -141,7 +141,7 @@ void process_arch_init_context(struct process *p, unsigned long entry, unsigned 
  * fork()'s return value, forced to 0 -- "you are the child" is
  * the *only* thing that needs to differ between the two copies
  * for this to be a correct fork(). The parent's own a0 (this
- * child's pid) is set by arch/riscv64_syscall.c's sys_clone
+ * child's pid) is set by arch/risc/riscv64_syscall.c's sys_clone
  * itself, on its live `r`, same as any other syscall's return
  * value -- untouched by this copy. */
 void process_arch_fork_child(struct process *child, struct regs *parent_regs) {

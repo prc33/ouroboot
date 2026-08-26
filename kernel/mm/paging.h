@@ -15,7 +15,7 @@ unsigned int paging_get_phys(unsigned int virt); /* 0 if unmapped */
  * flat present/writable/user, and RISC-V *requires* the X bit for a
  * page to be fetched as code at all -- no implicit "everything's
  * executable" the way non-PAE i386 has). Same symbolic names, same
- * "no real W^X yet" simplification as i386 (see mm/riscv64_paging.c
+ * "no real W^X yet" simplification as i386 (see arch/risc/riscv64_paging.c
  * and mm/elf.c): PTE_PRESENT alone already grants read+execute, so
  * every caller's existing `PTE_PRESENT | PTE_WRITABLE | PTE_USER`
  * expression means the same thing conceptually on both targets. */
@@ -36,7 +36,7 @@ unsigned long paging_get_phys(unsigned long virt); /* 0 if unmapped */
 unsigned long paging_get_flags(unsigned long virt);
 
 /* Per-address-space variants, for sched/riscv64_process.c -- see
- * mm/riscv64_paging.c's file comment. */
+ * arch/risc/riscv64_paging.c's file comment. */
 unsigned long *paging_new_addrspace(void);
 void paging_activate(unsigned long *root);
 unsigned long *paging_active_root(void);
@@ -47,7 +47,7 @@ void paging_fork_cow(unsigned long *dst_root, unsigned long *src_root, unsigned 
 /* checkpoint 10: resolves any COW page in [addr, addr+len) against the
  * *active* address space, entirely in C, no trap involved -- call
  * before any kernel write into a caller-supplied (user) buffer that
- * might still be COW-marked. See mm/riscv64_paging.c's own comment
+ * might still be COW-marked. See arch/risc/riscv64_paging.c's own comment
  * for the real bug this exists to avoid (a page fault from *inside*
  * a syscall handler is a nested trap this kernel's single global
  * trapframe can't survive). */

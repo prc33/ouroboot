@@ -5,10 +5,10 @@
  * interrupts, and `ecall` (our syscall gate) alike -- RISC-V has a
  * single unified vector, unlike i386's 256-entry IDT (genuinely
  * simpler here). All addresses below (0x80606000 etc) are hardcoded
- * constants from arch/riscv64_memmap.h, not symbols -- this file is
+ * constants from arch/risc/riscv64_memmap.h, not symbols -- this file is
  * raw .long-encoded machine code, and riscv64 TCC's assembler has no
  * relocation support for hand-written .S files at all (see
- * boot/riscv64_boot.S's comment for the full story).
+ * arch/risc/riscv64_boot.S's comment for the full story).
  *
  * Technique: `csrrw t6, sscratch, t6` bootstraps ONE scratch register
  * (t6's real value is parked in the sscratch CSR, off to the side of
@@ -17,12 +17,12 @@
  * sscratch's *pre-trap* value is never read, only used as temporary
  * parking, so it doesn't need initializing). t6 now free to use:
  * loaded with RV64_TRAPFRAME_BASE, then every other GPR is stored at
- * a fixed offset into the global struct regs (arch/riscv64_trap.h --
+ * a fixed offset into the global struct regs (arch/risc/riscv64_trap.h --
  * offsets here must match that struct's field order exactly). t6's
  * own real value is retrieved from sscratch and stored last. Then
  * sepc/sstatus/scause/stval, then switch to *this trap's* kernel
  * stack, load trap_dispatch's address from RV64_TRAP_DISPATCH_PTR
- * (written there at runtime by arch/riscv64_trap.c's trap_init(),
+ * (written there at runtime by arch/risc/riscv64_trap.c's trap_init(),
  * *not* baked in here -- this is how raw asm calls into compiled C
  * without a relocation it can't have) and call it with a0 = &trapframe.
  * On return (via falling out of trap_dispatch normally, or via the

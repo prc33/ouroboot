@@ -3,14 +3,14 @@
  *
  * void enter_usermode(unsigned long entry, unsigned long user_sp)
  *
- * riscv64 equivalent of arch/usermode.S: builds the S-mode -> U-mode
+ * riscv64 equivalent of arch/i386/usermode.S: builds the S-mode -> U-mode
  * transition by hand (sepc = target pc, sstatus.SPP cleared to select
  * U-mode as sret's destination privilege level, sp loaded directly
  * since it's an ordinary register sret doesn't touch), then sret.
  * Never returns, in the same sense as i386's version: execution
  * continues in U-mode at `entry`. No symbol references needed at all
- * -- like sched/riscv64_switch_context.S and unlike boot/riscv64_boot.S
- * or arch/riscv64_trap_entry.S, everything here is register/CSR-based,
+ * -- like arch/risc/riscv64_switch_context.S and unlike arch/risc/riscv64_boot.S
+ * or arch/risc/riscv64_trap_entry.S, everything here is register/CSR-based,
  * so no hardcoded-address tricks were needed, just straightforward
  * instruction-by-instruction encoding.
  *
@@ -20,7 +20,7 @@
  * one; every scripted/automated test delivers its input all at once,
  * never triggering this): sret copies SPIE into SIE, so hardcoding
  * SPIE=1 here unconditionally re-enabled global interrupts on every
- * call, undoing arch/riscv64_timer.c's timer_disable() the moment
+ * call, undoing arch/risc/riscv64_timer.c's timer_disable() the moment
  * checkpoint 5's ring3 test (this function's only caller) ran --
  * timer_disable() exists specifically to stop the timer interrupt
  * from ever nesting inside a syscall's own trap handling again (see

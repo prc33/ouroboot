@@ -1,6 +1,6 @@
 /* Syscall dispatch, Linux riscv64 ABI: a7=number, a0-a5=args 1-6,
  * return value in a0. Same "derived from a real strace, not guessed"
- * methodology as arch/syscall.c -- these are exactly the syscalls
+ * methodology as arch/i386/syscall.c -- these are exactly the syscalls
  * `qemu-riscv64-static -strace` showed our own musl-linked riscv64
  * hello binary (from the compiler-port work) actually calling on its
  * way to main() and back: set_tid_address, brk, mmap, munmap, ioctl,
@@ -16,21 +16,30 @@
  * one, offset in bytes not pages (irrelevant here, anonymous-only).
  *
  * brk_current/next_mmap_addr below are still the single "one ring3
- * context at a time" file-static globals i386's own arch/syscall.c
- * uses -- checkpoint 6/7's sched/riscv64_process.c gives every
+ * context at a time" file-static globals i386's own arch/i386/syscall.c
+ * uses -- checkpoint 6/7's sched/process.c gives every
  * process its own address space and kernel stack, but *not* yet its
  * own brk/mmap state, so two real processes both calling malloc()
  * would corrupt each other's heap bookkeeping. Not yet a problem in
- * practice: every checkpoint 6/7 test payload (sched/riscv64_process.c's
+ * practice: every checkpoint 6/7 test payload (sched/process.c's
  * own comments explain why) deliberately avoids malloc/printf for
  * exactly this reason. Needs fixing before any real multi-process
- * binary that mallocs runs concurrently with another. */
+ * binary that mallocs runs concurrently with another.
+ *
+ * syscall_common.h/.c (kernel root): handler logic shared with
+ * arch/i386/syscall.c where the two turned out, once actually
+ * compared, to already be identical (or should have been -- see that
+ * header's own comment on two real i386 bugs found this way). This
+ * file still owns every syscall *number* and every register read
+ * (a0-a7) -- the Linux ABI genuinely differs there, not just
+ * historically. */
 #include "kernel.h"
 #include "riscv64_trap.h"
 #include "mm/pmm.h"
 #include "mm/paging.h"
 #include "mm/ramfs.h"
 #include "sched/process.h"
+#include "syscall_common.h"
 
 #define SYS_ioctl             29
 #define SYS_sched_yield      124
@@ -97,7 +106,6 @@
 
 #define EBADF   9
 #define EINVAL  22
-#define ENOTTY  25
 #define ENOMEM  12
 #define ENOSYS  38
 #define ENOENT   2
@@ -127,17 +135,6 @@ static unsigned long take_mmap_addr(unsigned long length) {
 	unsigned long base = next_mmap_addr;
 	next_mmap_addr += length;
 	return base;
-}
-
-static unsigned long page_round_up(unsigned long x) {
-	return (x + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1UL);
-}
-
-static void sys_write_impl(unsigned long fd, const char *buf, unsigned long count) {
-	if (fd == 1 || fd == 2) {
-		for (unsigned long i = 0; i < count; i++)
-			serial_putc(buf[i]);
-	}
 }
 
 /* checkpoint 12: shared by sys_write's fd 0/1/2 (only when
@@ -176,7 +173,7 @@ static void sys_write(struct regs *r) {
 			r->a0 = (unsigned long)-EBADF; /* stdin, not redirected -- not writable */
 			return;
 		}
-		sys_write_impl(fd, (const char *)r->a1, count);
+		syscall_write_raw(fd, (const char *)r->a1, count);
 		r->a0 = count;
 		return;
 	}
@@ -217,7 +214,7 @@ static void sys_writev(struct regs *r) {
 				return;
 			}
 		} else {
-			sys_write_impl(fd, base, len);
+			syscall_write_raw(fd, base, len);
 		}
 		total += len;
 	}
@@ -263,11 +260,11 @@ static void sys_exit(struct regs *r) {
 	sys_exit_impl(r);
 }
 
-/* checkpoint 6: once sched/riscv64_process.c's process_run() has
+/* checkpoint 6: once sched/process.c's process_run() has
  * started (process_mode_active()), exit_group means "this one process
  * is done", not "halt everything" -- process_exit_current() reschedules
  * to whatever else is still runnable, or halts only once nothing is
- * left (sched/riscv64_process.c's own process_halt()). Before that
+ * left (sched/process.c's own process_halt()). Before that
  * point, exit_group falls through to the same pre-process-exit-hook
  * path bare SYS_exit uses above -- see sys_exit_impl's own comment. */
 static void sys_exit_group(struct regs *r) {
@@ -335,18 +332,11 @@ static void sys_brk(struct regs *r) {
 		return;
 	}
 	if (requested > current) {
-		unsigned long old_top = page_round_up(current);
-		unsigned long new_top = page_round_up(requested);
-		for (unsigned long va = old_top; va < new_top; va += PAGE_SIZE) {
-			unsigned long phys = pmm_alloc_page();
-			if (!phys) {
-				r->a0 = current; /* out of memory: brk unchanged, per Linux semantics */
-				return;
-			}
-			unsigned long *words = (unsigned long *)phys;
-			for (unsigned int i = 0; i < PAGE_SIZE / sizeof(unsigned long); i++)
-				words[i] = 0;
-			paging_map_page(va, phys, PTE_PRESENT | PTE_WRITABLE | PTE_USER);
+		unsigned long old_top = syscall_page_round_up(current);
+		unsigned long new_top = syscall_page_round_up(requested);
+		if (!syscall_grow_pages(old_top, new_top)) {
+			r->a0 = current; /* out of memory: brk unchanged, per Linux semantics */
+			return;
 		}
 	}
 	/* shrinking: update accounting only, don't reclaim pages yet --
@@ -372,13 +362,16 @@ static void sys_mmap(struct regs *r) {
 	 * *nothing* but still reports success -- handed musl an address
 	 * it believed was safely backed and wasn't, which page-faulted on
 	 * the first real write. Found by tracing exactly which mmap call
-	 * returned the address that later faulted. */
+	 * returned the address that later faulted. (This is also why
+	 * syscall_common.c's own shared sys_mmap2 path on i386 gained the
+	 * same check -- it was missing there until compared side by side
+	 * with this file to build the shared version.) */
 	if (length == 0) {
 		r->a0 = (unsigned long)-EINVAL;
 		return;
 	}
 
-	unsigned long len = page_round_up(length);
+	unsigned long len = syscall_page_round_up(length);
 
 	if ((flags & MAP_FIXED) && prot == PROT_NONE) {
 		/* musl's TLS/stack guard-page reservation: reserve the range
@@ -395,50 +388,31 @@ static void sys_mmap(struct regs *r) {
 		base = take_mmap_addr(len);
 	}
 
-	for (unsigned long va = base; va < base + len; va += PAGE_SIZE) {
-		unsigned long phys = pmm_alloc_page();
-		if (!phys) {
-			r->a0 = (unsigned long)-ENOMEM;
-			return;
-		}
-		unsigned long *words = (unsigned long *)phys;
-		for (unsigned int i = 0; i < PAGE_SIZE / sizeof(unsigned long); i++)
-			words[i] = 0;
-		paging_map_page(va, phys, PTE_PRESENT | PTE_WRITABLE | PTE_USER);
+	if (!syscall_grow_pages(base, base + len)) {
+		r->a0 = (unsigned long)-ENOMEM;
+		return;
 	}
 	r->a0 = base;
 }
 
 static void sys_munmap(struct regs *r) {
 	unsigned long addr = r->a0;
-	unsigned long len = page_round_up(r->a1);
-	for (unsigned long va = addr; va < addr + len; va += PAGE_SIZE) {
-		unsigned long phys = paging_get_phys(va);
-		if (phys) {
-			paging_map_page(va, 0, 0); /* clear PTE_PRESENT */
-			pmm_free_page(phys & ~0xFFFUL);
-		}
-	}
+	unsigned long len = syscall_page_round_up(r->a1);
+	syscall_munmap_pages(addr, len);
 	r->a0 = 0;
 }
 
 static void sys_mremap(struct regs *r) {
 	unsigned long old_addr = r->a0;
-	unsigned long old_len = page_round_up(r->a1);
-	unsigned long new_len = page_round_up(r->a2);
+	unsigned long old_len = syscall_page_round_up(r->a1);
+	unsigned long new_len = syscall_page_round_up(r->a2);
 	unsigned long flags = r->a3;
 	if (!new_len) {
 		r->a0 = (unsigned long)-EINVAL;
 		return;
 	}
 	if (new_len <= old_len) {
-		for (unsigned long va = old_addr + new_len; va < old_addr + old_len; va += PAGE_SIZE) {
-			unsigned long phys = paging_get_phys(va);
-			if (phys) {
-				paging_map_page(va, 0, 0);
-				pmm_free_page(phys & ~0xFFFUL);
-			}
-		}
+		syscall_munmap_pages(old_addr + new_len, old_len - new_len);
 		r->a0 = old_addr;
 		return;
 	}
@@ -447,42 +421,18 @@ static void sys_mremap(struct regs *r) {
 		return;
 	}
 	unsigned long base = take_mmap_addr(new_len);
-	for (unsigned long va = base; va < base + new_len; va += PAGE_SIZE) {
-		unsigned long phys = pmm_alloc_page();
-		if (!phys) {
-			r->a0 = (unsigned long)-ENOMEM;
-			return;
-		}
-		unsigned long *words = (unsigned long *)phys;
-		for (unsigned int i = 0; i < PAGE_SIZE / sizeof(unsigned long); i++)
-			words[i] = 0;
-		paging_map_page(va, phys, PTE_PRESENT | PTE_WRITABLE | PTE_USER);
+	if (!syscall_grow_pages(base, base + new_len)) {
+		r->a0 = (unsigned long)-ENOMEM;
+		return;
 	}
 	for (unsigned long i = 0; i < old_len; i++)
 		*(unsigned char *)(base + i) = *(unsigned char *)(old_addr + i);
-	for (unsigned long va = old_addr; va < old_addr + old_len; va += PAGE_SIZE) {
-		unsigned long phys = paging_get_phys(va);
-		if (phys) {
-			paging_map_page(va, 0, 0);
-			pmm_free_page(phys & ~0xFFFUL);
-		}
-	}
+	syscall_munmap_pages(old_addr, old_len);
 	r->a0 = base;
 }
 
-#define TIOCGWINSZ 0x5413
-
 static void sys_ioctl(struct regs *r) {
-	unsigned long fd = r->a0;
-	unsigned long req = r->a1;
-	if ((fd == 1 || fd == 2) && req == TIOCGWINSZ) {
-		/* honest answer: there's no real tty layer yet (P7), and our
-		 * fd 1/2 is a serial line, not a terminal -- ENOTTY is what a
-		 * non-tty stdout genuinely returns here on real Linux too. */
-		r->a0 = (unsigned long)-ENOTTY;
-		return;
-	}
-	r->a0 = (unsigned long)-EINVAL;
+	r->a0 = (unsigned long)syscall_ioctl_check(r->a0, r->a1);
 }
 
 /* checkpoint 6/7: real pid (process_current_pid()), not the hardcoded
@@ -730,7 +680,7 @@ static void sys_read(struct regs *r) {
 		}
 		while (!serial_rx_ready())
 			process_schedule();
-		paging_ensure_writable((unsigned long)buf, 1); /* see mm/riscv64_paging.c's own comment -- real bug found here first */
+		paging_ensure_writable((unsigned long)buf, 1); /* see arch/risc/riscv64_paging.c's own comment -- real bug found here first */
 		unsigned char c = serial_getc();
 		/* ICRNL, by hand: every real tty driver translates an
 		 * incoming CR to LF before a line-buffered reader ever sees
@@ -983,7 +933,7 @@ static void sys_getdents64(struct regs *r) {
  * that function's own signature can just be "two NUL-terminated
  * char* arrays", arch-neutral in spirit even though nothing else
  * uses it yet). */
-/* checkpoint 14: bumped from 8 -- must match sched/riscv64_process.c's
+/* checkpoint 14: bumped from 8 -- must match sched/process.c's
  * own copy (duplicated rather than shared via a header, same
  * convention as that file's own FORK_MMAP_HI comment). A real
  * self-hosted `tcc -B... -I... -I... -I... -I... -nostdinc -c -o out.o in.c`
@@ -1016,7 +966,7 @@ static void sys_execve(struct regs *r) {
 }
 
 /* checkpoint 9: busybox ash's own startup needs all of these -- see
- * arch/riscv64_syscall.c's git history for the real strace this was
+ * arch/risc/riscv64_syscall.c's git history for the real strace this was
  * derived from (a real ash -c/script run under qemu-riscv64-static,
  * same methodology as everything else in this file).
  *

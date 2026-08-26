@@ -22,8 +22,14 @@
 # ../compiler/tcc -- no rule here calls riscv64-linux-gnu-as or
 # anything outside this project's own toolchain (that cross-assembler
 # is a discovery tool used offline, by hand, to generate the raw
-# riscv64_*.S files checked into arch/ and boot/ -- see
-# arch/gen_riscv64_asm.sh).
+# riscv64_*.S files checked into arch/risc/ -- see
+# arch/risc/gen_riscv64_asm.sh).
+#
+# docs/kernel-arch-split-plan.md: every genuinely architecture-specific
+# file lives under arch/i386/ or arch/risc/ (mirroring
+# ../compiler/i386/, ../compiler/risc/); everything else (mm/, sched/,
+# drivers/kprintf.c, kernel.h) is real architecture-neutral C, shared
+# by both ARCHs, not two copies that happen to agree.
 
 ARCH ?= i386
 
@@ -40,11 +46,11 @@ CFLAGS  := -B$(TCCDIR) -I$(TCCINC) -I. -Wall -nostdinc -fno-stack-protector -ffr
 
 ifeq ($(ARCH),i386)
 LDFLAGS := -B$(TCCDIR) -nostdlib -static -Wl,-Ttext=0x100000
-OBJS := boot/boot.o kmain.o drivers/serial.o drivers/kprintf.o \
-        arch/gdt.o arch/idt.o arch/isr_stubs.o arch/pic.o arch/pit.o \
-        arch/usermode.o arch/syscall_stub.o arch/syscall.o \
-        mm/pmm.o mm/paging.o mm/elf.o sched/task.o sched/switch_context.o \
-        arch/kend.o
+OBJS := arch/i386/boot.o arch/i386/kmain.o arch/i386/serial.o drivers/kprintf.o \
+        arch/i386/gdt.o arch/i386/idt.o arch/i386/isr_stubs.o arch/i386/pic.o arch/i386/pit.o \
+        arch/i386/usermode.o arch/i386/syscall_stub.o arch/i386/syscall.o syscall_common.o \
+        mm/pmm.o arch/i386/paging.o mm/elf.o arch/i386/task.o arch/i386/switch_context.o \
+        arch/i386/kend.o
 else ifeq ($(ARCH),riscv64)
 CFLAGS  += -DKERNEL_ARCH_RISCV64
 # Confirmed (readelf -l on the output): TCC's own linker places the
@@ -56,31 +62,33 @@ CFLAGS  += -DKERNEL_ARCH_RISCV64
 # machine jumps to the lowest PT_LOAD vaddr, not e_entry -- they just
 # happen to always agree with TCC's linker.
 LDFLAGS := -B$(TCCDIR) -nostdlib -static -Wl,-Ttext=0x80200000
-# boot/riscv64_boot.o MUST be first (its hardcoded jump target assumes
-# it occupies exactly the first 0x1000 bytes of the image -- see its
-# own comment) and riscv64_entry.o must be immediately next (its
-# _riscv64_entry must be the very first thing linked after that page).
-# arch/riscv64_kend.o must be last, same reason as i386's arch/kend.o.
-# sched/riscv64_task.o (the P4 fixed-2-task scheduler, superseded by
-# sched/process.o from checkpoint 6 onward) is deliberately *not* here
-# -- the product kernel never calls it. It's added back for
+# arch/risc/riscv64_boot.o MUST be first (its hardcoded jump target
+# assumes it occupies exactly the first 0x1000 bytes of the image --
+# see its own comment) and arch/risc/riscv64_entry.o must be
+# immediately next (its _riscv64_entry must be the very first thing
+# linked after that page). arch/risc/riscv64_kend.o must be last, same
+# reason as i386's arch/i386/kend.o.
+# arch/risc/riscv64_task.o (the P4 fixed-2-task scheduler, superseded
+# by sched/process.o from checkpoint 6 onward) is deliberately *not*
+# here -- the product kernel never calls it. It's added back for
 # RISCV64_CHECKPOINT_OBJS below, which the historical P1-P10 regression
 # chain (kernel/test/riscv64_checkpoints.c) still exercises. See
 # docs/kernel-complexity-review.md section 1.
 #
 # sched/process.o (the general process table -- generic, see its own
-# file comment) and arch/riscv64_process.o (the small riscv64-specific
-# half it calls through: struct regs, the trap-return mechanism, the
-# hand-built initial-kernel-stack-frame convention) used to be one
-# file, sched/riscv64_process.o -- see docs/kernel-arch-split-plan.md.
-OBJS := boot/riscv64_boot.o riscv64_entry.o riscv64_kmain.o \
-        drivers/riscv64_serial.o drivers/kprintf.o \
-        arch/riscv64_trap_entry.o arch/riscv64_trap.o arch/riscv64_timer.o \
-        arch/riscv64_usermode.o arch/riscv64_syscall.o arch/riscv64_process.o \
-        mm/pmm.o mm/riscv64_paging.o mm/elf.o mm/ramfs.o mm/tar.o \
-        sched/riscv64_switch_context.o \
+# file comment) and arch/risc/riscv64_process.o (the small
+# riscv64-specific half it calls through: struct regs, the trap-return
+# mechanism, the hand-built initial-kernel-stack-frame convention) used
+# to be one file -- see docs/kernel-arch-split-plan.md.
+OBJS := arch/risc/riscv64_boot.o arch/risc/riscv64_entry.o arch/risc/riscv64_kmain.o \
+        arch/risc/riscv64_serial.o drivers/kprintf.o \
+        arch/risc/riscv64_trap_entry.o arch/risc/riscv64_trap.o arch/risc/riscv64_timer.o \
+        arch/risc/riscv64_usermode.o arch/risc/riscv64_syscall.o arch/risc/riscv64_process.o \
+        syscall_common.o \
+        mm/pmm.o arch/risc/riscv64_paging.o mm/elf.o mm/ramfs.o mm/tar.o \
+        arch/risc/riscv64_switch_context.o \
         sched/process.o \
-        arch/riscv64_kend.o
+        arch/risc/riscv64_kend.o
 else
 $(error unknown ARCH '$(ARCH)' -- expected i386 or riscv64)
 endif
@@ -90,37 +98,13 @@ endif
 
 all: kernel.elf
 
-boot/boot.o: boot/boot.S
-	$(TCC) $(CFLAGS) -c -o $@ $<
-
-boot/riscv64_boot.o: boot/riscv64_boot.S
-	$(TCC) $(CFLAGS) -c -o $@ $<
-
-arch/isr_stubs.o: arch/isr_stubs.S
-	$(TCC) $(CFLAGS) -c -o $@ $<
-
-arch/kend.o: arch/kend.S
-	$(TCC) $(CFLAGS) -c -o $@ $<
-
-arch/riscv64_kend.o: arch/riscv64_kend.S
-	$(TCC) $(CFLAGS) -c -o $@ $<
-
-sched/switch_context.o: sched/switch_context.S
-	$(TCC) $(CFLAGS) -c -o $@ $<
-
-sched/riscv64_switch_context.o: sched/riscv64_switch_context.S
-	$(TCC) $(CFLAGS) -c -o $@ $<
-
-arch/usermode.o: arch/usermode.S
-	$(TCC) $(CFLAGS) -c -o $@ $<
-
-arch/riscv64_usermode.o: arch/riscv64_usermode.S
-	$(TCC) $(CFLAGS) -c -o $@ $<
-
-arch/syscall_stub.o: arch/syscall_stub.S
-	$(TCC) $(CFLAGS) -c -o $@ $<
-
-arch/riscv64_trap_entry.o: arch/riscv64_trap_entry.S
+# One pattern rule for every .S file, wherever it lives -- the eleven
+# individual rules this used to be (one per file, each an identical
+# recipe) were never about the *command* differing, only about make
+# needing each target named; a pattern rule already covers subdirectory
+# targets the same way %.o: %.c below always has (see
+# docs/kernel-arch-split-plan.md).
+%.o: %.S
 	$(TCC) $(CFLAGS) -c -o $@ $<
 
 %.o: %.c kernel.h
@@ -247,7 +231,7 @@ RISCV64_TEST_ASSERTIONS := \
 # \r, not \n, terminates each line here -- deliberately, and this is
 # the real regression test for a real bug: a real terminal always
 # sends '\r' (0x0D) for Enter, never '\n' (confirmed by instrumenting
-# xterm.js's term.onData in the browser demo -- see arch/riscv64_syscall.c's
+# xterm.js's term.onData in the browser demo -- see arch/risc/riscv64_syscall.c's
 # sys_read for the ICRNL-by-hand translation this exercises). Using
 # \n here instead would silently stop testing the exact byte a real
 # human's Enter key -- or a real terminal attached to a real QEMU
@@ -255,10 +239,10 @@ RISCV64_TEST_ASSERTIONS := \
 #
 # Leading \r\r: real QEMU's `-serial stdio` loses exactly the first 2
 # bytes fed in over a pipe, consistently -- confirmed real (traced
-# down to arch/riscv64_syscall.c's sys_read never even seeing them)
+# down to arch/risc/riscv64_syscall.c's sys_read never even seeing them)
 # and confirmed harmless for real interactive use (a human can't type
 # before this kernel's own boot sequence, which is what's actually
-# consuming those 2 byte-times, finishes -- see drivers/riscv64_serial.c's
+# consuming those 2 byte-times, finishes -- see arch/risc/riscv64_serial.c's
 # serial_init() and this repo's own commit history for the full
 # mechanism). Two throwaway blank lines absorb it losslessly: ash
 # treats an empty line as a no-op, and losing exactly 2 of the 2 bytes
@@ -271,7 +255,7 @@ RISCV64_TEST_ASSERTIONS := \
 # -- open(".") failed with ENOENT (mm/ramfs.c has no real directory
 # entries to match against) even though stat(".") already worked, so
 # every `ls` in the browser demo failed with "can't open '.'". Fixed
-# by arch/riscv64_syscall.c's sys_openat/sys_getdents64 (see their own
+# by arch/risc/riscv64_syscall.c's sys_openat/sys_getdents64 (see their own
 # comments); "greeting"/"exec_target" below are mm/ramfs.c's own real
 # files, only reachable in the transcript through a real, successful
 # directory listing, not (unlike "busybox") also produced some other
@@ -296,7 +280,7 @@ RISCV64_INTERACTIVE_INPUT := \r\recho hello ash\rls\recho writable-fs-works > wt
 # work found (not something it caused) -- test/boot_test.py's own
 # DEFAULT_MEM_MB is 32, and nothing here ever overrode it, so every
 # `make ARCH=riscv64 test` this project has ever run gave QEMU only
-# 32MB of *real* RAM despite arch/riscv64_memmap.h's RV64_MEM_TOP
+# 32MB of *real* RAM despite arch/risc/riscv64_memmap.h's RV64_MEM_TOP
 # hardcoding a 128MB assumption everywhere else (pmm_init(),
 # paging_init(), ...) -- a mismatch nothing ever actually hit before
 # (every checkpoint's real memory usage happened to stay comfortably
@@ -309,20 +293,20 @@ RISCV64_INTERACTIVE_INPUT := \r\recho hello ash\rls\recho writable-fs-works > wt
 # had this problem -- only the real-QEMU path was under-provisioned.
 # Explicit here now so QEMU's real configuration actually matches what
 # the kernel has always assumed it has.
-# kernel.elf itself is the product boot (riscv64_kmain.c's kmain(),
-# built with the default OBJS above) -- `test`/`test-wasm` need the
-# separate historical-checkpoint-chain variant below instead, since
-# that's what still exercises the P1-P10 sequence
+# kernel.elf itself is the product boot (arch/risc/riscv64_kmain.c's
+# kmain(), built with the default OBJS above) -- `test`/`test-wasm`
+# need the separate historical-checkpoint-chain variant below instead,
+# since that's what still exercises the P1-P10 sequence
 # (kernel/test/riscv64_checkpoints.c). See
 # docs/kernel-complexity-review.md section 1: this used to be inverted
 # (the checkpoint chain was the *default* kmain(), and a
 # KERNEL_DIRECT_SHELL flag opted into the product boot instead) -- the
 # product boot is unconditional now, so it's this variant that needs
 # the flag.
-RISCV64_CHECKPOINT_OBJS := $(patsubst riscv64_kmain.o,riscv64_kmain_checkpoints.o,$(OBJS)) \
-	sched/riscv64_task.o test/riscv64_checkpoints.o
+RISCV64_CHECKPOINT_OBJS := $(patsubst arch/risc/riscv64_kmain.o,arch/risc/riscv64_kmain_checkpoints.o,$(OBJS)) \
+	arch/risc/riscv64_task.o test/riscv64_checkpoints.o
 
-riscv64_kmain_checkpoints.o: riscv64_kmain.c kernel.h
+arch/risc/riscv64_kmain_checkpoints.o: arch/risc/riscv64_kmain.c kernel.h
 	$(TCC) $(CFLAGS) -DKERNEL_CHECKPOINTS -c -o $@ $<
 
 kernel-checkpoints.elf: $(RISCV64_CHECKPOINT_OBJS)
@@ -434,7 +418,7 @@ test-selfhost: kernel.elf
 endif
 
 clean:
-	rm -f kernel.elf kernel-checkpoints.elf riscv64_kmain_checkpoints.o \
-		sched/riscv64_task.o test/riscv64_checkpoints.o initrd.tar \
+	rm -f kernel.elf kernel-checkpoints.elf arch/risc/riscv64_kmain_checkpoints.o \
+		arch/risc/riscv64_task.o test/riscv64_checkpoints.o initrd.tar \
 		tcc-initrd.tar selfhost-initrd.tar $(RISCV64_USER_ELFS) \
 		user_test/user_test_riscv64.elf $(OBJS)

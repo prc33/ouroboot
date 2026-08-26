@@ -309,7 +309,8 @@ Phase 1 is independent of everything and can be done immediately.
 
 ## Status as of 2026-08-26
 
-Done, verified, committed (`c605aa3`, `d997b60`, `34cbf69`):
+Done, verified, committed (`c605aa3`, `d997b60`, `34cbf69`, plus one
+more commit finishing the items below):
 
 - `kernel-complexity-review.md` §1/§2 (checkpoint chain moved out of
   the product boot) and §3 (one canonical `build_user_stack()`) — the
@@ -320,13 +321,40 @@ Done, verified, committed (`c605aa3`, `d997b60`, `34cbf69`):
   kernel-stack-frame convention), talking through seven
   `process_arch_*()` functions declared in `sched/process.h`'s own
   "arch seam" section.
+- **Phase 2, the wholesale directory move** — done, not deferred after
+  all. Every genuinely architecture-specific file now lives under
+  `arch/i386/` or `arch/risc/` (mirroring `compiler/i386/`/`compiler/risc/`,
+  the same convention the compiler's own split had already settled on
+  by the time this happened), 34 files moved, zero renamed beyond
+  directory (matching that same precedent: `riscv64_gen.c` stayed
+  `riscv64_gen.c` inside `compiler/risc/`, not `gen.c`). The eleven
+  individual `%.o: %.S` Makefile rules (one per file, identical
+  recipe) collapsed into one pattern rule while at it. `mm/`, `sched/`,
+  `drivers/kprintf.c`, and `kernel.h` are now unambiguously the whole
+  of what's architecture-neutral — nothing left in a top-level
+  directory that isn't.
+- **The syscall-layer half of Phase 3 — done, but scoped down from
+  what this section originally proposed.** Not the full
+  `arch_syscall_arg()`-accessor rewrite of all ~35 riscv64 handlers
+  (still real regression risk for a still-thin payoff, since i386 has
+  no process table to call most of that logic with -- see below). What
+  actually happened: `syscall_common.h`/`.c` (kernel root) now holds
+  the handler bodies that turned out, once genuinely compared side by
+  side for the first time, to already be identical (the console write
+  loop, the TIOCGWINSZ check, munmap) or that should have been --
+  comparing them directly surfaced two real, latent i386 bugs
+  (`sys_brk`/`sys_mmap2` not zeroing freshly allocated pages, a
+  missing zero-length-mmap `EINVAL` check) that riscv64's own
+  equivalents already had the fix for. Both arches' own `syscall.c`
+  still owns every syscall *number* and every register read
+  (`eax`/`ebx`/... vs `a0`-`a7`) -- the Linux ABI genuinely differs
+  there, exactly as expected going in, not something this pass tried
+  to paper over.
 
-Not done: Phases 1/2 (the free `mm/ramfs.o`/`mm/tar.o` win and the
-wholesale directory moves), the syscall-layer half of Phase 3
-(`arch/riscv64_syscall.c`'s handler bodies still read `r->aN` directly
-— unmixing them needs an `arch_syscall_arg()`-style accessor and a
-genuinely large, regression-risky rewrite of ~35 handlers; deferred
-rather than rushed), Phases 4-6, and everything below.
+Not done: Phases 1 (superseded — `mm/ramfs.o`/`mm/tar.o` were never
+wired into i386's `OBJS`, since there's still no process table to
+execve anything from them), 4 (the enforcement check), 6, and
+everything below this line.
 
 ## The real remaining piece: i386 self-hosting
 

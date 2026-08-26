@@ -1,5 +1,5 @@
 #include "kernel.h"
-#include "arch/idt.h"
+#include "idt.h"
 #include "mm/pmm.h"
 #include "mm/paging.h"
 #include "mm/elf.h"

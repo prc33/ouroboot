@@ -12,7 +12,7 @@
  *
  * Entry point. Nothing before this has run -- sp is garbage. Raw asm's
  * ONLY job: set sp to a fixed address we control (RV64_BOOT_STACK_TOP,
- * see arch/riscv64_memmap.h), then jump to the first byte of the next
+ * see arch/risc/riscv64_memmap.h), then jump to the first byte of the next
  * linked object file's compiled code.
  *
  * Why a jump to a hardcoded absolute address instead of "call kmain":

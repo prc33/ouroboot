@@ -70,14 +70,14 @@ int ramfs_dynamic_load(const char *path, const unsigned char *data, unsigned lon
  * sys_openat's own comment) also what a real filesystem's rewrite-in-
  * place effectively does at the content level. Keeping the capacity
  * around rather than freeing-then-reallocating is the same "shrink is
- * accounting-only, no reclaim yet" simplification arch/riscv64_syscall.c's
+ * accounting-only, no reclaim yet" simplification arch/risc/riscv64_syscall.c's
  * sys_brk already documents for itself. */
 void ramfs_dynamic_truncate(struct ramfs_dynamic_file *f);
 
 /* Removes a dynamic file outright, freeing its backing pages. A no-op if no
  * dynamic file by that name exists; this matches how every caller treats
  * unlink()'s return value as best-effort
- * (see arch/riscv64_syscall.c's
+ * (see arch/risc/riscv64_syscall.c's
  * own comment on tcc_write_elf_file's unlink-before-create pattern). */
 void ramfs_dynamic_unlink(const char *path);
 

@@ -10,7 +10,7 @@
 void kmain(unsigned long hartid, unsigned long dtb);
 
 void _riscv64_entry(void) {
-	kmain(0, 0); /* hartid/dtb unused -- see arch/riscv64_memmap.h */
+	kmain(0, 0); /* hartid/dtb unused -- see arch/risc/riscv64_memmap.h */
 	for (;;)
 		__builtin_riscv_wfi();
 }

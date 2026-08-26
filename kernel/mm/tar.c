@@ -63,7 +63,7 @@ unsigned int tar_load_initrd(const unsigned char *data, unsigned long max_size) 
 			 * exactly 100 bytes long (the spec allows that) -- copy
 			 * into a local, always-terminated buffer before treating
 			 * it as a C string, same defensive convention
-			 * arch/riscv64_syscall.c's copy_path_from_user() uses for
+			 * arch/risc/riscv64_syscall.c's copy_path_from_user() uses for
 			 * user-supplied paths. */
 			char name[TAR_NAME_LEN + 1];
 			unsigned int i;

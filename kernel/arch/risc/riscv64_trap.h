@@ -1,9 +1,9 @@
 #ifndef RISCV64_TRAP_H
 #define RISCV64_TRAP_H
 
-/* Matches exactly what arch/riscv64_trap_entry.S saves, low offset to
+/* Matches exactly what arch/risc/riscv64_trap_entry.S saves, low offset to
  * high (all fields are 8 bytes, no padding -- offsets below are the
- * field index * 8, and arch/riscv64_trap_entry.S's raw stores use
+ * field index * 8, and arch/risc/riscv64_trap_entry.S's raw stores use
  * these same offsets by hand, since it can't #include this header --
  * see that file's comment). x0 (always zero) is never saved; every
  * other GPR (x1-x31) is, plus the four trap CSRs. */
@@ -22,7 +22,7 @@ void isr_register_handler(int cause, void (*handler)(struct regs *)); /* excepti
 void irq_register_handler(int cause, void (*handler)(struct regs *)); /* interrupts (scause high bit set) */
 void syscall_set_handler(void (*handler)(struct regs *));
 
-/* Called by arch/riscv64_timer.c's tick handler -- see arch/riscv64_trap.c. */
+/* Called by arch/risc/riscv64_timer.c's tick handler -- see arch/risc/riscv64_trap.c. */
 void trap_dispatch(struct regs *r);
 
 #endif

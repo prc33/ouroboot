@@ -1,5 +1,5 @@
 #include "kernel.h"
-#include "task.h"
+#include "sched/task.h"
 
 /* Fixed at 2 for this checkpoint -- "two hardcoded tasks" is the P4
  * exit criterion in the plan. Generalizing to N runnable tasks is a

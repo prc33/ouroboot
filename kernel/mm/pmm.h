@@ -23,7 +23,7 @@ unsigned int pmm_alloc_contiguous(unsigned int count);
 /* Marks every page in [lo, hi) used, without anyone having to
  * pmm_alloc_page() them first -- for memory this allocator doesn't
  * itself know is spoken for. riscv64_kmain.c uses this right after
- * pmm_init() to reserve arch/riscv64_memmap.h's hardcoded scratch
+ * pmm_init() to reserve arch/risc/riscv64_memmap.h's hardcoded scratch
  * region (boot stack, trap dispatch pointer, trapframe, trap stack):
  * pmm_init() only ever reserved [phys_base, kernel_end) -- the
  * scratch region lives *above* kernel_end (deliberately, so it survives

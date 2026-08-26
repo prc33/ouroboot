@@ -13,11 +13,19 @@
  * a single set of file-static globals, not yet a real per-process
  * struct -- there's still only ever one ring3 context at a time. Real
  * multi-process support (P6) needs to move this into a process table;
- * noted rather than silently assumed away. */
+ * noted rather than silently assumed away.
+ *
+ * syscall_common.h/.c (kernel root, not this ARCH's own directory):
+ * handler logic that turned out, once compared against riscv64's own
+ * arch/risc/riscv64_syscall.c, to be identical or that should have
+ * been -- see that header's own comment for two real bugs (unzeroed
+ * brk/mmap pages, a missing zero-length-mmap check) found and fixed
+ * this way. This file still owns every syscall *number* and every
+ * register read (eax/ebx/ecx/...) -- the Linux ABI genuinely differs
+ * there, not just historically. */
 #include "kernel.h"
-#include "arch/idt.h"
-#include "mm/pmm.h"
-#include "mm/paging.h"
+#include "idt.h"
+#include "syscall_common.h"
 
 #define SYS_exit             1
 #define SYS_write             4
@@ -37,7 +45,6 @@
 
 #define EBADF   9
 #define EINVAL  22
-#define ENOTTY  25
 #define ENOMEM  12
 #define ENOSYS  38
 
@@ -48,24 +55,13 @@
 static unsigned int brk_current = 0;
 static unsigned int next_mmap_addr = MMAP_BASE;
 
-static unsigned int page_round_up(unsigned int x) {
-	return (x + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
-}
-
-static void sys_write_impl(unsigned int fd, const char *buf, unsigned int count) {
-	if (fd == 1 || fd == 2) {
-		for (unsigned int i = 0; i < count; i++)
-			serial_putc(buf[i]);
-	}
-}
-
 static void sys_write(struct regs *r) {
 	unsigned int fd = r->ebx;
 	if (fd != 1 && fd != 2) {
 		r->eax = (unsigned int)-EBADF;
 		return;
 	}
-	sys_write_impl(fd, (const char *)(unsigned long)r->ecx, r->edx);
+	syscall_write_raw(fd, (const char *)(unsigned long)r->ecx, r->edx);
 	r->eax = r->edx;
 }
 
@@ -82,7 +78,7 @@ static void sys_writev(struct regs *r) {
 	for (unsigned int i = 0; i < iovcnt; i++) {
 		const char *base = (const char *)(unsigned long)iov[i * 2];
 		unsigned int len = iov[i * 2 + 1];
-		sys_write_impl(fd, base, len);
+		syscall_write_raw(fd, base, len);
 		total += len;
 	}
 	r->eax = total;
@@ -120,15 +116,11 @@ static void sys_brk(struct regs *r) {
 		return;
 	}
 	if (requested > brk_current) {
-		unsigned int old_top = page_round_up(brk_current);
-		unsigned int new_top = page_round_up(requested);
-		for (unsigned int va = old_top; va < new_top; va += PAGE_SIZE) {
-			unsigned int phys = pmm_alloc_page();
-			if (!phys) {
-				r->eax = brk_current; /* out of memory: brk unchanged, per Linux semantics */
-				return;
-			}
-			paging_map_page(va, phys, PTE_PRESENT | PTE_WRITABLE | PTE_USER);
+		unsigned int old_top = (unsigned int)syscall_page_round_up(brk_current);
+		unsigned int new_top = (unsigned int)syscall_page_round_up(requested);
+		if (!syscall_grow_pages(old_top, new_top)) {
+			r->eax = brk_current; /* out of memory: brk unchanged, per Linux semantics */
+			return;
 		}
 	}
 	/* shrinking: update accounting only, don't reclaim pages yet --
@@ -144,7 +136,17 @@ static void sys_mmap2(struct regs *r) {
 	unsigned int prot = r->edx;
 	unsigned int flags = r->esi;
 
-	unsigned int len = page_round_up(length);
+	/* Real Linux returns EINVAL for a zero-length mmap -- see
+	 * syscall_common.h's own header for why this specific check
+	 * matters (riscv64's own sys_mmap already had it; this file
+	 * didn't, until compared side by side to build the shared
+	 * version this now calls). */
+	if (length == 0) {
+		r->eax = (unsigned int)-EINVAL;
+		return;
+	}
+
+	unsigned int len = (unsigned int)syscall_page_round_up(length);
 
 	if ((flags & MAP_FIXED) && prot == PROT_NONE) {
 		/* musl's TLS/stack guard-page reservation: reserve the range
@@ -162,43 +164,22 @@ static void sys_mmap2(struct regs *r) {
 		next_mmap_addr += len;
 	}
 
-	for (unsigned int va = base; va < base + len; va += PAGE_SIZE) {
-		unsigned int phys = pmm_alloc_page();
-		if (!phys) {
-			r->eax = (unsigned int)-ENOMEM;
-			return;
-		}
-		paging_map_page(va, phys, PTE_PRESENT | PTE_WRITABLE | PTE_USER);
+	if (!syscall_grow_pages(base, base + len)) {
+		r->eax = (unsigned int)-ENOMEM;
+		return;
 	}
 	r->eax = base;
 }
 
 static void sys_munmap(struct regs *r) {
 	unsigned int addr = r->ebx;
-	unsigned int len = page_round_up(r->ecx);
-	for (unsigned int va = addr; va < addr + len; va += PAGE_SIZE) {
-		unsigned int phys = paging_get_phys(va);
-		if (phys) {
-			paging_map_page(va, 0, 0); /* clear PTE_PRESENT */
-			pmm_free_page(phys & ~0xFFFu);
-		}
-	}
+	unsigned int len = (unsigned int)syscall_page_round_up(r->ecx);
+	syscall_munmap_pages(addr, len);
 	r->eax = 0;
 }
 
-#define TIOCGWINSZ 0x5413
-
 static void sys_ioctl(struct regs *r) {
-	unsigned int fd = r->ebx;
-	unsigned int req = r->ecx;
-	if ((fd == 1 || fd == 2) && req == TIOCGWINSZ) {
-		/* honest answer: there's no real tty layer yet (P7), and our
-		 * fd 1/2 is a serial line, not a terminal -- ENOTTY is what a
-		 * non-tty stdout genuinely returns here on real Linux too. */
-		r->eax = (unsigned int)-ENOTTY;
-		return;
-	}
-	r->eax = (unsigned int)-EINVAL;
+	r->eax = (unsigned int)syscall_ioctl_check(r->ebx, r->ecx);
 }
 
 /* struct user_desc, Linux's real layout (see docs/kernel-p5-findings.md

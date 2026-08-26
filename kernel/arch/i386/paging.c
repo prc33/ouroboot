@@ -14,9 +14,9 @@
  * (copying between address spaces, etc), even once userspace pages
  * stop being identity-mapped 1:1 with their virtual addresses. */
 #include "kernel.h"
-#include "arch/idt.h"
-#include "pmm.h"
-#include "paging.h"
+#include "idt.h"
+#include "mm/pmm.h"
+#include "mm/paging.h"
 
 #define ENTRIES 1024
 #define MAX_TABLES 32 /* 32 * 4MB = 128MB, matches pmm's MAX_MEMORY_MB */
@@ -125,7 +125,7 @@ static void page_fault_handler(struct regs *r) {
 		/* Preserve PTE_USER from the pre-copy PTE (still in
 		 * table[pt_idx], not yet overwritten) rather than hardcoding
 		 * just PRESENT|WRITABLE -- mirrors a real bug found and fixed
-		 * on the riscv64 side (mm/riscv64_paging.c's page_fault_handler,
+		 * on the riscv64 side (arch/risc/riscv64_paging.c's page_fault_handler,
 		 * see its comment) via a real fork()+wait4() test: the only
 		 * COW exercised on i386 so far is kmain.c's own run_cow_test,
 		 * entirely kernel-only pages with no PTE_USER to begin with,

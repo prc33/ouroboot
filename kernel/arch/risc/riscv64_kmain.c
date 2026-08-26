@@ -1,6 +1,6 @@
 #include "kernel.h"
-#include "arch/riscv64_trap.h"
-#include "arch/riscv64_memmap.h"
+#include "riscv64_trap.h"
+#include "riscv64_memmap.h"
 #include "mm/pmm.h"
 #include "mm/paging.h"
 #include "mm/elf.h"
@@ -25,7 +25,7 @@ static void breakpoint_handler(struct regs *r) {
 
 /* Regression test for a real bug (mm/pmm.h's pmm_reserve_range(), see
  * its own comment): pmm_init() never reserved
- * arch/riscv64_memmap.h's hardcoded scratch region (boot stack, trap
+ * arch/risc/riscv64_memmap.h's hardcoded scratch region (boot stack, trap
  * dispatch pointer, trapframe, trap stack), so pmm_alloc_page() could
  * -- and, once enough allocations happened, did -- hand out a page
  * underneath the kernel's own currently-running boot stack. Directly
@@ -112,7 +112,7 @@ void kmain(unsigned long hartid, unsigned long dtb) {
 	}
 
 	pmm_init((unsigned int)RV64_MEM_TOP, (unsigned int)RV64_RAM_BASE);
-	/* arch/riscv64_memmap.h's hardcoded scratch region (boot stack,
+	/* arch/risc/riscv64_memmap.h's hardcoded scratch region (boot stack,
 	 * trap dispatch pointer, trapframe, trap stack) isn't part of the
 	 * kernel image pmm_init() already excludes -- see
 	 * mm/pmm.h's pmm_reserve_range() comment for why this is required,

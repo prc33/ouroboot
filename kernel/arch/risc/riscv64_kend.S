@@ -5,7 +5,7 @@
  * reordering) concatenates each section in exactly link-file order.
  * See kernel/Makefile: riscv64_kend.o is last in OBJS. Directives
  * only (.section/.globl/label) -- no instructions, so this needs no
- * cross-assembly at all, same as arch/kend.S. */
+ * cross-assembly at all, same as arch/i386/kend.S. */
 .section .bss
 .globl kernel_end
 kernel_end:

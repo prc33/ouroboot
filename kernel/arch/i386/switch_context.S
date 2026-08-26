@@ -6,7 +6,7 @@
  * stack's saved return address points: either back into a previous
  * switch_context call site inside that task (normal resume), or at a
  * task's entry trampoline the very first time it runs (see
- * task_init's hand-built initial stack in sched/task.c). */
+ * task_init's hand-built initial stack in arch/i386/task.c). */
 .globl switch_context
 switch_context:
 	movl 4(%esp), %eax   /* old_esp_store */

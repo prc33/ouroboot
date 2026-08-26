@@ -3,7 +3,7 @@
  * paging_new_addrspace/paging_activate), its own kernel stack, and a
  * saved trapframe restored via the architecture's own trap-return
  * mechanism (process_arch_activate_and_restore() -- see this file's
- * own "arch seam" comment in process.h) -- see arch/riscv64_trap_entry.S's
+ * own "arch seam" comment in process.h) -- see arch/risc/riscv64_trap_entry.S's
  * own comment for why unifying "trap stack" and "process kernel
  * stack" is what makes a process able to genuinely block mid-syscall
  * (this checkpoint's SYS_sched_yield) and be resumed later exactly
@@ -15,19 +15,19 @@
  * measurement. The genuinely riscv64-specific ~6% (struct regs's own
  * layout, CSR/SSTATUS bits, the trap-return mechanism, the hand-built
  * initial-kernel-stack-frame convention switch_context() expects) now
- * lives in arch/riscv64_process.c instead, behind the small
+ * lives in arch/risc/riscv64_process.c instead, behind the small
  * process_arch_*() interface declared in process.h. This file only
  * ever touches `struct regs` opaquely (as a pointer to snapshot/pass
  * along), never a named field of it.
  *
  * Two distinct "kernel-side execution" mechanisms coexist here, both
- * ultimately switch_context() (sched/riscv64_switch_context.S),
+ * ultimately switch_context() (arch/risc/riscv64_switch_context.S),
  * unchanged from P4's task scheduler -- it's a generic "swap callee-
  * saved regs + sp, ret" coroutine primitive that's never cared what
  * call chain it's swapping:
  *   1. A process being dispatched *for the first time*: its
  *      kernel_sp is a hand-built initial frame (same technique as
- *      sched/riscv64_task.c's task_init) whose `ra` is
+ *      arch/risc/riscv64_task.c's task_init) whose `ra` is
  *      process_arch_trampoline -- switch_context's `ret` jumps
  *      straight there, which activates the process's address space,
  *      seeds the global trapframe from its saved user_regs, and falls
@@ -63,7 +63,7 @@ static struct process *current_process;
 static int next_pid = 1;
 static int process_mode = 0;
 
-/* For arch/riscv64_process.c's own process_arch_trampoline() -- see
+/* For arch/risc/riscv64_process.c's own process_arch_trampoline() -- see
  * process.h's own comment on why that reads this rather than taking a
  * parameter. */
 struct process *process_get_current(void) {
@@ -214,7 +214,7 @@ struct process *process_create_from_elf(const unsigned char *elf_data, unsigned 
 }
 
 /* Cooperative round-robin, starting the search just after whichever
- * process is current -- same shape as sched/riscv64_task.c's
+ * process is current -- same shape as arch/risc/riscv64_task.c's
  * task_yield, generalized from a fixed 2 slots to MAX_PROCESSES. A
  * no-op (returns immediately, doesn't even touch switch_context) if
  * this process is the only RUNNABLE one, which matters here in a way
@@ -255,7 +255,7 @@ void process_schedule(void) {
  * process left) -- kernel/test/riscv64_checkpoints.c sets this to
  * chain into the next checkpoint's own test (e.g. checkpoint 6's
  * sched_yield test handing off to checkpoint 7's fork test) the same
- * way arch/riscv64_syscall.c's own pre-process-exit hook chains
+ * way arch/risc/riscv64_syscall.c's own pre-process-exit hook chains
  * P4->P5 checkpoint 1->P5 checkpoint 2, before there's a process table
  * to drain at all. A hook is expected to create new processes and call
  * process_run() again (or not return at all, if it halts on its own);
@@ -381,7 +381,7 @@ void process_set_current_cwd(const char *path) {
 
 /* checkpoint 7: real fork(), via SYS_clone -- see process.h's own
  * comment for why clone() rather than a dedicated fork syscall, and
- * arch/riscv64_syscall.c for the narrow flags check that gates
+ * arch/risc/riscv64_syscall.c for the narrow flags check that gates
  * getting here at all.
  *
  * The [lo,hi) ranges cloned below are a real, deliberate
@@ -392,7 +392,7 @@ void process_set_current_cwd(const char *path) {
  * every process is known to actually use -- 16MB from 0, comfortably
  * covering any of this kernel's real ELF payloads' code/data/BSS; the
  * process's actual mapped stack at 0xB0000000; and 1MB of
- * arch/riscv64_syscall.c's own mmap arena
+ * arch/risc/riscv64_syscall.c's own mmap arena
  * (MMAP_BASE, same value duplicated here rather than shared via a
  * header -- matches this function's existing "each fixed window
  * hardcoded where it's used" style).
@@ -415,7 +415,7 @@ void process_set_current_cwd(const char *path) {
  * yet" caveat elsewhere in this kernel. */
 #define FORK_CLONE_LO 0x0UL
 #define FORK_CLONE_HI 0x1000000UL   /* 16MB */
-#define FORK_MMAP_LO 0x60000000UL  /* arch/riscv64_syscall.c's MMAP_BASE */
+#define FORK_MMAP_LO 0x60000000UL  /* arch/risc/riscv64_syscall.c's MMAP_BASE */
 #define FORK_MMAP_HI 0x60100000UL  /* 1MB -- comfortably past what any real fork()+mmap() test here actually uses */
 
 int process_fork(struct regs *r) {
@@ -451,7 +451,7 @@ int process_fork(struct regs *r) {
 		/* field-by-field, not a struct assignment -- TCC's codegen
 		 * would ask for memmove() for that, which this freestanding
 		 * kernel has never linked (same reason as
-		 * arch/riscv64_process.c's own copy_regs()). */
+		 * arch/risc/riscv64_process.c's own copy_regs()). */
 		child->fds[fd].used = parent->fds[fd].used;
 		child->fds[fd].data = parent->fds[fd].data;
 		child->fds[fd].size = parent->fds[fd].size;
@@ -479,7 +479,7 @@ int process_fork(struct regs *r) {
 
 	/* Child resumes exactly where the parent's fork() call returns,
 	 * with a0=0 ("you are the child"); see
-	 * arch/riscv64_process.c's process_arch_fork_child() for how the
+	 * arch/risc/riscv64_process.c's process_arch_fork_child() for how the
 	 * trapframe snapshot is taken. */
 	process_arch_fork_child(child, r);
 	process_arch_kstack_frame_init(child);
@@ -569,7 +569,7 @@ void process_fd_set(int index, const struct fd_entry *src) {
 /* checkpoint 12: real dup2()/dup3() onto fd 0/1/2 -- see process.h's
  * own comment on stdio_override for why these exist at all instead of
  * just using fds[]. `fd` must be 0/1/2; out-of-range is a caller bug
- * (arch/riscv64_syscall.c's sys_dup3/sys_read/sys_write/sys_close are
+ * (arch/risc/riscv64_syscall.c's sys_dup3/sys_read/sys_write/sys_close are
  * the only callers, and they all check first), not something these
  * bother reporting. */
 /* current_process is NULL until a real process has actually been
@@ -623,7 +623,7 @@ int process_execve(struct regs *r, const char *path, char **argv, char **envp) {
 	/* checkpoint 12: a dynamically written file (mm/ramfs.c's own
 	 * writable files -- see its header comment) takes priority over
 	 * the fixed table here too, same reasoning as
-	 * arch/riscv64_syscall.c's sys_openat/sys_newfstatat -- this is
+	 * arch/risc/riscv64_syscall.c's sys_openat/sys_newfstatat -- this is
 	 * what actually lets a freshly `tcc -o out.elf`'d binary be *run*,
 	 * not just written: self-hosting.md's exit bar needs both, not
 	 * just the write half. */
@@ -683,7 +683,7 @@ int process_execve(struct regs *r, const char *path, char **argv, char **envp) {
 	 * pages (code/data/stack of whatever was running before) are
 	 * simply never freed. Documented leak, not an oversight: this
 	 * kernel has no "tear down an address space" walk yet (same
-	 * "no reclaim yet" simplification as arch/riscv64_syscall.c's
+	 * "no reclaim yet" simplification as arch/risc/riscv64_syscall.c's
 	 * sys_brk shrink path), and every process in this checkpoint's
 	 * tests execve()s at most once. */
 	p->root_table = new_root;

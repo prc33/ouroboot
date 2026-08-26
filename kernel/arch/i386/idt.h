@@ -1,7 +1,7 @@
 #ifndef IDT_H
 #define IDT_H
 
-/* Matches exactly what arch/isr_stubs.S pushes, low address to high.
+/* Matches exactly what arch/i386/isr_stubs.S pushes, low address to high.
  * Four segment registers are saved individually (ds, es, fs, gs), not
  * collapsed into one shared value -- musl's TLS setup (set_thread_area)
  * deliberately makes %gs point at a different selector than %ds/%es/%fs,

@@ -1,4 +1,4 @@
-/* Minimal 16550 UART driver, MMIO instead of drivers/serial.c's port
+/* Minimal 16550 UART driver, MMIO instead of arch/i386/serial.c's port
  * I/O -- QEMU's riscv64 `virt` machine puts a 16550-compatible UART
  * at physical 0x10000000 (confirmed empirically -- see
  * docs/riscv-port-findings.md), byte-addressed, same register layout
@@ -32,7 +32,7 @@ static int transmit_empty(void) {
 }
 
 /* checkpoint 8: RX support, for real blocking stdin reads
- * (arch/riscv64_syscall.c's sys_read fd==0 path) -- LSR bit 0 (Data
+ * (arch/risc/riscv64_syscall.c's sys_read fd==0 path) -- LSR bit 0 (Data
  * Ready) same register transmit_empty() already reads, bit 5 there
  * instead of bit 0 here. Polled, same as transmit_empty()/serial_putc
  * -- IRQs are still disabled (serial_init's own comment), consistent
