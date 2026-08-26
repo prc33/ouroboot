@@ -83,11 +83,16 @@ struct process {
 
 void process_init(void);
 
-/* Creates a process from a real ELF already sitting in memory (same
- * "embedded as static data, no filesystem yet" simplification as
- * mm/elf.c/riscv64_kmain.c's run_elf_test) in its own fresh address
- * space, with argv = {arg0, NULL}. Returns 0 on failure (table full,
- * out of memory, bad ELF). */
+/* Creates a process from a real ELF (an initrd-loaded ramfs file, or
+ * kernel/test/riscv64_checkpoints.c's own one-shot payloads) in its
+ * own fresh address space, with the given real argv (NUL-terminated
+ * strings, all already kernel-resident -- see
+ * sched/riscv64_process.c's build_user_stack() for why). Returns 0 on
+ * failure (table full, out of memory, bad ELF). */
+struct process *process_create_from_elf_argv(const unsigned char *elf_data, unsigned long elf_size, char *const argv[], int argc);
+
+/* Single-arg0 convenience wrapper (argv = {arg0, NULL}) -- see
+ * sched/riscv64_process.c's own comment. */
 struct process *process_create_from_elf(const unsigned char *elf_data, unsigned long elf_size, const char *arg0);
 
 /* Cooperative round-robin over every RUNNABLE process, same technique

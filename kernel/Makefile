@@ -390,11 +390,13 @@ test-initrd-wasm: kernel.elf initrd.tar
 # Full closure test: build a riscv64 TCC with this repository's TCC, place
 # that compiler, its own sources, and its musl build environment in the real
 # tar initrd, then have it compile and link TCC again inside this kernel.
-# Only needs BusyBox and the "ash -i" wrapper from the ordinary
-# fixture set -- kernel.elf boots straight to an interactive shell now
-# (no checkpoint chain to feed proc_test/proc_fork_test/etc to first),
-# so test/build-selfhost-initrd.sh no longer packages the rest of them.
-selfhost-initrd tcc-initrd: user_test/busybox_riscv64.elf user_test/interactive_test_riscv64.elf
+# Only needs BusyBox from the ordinary fixture set -- kmain.c's product
+# boot execve()s real argv {"ash","-i"} straight against it (no
+# separate wrapper ELF needed any more), and kernel.elf boots straight
+# to an interactive shell (no checkpoint chain to feed proc_test/
+# proc_fork_test/etc to first), so test/build-selfhost-initrd.sh no
+# longer packages the rest of the P4-P10 fixture set either.
+selfhost-initrd tcc-initrd: user_test/busybox_riscv64.elf
 	$(MAKE) -C ../compiler clean
 	$(MAKE) -C ../compiler TARGET=riscv64 stage1
 	sh test/build-selfhost-initrd.sh .. $@.tar

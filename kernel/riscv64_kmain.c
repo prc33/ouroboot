@@ -142,10 +142,19 @@ void kmain(unsigned long hartid, unsigned long dtb) {
 #else
 	syscall_init();
 	process_init();
-	struct ramfs_dynamic_file *init_elf = required_initrd_file("interactive_test");
-	struct process *init = init_elf ? process_create_from_elf(init_elf->data, init_elf->size, "init") : 0;
+	/* checkpoint 15: real argv (argc=2, {"ash","-i"}) straight against
+	 * BusyBox's own ELF -- no separate wrapper binary needed (there
+	 * used to be one, "interactive_test", whose only job was
+	 * execve("ash",["ash","-i"]), because process_create_from_elf()'s
+	 * older single-arg0 stack builder couldn't carry a second argv
+	 * element). See sched/riscv64_process.c's
+	 * process_create_from_elf_argv() and docs/kernel-complexity-review.md
+	 * section 3. */
+	struct ramfs_dynamic_file *busybox_elf = required_initrd_file("busybox");
+	char *ash_argv[] = { "ash", "-i", 0 };
+	struct process *init = busybox_elf ? process_create_from_elf_argv(busybox_elf->data, busybox_elf->size, ash_argv, 2) : 0;
 	if (!init) {
-		kprintf("FATAL: process_create_from_elf failed\n");
+		kprintf("FATAL: process_create_from_elf_argv failed\n");
 		goto halt;
 	}
 	kprintf("process: init process created (pid %d)\n", init->pid);

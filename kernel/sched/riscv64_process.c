@@ -128,7 +128,92 @@ static void process_trampoline(void) {
 	for (;;) __builtin_riscv_wfi();
 }
 
-struct process *process_create_from_elf(const unsigned char *elf_data, unsigned long elf_size, const char *arg0) {
+/* checkpoint 15: the single canonical user-stack/argv/envp/auxv
+ * builder -- process_create_from_elf() and process_execve() used to
+ * each hand-roll their own nearly-identical version (see
+ * docs/kernel-complexity-review.md section 3). This is process_execve()'s
+ * own version, kept as the one canonical implementation rather than
+ * process_create_from_elf()'s older one: it's the one that's actually
+ * been stress-tested end to end -- every self-hosted TCC compile
+ * (kernel/test/selfhost.sh) runs its own deeply recursive parser
+ * through exactly this stack, including its lazy growth
+ * (process_handle_stack_fault(), mm/riscv64_paging.c) down to
+ * USER_STACK_LIMIT.
+ *
+ * kernel/test/riscv64_checkpoints.c's own run_elf_test() deliberately
+ * stays unconverged -- see that file's own comment for why (it runs
+ * before there's a process table at all, so there's no `struct
+ * process` for this to write into).
+ *
+ * Maps and zeroes EXECVE_STACK_PAGES pages at the top of `p`'s address
+ * space, records the committed range, writes `argc` NUL-terminated
+ * strings from `argv` into the top STRDATA_SIZE bytes, and the
+ * argc/argv/envp/auxv pointer block (envp always empty, one real
+ * auxv entry -- AT_PAGESZ, which musl's __libc_start_main has no
+ * fallback for) into PTRBLOCK_SIZE bytes below that. Returns the
+ * resulting sp. Every `argv[i]` must already be kernel-resident by the
+ * time this is called -- process_execve()'s own caller is responsible
+ * for snapshotting real (user-space) argv strings first, since this
+ * function runs *after* the new address space is already active. */
+#define EXECVE_MAX_ARGV 20
+#define EXECVE_ARG_MAX 128
+#define STRDATA_SIZE 2560
+#define PTRBLOCK_SIZE 512
+#define EXECVE_STACK_PAGES USER_STACK_INITIAL_PAGES
+
+static unsigned long build_user_stack(struct process *p, char *const argv[], int argc) {
+	unsigned long stack_pages = EXECVE_STACK_PAGES;
+	unsigned long stack_top = USER_STACK_TOP;
+	unsigned long stack_va = stack_top - stack_pages * PAGE_SIZE;
+	for (unsigned long i = 0; i < stack_pages; i++) {
+		unsigned long phys = pmm_alloc_page();
+		/* pmm_alloc_page() does not clear memory; user stacks must not
+		 * expose contents left by an earlier allocation. */
+		unsigned long *words = (unsigned long *)phys;
+		for (unsigned int w = 0; w < PAGE_SIZE / sizeof(unsigned long); w++)
+			words[w] = 0;
+		paging_map_page(stack_va + i * PAGE_SIZE, phys, PTE_PRESENT | PTE_WRITABLE | PTE_USER);
+	}
+	p->user_stack_lo = stack_va;
+	p->user_stack_hi = stack_top;
+	p->user_stack_limit = USER_STACK_LIMIT;
+	p->user_brk = USER_BRK_BASE;
+	p->user_mmap_next = USER_MMAP_BASE;
+
+	unsigned char *strp = (unsigned char *)(stack_top - STRDATA_SIZE);
+	unsigned long argv_ptrs[EXECVE_MAX_ARGV];
+	for (int a = 0; a < argc; a++) {
+		int len = 0;
+		while (argv[a][len])
+			len++;
+		for (int i = 0; i <= len; i++) /* <= to include the NUL */
+			strp[i] = argv[a][i];
+		argv_ptrs[a] = (unsigned long)strp;
+		strp += len + 1;
+	}
+
+	unsigned long *sp = (unsigned long *)(stack_top - STRDATA_SIZE - PTRBLOCK_SIZE);
+	int idx = 0;
+	sp[idx++] = argc;
+	for (int a = 0; a < argc; a++)
+		sp[idx++] = argv_ptrs[a];
+	sp[idx++] = 0; /* argv[] NULL terminator */
+	sp[idx++] = 0; /* envp[0] = NULL */
+	sp[idx++] = 6; /* auxv[0].a_type = AT_PAGESZ */
+	sp[idx++] = PAGE_SIZE;
+	sp[idx++] = 0; /* auxv[1] = AT_NULL */
+	sp[idx++] = 0;
+	return (unsigned long)sp;
+}
+
+/* Real argv[] variant -- riscv64_kmain.c's product boot uses this
+ * directly (argv={"ash","-i",0}), execve()ing straight into BusyBox
+ * ash rather than through a separate tiny wrapper ELF whose only job
+ * was supplying that second argument (process_create_from_elf()'s
+ * single-arg0 signature below couldn't carry it). `argv` must already
+ * be kernel-resident (see build_user_stack()'s own comment) -- true of
+ * every caller today, all of which pass plain string literals. */
+struct process *process_create_from_elf_argv(const unsigned char *elf_data, unsigned long elf_size, char *const argv[], int argc) {
 	struct process *p = alloc_slot();
 	if (!p)
 		return 0;
@@ -143,55 +228,15 @@ struct process *process_create_from_elf(const unsigned char *elf_data, unsigned 
 		return 0;
 	}
 
-	/* User stack -- same layout/rationale as
-	 * kernel/test/riscv64_checkpoints.c's own run_elf_test
-	 * (argc=1, argv={arg0,NULL}, envp empty, one real
-	 * auxv entry: AT_PAGESZ, which musl's __libc_start_main has no
-	 * fallback for -- see that function's comment for why it's not
-	 * optional). Each process gets its own copy at the same virtual
-	 * address -- safe because it's a *different* address space now,
-	 * unlike P5's single shared one. Only the top two pages are committed;
-	 * the page-fault handler grows it downward within a 16MB reservation. */
-	unsigned long stack_pages = USER_STACK_INITIAL_PAGES;
-	unsigned long stack_top = USER_STACK_TOP;
-	unsigned long stack_va = stack_top - stack_pages * PAGE_SIZE;
-	for (unsigned long i = 0; i < stack_pages; i++) {
-		unsigned long phys = pmm_alloc_page();
-		unsigned long *words = (unsigned long *)phys;
-		for (unsigned int w = 0; w < PAGE_SIZE / sizeof(unsigned long); w++)
-			words[w] = 0;
-		paging_map_page(stack_va + i * PAGE_SIZE, phys, PTE_PRESENT | PTE_WRITABLE | PTE_USER);
-	}
-	p->user_stack_lo = stack_va;
-	p->user_stack_hi = stack_top;
-	p->user_stack_limit = USER_STACK_LIMIT;
-	p->user_brk = USER_BRK_BASE;
-	p->user_mmap_next = USER_MMAP_BASE;
 	p->cwd[0] = '/';
 	p->cwd[1] = 0;
 
-	unsigned char *page = (unsigned char *)stack_top;
-	char *argv0 = (char *)(page - 64);
-	int i = 0;
-	for (; arg0[i]; i++)
-		argv0[i] = arg0[i];
-	argv0[i] = 0;
-
-	unsigned long *sp = (unsigned long *)(page - 128);
-	sp[0] = 1;                    /* argc */
-	sp[1] = (unsigned long)argv0; /* argv[0] */
-	sp[2] = 0;                    /* argv[1] = NULL */
-	sp[3] = 0;                    /* envp[0] = NULL */
-	sp[4] = 6;                    /* auxv[0].a_type = AT_PAGESZ */
-	sp[5] = PAGE_SIZE;             /* auxv[0].a_val */
-	sp[6] = 0;                    /* auxv[1].a_type = AT_NULL */
-	sp[7] = 0;
+	unsigned long sp = build_user_stack(p, argv, argc);
 
 	/* Saved U-mode context this process starts at -- process_trampoline
 	 * seeds the real trapframe from this the first time it runs.
 	 * Every GPR except sp starts zeroed: a fresh process's ABI
-	 * contract only promises a valid sp and entry pc, matching
-	 * run_elf_test's own enter_usermode(entry, sp) call. */
+	 * contract only promises a valid sp and entry pc. */
 	struct regs *ur = &p->user_regs;
 	for (unsigned long *w = (unsigned long *)ur; w < (unsigned long *)(ur + 1); w++)
 		*w = 0;
@@ -244,6 +289,16 @@ struct process *process_create_from_elf(const unsigned char *elf_data, unsigned 
 
 	paging_activate(prev_root);
 	return p;
+}
+
+/* Single-arg0 convenience wrapper -- every current checkpoint-chain
+ * caller (kernel/test/riscv64_checkpoints.c's process_from_initrd())
+ * only ever needs argv={label,NULL} (proc_test_riscv64.c's own
+ * comment: it reads argv[0][0] as its printed label, "A"/"B"). Thin on
+ * purpose: the real work is process_create_from_elf_argv() above. */
+struct process *process_create_from_elf(const unsigned char *elf_data, unsigned long elf_size, const char *arg0) {
+	char *argv[] = { (char *)arg0, 0 };
+	return process_create_from_elf_argv(elf_data, elf_size, argv, 1);
 }
 
 /* Cooperative round-robin, starting the search just after whichever
@@ -663,20 +718,10 @@ void process_stdio_clear(int fd) {
 }
 
 /* checkpoint 8: real execve() -- see process.h's own comment for the
- * contract. Same "new address space, elf_load, hand-built stack"
- * shape as process_create_from_elf(), the two real differences being
- * (a) this replaces the *current* process's root_table instead of
- * creating a new process, and (b) the stack carries real caller-
- * supplied argv instead of a single fixed arg0. */
-/* Self-hosting needs the real TCC command line and a growable stack for its
- * recursive parser. The stack range and committed low-water mark are recorded
- * per process so ash can fork it correctly. */
-#define EXECVE_MAX_ARGV 20
-#define EXECVE_ARG_MAX 128
-#define STRDATA_SIZE 2560
-#define PTRBLOCK_SIZE 512
-#define EXECVE_STACK_PAGES USER_STACK_INITIAL_PAGES
-
+ * contract. Same "new address space, elf_load, build_user_stack()"
+ * shape as process_create_from_elf_argv() above, the one real
+ * difference being that this replaces the *current* process's
+ * root_table instead of creating a new process. */
 int process_execve(struct regs *r, const char *path, char **argv, char **envp) {
 	(void)envp; /* real environment support is future scope -- every
 	             * process in this kernel gets an empty one, same
@@ -731,54 +776,15 @@ int process_execve(struct regs *r, const char *path, char **argv, char **envp) {
 		return -1;
 	}
 
-	/* String data goes in the top
-	 * STRDATA_SIZE bytes, the argc/argv/envp/auxv pointer block in
-	 * PTRBLOCK_SIZE bytes below that -- both sized for
-	 * EXECVE_MAX_ARGV*EXECVE_ARG_MAX (2560 bytes worst case for
-	 * strings; argc+argv_ptrs+envp+auxv is at most 27 words = 216 bytes
-	 * for pointers). The initial two pages grow lazily down to
-	 * USER_STACK_LIMIT on user page faults. */
-	unsigned long stack_pages = EXECVE_STACK_PAGES;
-	unsigned long stack_top = USER_STACK_TOP;
-	unsigned long stack_va = stack_top - stack_pages * PAGE_SIZE;
-	for (unsigned long i = 0; i < stack_pages; i++) {
-		unsigned long phys = pmm_alloc_page();
-		/* pmm_alloc_page() does not clear memory; user stacks must not
-		 * expose contents left by an earlier allocation. */
-		unsigned long *p64 = (unsigned long *)phys;
-		for (unsigned int w = 0; w < PAGE_SIZE / sizeof(unsigned long); w++)
-			p64[w] = 0;
-		paging_map_page(stack_va + i * PAGE_SIZE, phys, PTE_PRESENT | PTE_WRITABLE | PTE_USER);
-	}
-	p->user_stack_lo = stack_va;
-	p->user_stack_hi = stack_top;
-	p->user_stack_limit = USER_STACK_LIMIT;
-	p->user_brk = USER_BRK_BASE;
-	p->user_mmap_next = USER_MMAP_BASE;
-
-	unsigned char *strp = (unsigned char *)(stack_top - STRDATA_SIZE);
-	unsigned long argv_ptrs[EXECVE_MAX_ARGV];
-	for (int a = 0; a < argc; a++) {
-		int len = 0;
-		while (argbuf[a][len])
-			len++;
-		for (int i = 0; i <= len; i++) /* <= to include the NUL */
-			strp[i] = argbuf[a][i];
-		argv_ptrs[a] = (unsigned long)strp;
-		strp += len + 1;
-	}
-
-	unsigned long *sp = (unsigned long *)(stack_top - STRDATA_SIZE - PTRBLOCK_SIZE);
-	int idx = 0;
-	sp[idx++] = argc;
+	/* argbuf's rows already are kernel-resident NUL-terminated strings
+	 * (just snapshotted above) -- build_user_stack() just needs an
+	 * actual array of pointers to them, not the 2D array itself (whose
+	 * row stride, EXECVE_ARG_MAX, isn't the pointer-array layout it
+	 * expects). */
+	char *argv_kernel[EXECVE_MAX_ARGV];
 	for (int a = 0; a < argc; a++)
-		sp[idx++] = argv_ptrs[a];
-	sp[idx++] = 0; /* argv[] NULL terminator */
-	sp[idx++] = 0; /* envp[0] = NULL */
-	sp[idx++] = 6; /* auxv[0].a_type = AT_PAGESZ */
-	sp[idx++] = PAGE_SIZE;
-	sp[idx++] = 0; /* auxv[1] = AT_NULL */
-	sp[idx++] = 0;
+		argv_kernel[a] = argbuf[a];
+	unsigned long sp = build_user_stack(p, argv_kernel, argc);
 
 	/* Replace this process's address space in place -- old physical
 	 * pages (code/data/stack of whatever was running before) are

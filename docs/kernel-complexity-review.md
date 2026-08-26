@@ -118,6 +118,29 @@ table row instead of a new function plus a hook rewire.
 
 ## 3. Three separate implementations of "build a user stack"
 
+> **Partially fixed 2026-08-26.** `process_create_from_elf()` and
+> `process_execve()` now share one implementation,
+> `sched/riscv64_process.c`'s `build_user_stack()` — kept as
+> `process_execve()`'s own version (the one stress-tested by every
+> self-hosted TCC compile), not `process_create_from_elf()`'s older
+> one. A new `process_create_from_elf_argv()` takes a real `argv[]`
+> (not just a single `arg0`); `process_create_from_elf()` is now a thin
+> wrapper over it. This also let `riscv64_kmain.c`'s product boot
+> `execve` real argv `{"ash","-i"}` straight against BusyBox, deleting
+> the `interactive_test` wrapper ELF's only reason to exist on that
+> path (it stays, unconverged, for
+> `kernel/test/riscv64_checkpoints.c`'s own `run_interactive_test`,
+> which does not use this path). `kernel/test/riscv64_checkpoints.c`'s
+> `run_elf_test()` deliberately stays the third, unconverged
+> implementation — see that file's own comment: it runs before
+> `process_init()` has ever been called, so there is no `struct
+> process` for a shared builder to write into. Converging it too would
+> mean either running the process subsystem earlier than that
+> checkpoint is meant to demonstrate, or generalizing the builder to
+> accept a null process — not worth it for a test whose entire point is
+> proving the loader and ring3 transition work before there's a
+> process table.
+
 The argc/argv/envp/auxv stack layout — the exact same AT_PAGESZ-carrying
 block, with the same 64/128-byte offset convention — is hand-built in
 three places:
