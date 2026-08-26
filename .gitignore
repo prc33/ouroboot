@@ -5,6 +5,7 @@
 tcc
 wasm32-tcc
 stage1/
+compiler/build/
 kernel.elf
 musl-i386/
 musl-riscv64/

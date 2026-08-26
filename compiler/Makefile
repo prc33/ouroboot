@@ -29,31 +29,33 @@ CC      ?= gcc
 CFLAGS  ?= -O2 -Wall -Wno-unused -fno-strict-aliasing -Wno-pointer-sign
 DEFS    = -DTCC_TARGET_$(shell echo $(TARGET) | tr a-z A-Z) \
           -DCONFIG_TRIPLET=\"$(TARGET)-linux-musl\"
-ifneq ($(TARGET),wasm32)
-DEFS    += -DCONFIG_TCC_ASM
-endif
 
 ifeq ($(TARGET),i386)
 BACKEND_SRCS = i386/i386-gen.c i386/i386-link.c i386/i386-asm.c \
-               i386/i386-asm.h i386/i386-pair.c i386/i386-tok.h
+               i386/i386-pair.c
 RUNTIME_SRCS = i386/alloca86.S
 else ifeq ($(TARGET),riscv64)
 BACKEND_SRCS = risc/riscv64-gen.c risc/riscv64-link.c risc/riscv64-asm.c
 RUNTIME_SRCS = risc/riscv64-softquad.c
 else ifeq ($(TARGET),wasm32)
-BACKEND_SRCS = wasm/wasm-gen.c wasm/wasm-link.c wasm/wasm-backend.h \
-               wasm/tccwasm.c
+BACKEND_SRCS = wasm/wasm-gen.c wasm/wasm-link.c wasm/tccwasm.c
 else
 $(error unsupported TARGET '$(TARGET)')
 endif
 
-.PHONY: all clean selfcheck stage1
+COMMON_SRCS = tcc.c libtcc.c tccpp.c tccgen.c tccelf.c tcctools.c
+ifneq ($(TARGET),wasm32)
+COMMON_SRCS += tccasm.c
+endif
+COMPILER_SRCS = $(COMMON_SRCS) $(BACKEND_SRCS)
+BUILD_DIR = build/$(TARGET)
+COMPILER_OBJS = $(addprefix $(BUILD_DIR)/,$(COMPILER_SRCS:.c=.o))
+DEPFILES = $(COMPILER_OBJS:.o=.d)
 
-# NOTE: both targets build to the same filename (./tcc) -- run
-# `make clean` before switching TARGET, or make will think the
-# stale binary from the other target is already up to date and skip
-# rebuilding it entirely (confirmed the hard way while verifying this
-# repo). A real gotcha, not a hypothetical one.
+# Compile each subsystem separately.  Target-specific directories prevent a
+# target switch from reusing objects built with another ABI's definitions.
+
+.PHONY: all clean selfcheck stage1 tcc wasm32-tcc libtcc1.a
 
 ifeq ($(TARGET),wasm32)
 all: wasm32-tcc
@@ -61,19 +63,20 @@ else
 all: tcc libtcc1.a
 endif
 
-# ONE_SOURCE mode (tcc.h defaults it to 1): tcc.c textually includes
-# libtcc.c, which includes tccpp.c/tccgen.c/tccelf.c/tccasm.c and the
-# target-specific *-gen.c/*-asm.c/*-link.c.
-# One file, one compile -- see docs/tcc-spike-findings.md for why this
-# replaced an earlier nine-file separate-compilation build that turned
-# out to be silently linking only one of its own objects.
-tcc: tcc.c tcc.h libtcc.c libtcc.h tccpp.c tccgen.c tccelf.c \
-     tccasm.c tcctools.c $(BACKEND_SRCS)
-	$(CC) $(CFLAGS) $(DEFS) -o $@ tcc.c -lm -lpthread -ldl
+$(BUILD_DIR)/compiler: $(COMPILER_OBJS)
+	$(CC) $(CFLAGS) -o $@ $(COMPILER_OBJS) -lm -lpthread -ldl
 
-wasm32-tcc: tcc.c tcc.h libtcc.c libtcc.h tccpp.c tccgen.c tccelf.c \
-     tccasm.c tcctools.c $(BACKEND_SRCS)
-	$(CC) $(CFLAGS) $(DEFS) -o $@ tcc.c -lm -lpthread -ldl
+tcc: $(BUILD_DIR)/compiler
+	cp $< $@
+
+wasm32-tcc: $(BUILD_DIR)/compiler
+	cp $< $@
+
+$(BUILD_DIR)/%.o: %.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(DEFS) -MMD -MP -c -o $@ $<
+
+-include $(DEPFILES)
 
 # --- runtime helper archive ---
 # i386: integer divide/shift helpers the ISA has no instruction for,
@@ -124,13 +127,17 @@ int main(void) {
 endef
 export SELFCHECK_VA_SRC
 
-stage1: tcc libtcc1.a
-	mkdir -p stage1
-	./tcc -B. -I. -I./include $(MUSLINC) -nostdinc $(DEFS) \
-		-c -o stage1/tcc.o tcc.c
+STAGE1_DIR = stage1/$(TARGET)
+STAGE1_OBJS = $(addprefix $(STAGE1_DIR)/,$(COMPILER_SRCS:.c=.o))
+
+$(STAGE1_DIR)/%.o: %.c tcc.h
+	@mkdir -p $(dir $@)
+	./tcc -B. -I. -I./include $(MUSLINC) -nostdinc $(DEFS) -c -o $@ $<
+
+stage1: tcc libtcc1.a $(STAGE1_OBJS)
 	./tcc -B. -static -nostdinc -nostdlib -o stage1/tcc \
 		$(MUSL)/lib/crt1.o $(MUSL)/lib/crti.o \
-		stage1/tcc.o \
+		$(STAGE1_OBJS) \
 		$(MUSLLIBC) libtcc1.a $(MUSL)/lib/crtn.o
 
 selfcheck: stage1
@@ -192,4 +199,4 @@ endif
 
 clean:
 	rm -f tcc wasm32-tcc lib/*.o i386/*.o risc/*.o libtcc1.a
-	rm -rf stage1
+	rm -rf build stage1

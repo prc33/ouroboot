@@ -8,4 +8,6 @@
 #define CONFIG_SYSROOT ""
 #define CONFIG_LDDIR "lib"
 #define CONFIG_USR_INCLUDE "/usr/include"
+#ifndef CONFIG_TRIPLET
 #define CONFIG_TRIPLET "riscv64-linux-musl"
+#endif

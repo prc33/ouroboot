@@ -1,5 +1,8 @@
 /* i386-only two-register implementation of 64-bit integers. */
 
+#define USING_GLOBALS
+#include "../tcc.h"
+
 /* expand 64bit on stack in two ints */
 ST_FUNC void lexpand(void)
 {
@@ -29,7 +32,7 @@ static void lbuild(int t)
     vpop();
 }
 
-static void i386_gv_dup_llong(int t)
+ST_FUNC void i386_gv_dup_llong(int t)
 {
     if (t & VT_BITFIELD) {
         gv(RC_INT);
@@ -49,7 +52,7 @@ static void i386_gv_dup_llong(int t)
     vswap();
 }
 
-static int i386_gen_cvt_i64(int dbt, int sbt, int ds, int ss)
+ST_FUNC int i386_gen_cvt_i64(int dbt, int sbt, int ds, int ss)
 {
     if (ds == 8) {
         if (sbt & VT_UNSIGNED) {
@@ -69,7 +72,7 @@ static int i386_gen_cvt_i64(int dbt, int sbt, int ds, int ss)
 }
 
 /* generate CPU independent (unsigned) long long operations */
-static void gen_opl(int op)
+ST_FUNC void gen_opl(int op)
 {
     int t, a, b, op1, c, i;
     int func;

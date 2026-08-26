@@ -225,11 +225,11 @@ static int is_compatible_unqualified_types(CType *type1, CType *type2);
 static inline int64_t expr_const64(void);
 static void vpush64(int ty, unsigned long long v);
 static void vpush(CType *type);
-static int gvtst(int inv, int t);
+ST_FUNC int gvtst(int inv, int t);
 static void gen_inline_functions(TCCState *s);
 static void free_inline_functions(TCCState *s);
 static void skip_or_save_block(TokenString **str);
-static void gv_dup(void);
+ST_FUNC void gv_dup(void);
 static int get_temp_local_var(int size,int align);
 static void clear_temp_local_var_list();
 static void cast_error(CType *st, CType *dt);
@@ -1230,7 +1230,7 @@ ST_FUNC void vpushv(SValue *v)
     *vtop = *v;
 }
 
-static void vdup(void)
+ST_FUNC void vdup(void)
 {
     vpushv(vtop);
 }
@@ -1303,7 +1303,7 @@ static void vset_VT_JMP(void)
 }
 
 /* Set CPU Flags, doesn't yet jump */
-static void gvtst_set(int inv, int t)
+ST_FUNC void gvtst_set(int inv, int t)
 {
     int *p;
 
@@ -1321,7 +1321,7 @@ static void gvtst_set(int inv, int t)
 /* Generate value test
  *
  * Generate a test for any value (jump, comparison and integers) */
-static int gvtst(int inv, int t)
+ST_FUNC int gvtst(int inv, int t)
 {
     int op, x, u;
 
@@ -2193,7 +2193,7 @@ ST_FUNC void gv2(int rc1, int rc2)
 
 /* convert stack entry to register and duplicate its value in another
    register */
-static void gv_dup(void)
+ST_FUNC void gv_dup(void)
 {
     int t, rc, r;
 

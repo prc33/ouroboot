@@ -18,33 +18,6 @@
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
-#if !defined ONE_SOURCE || ONE_SOURCE
-#include "tccpp.c"
-#include "tccgen.c"
-#ifdef TCC_TARGET_I386
-#include "i386/i386-pair.c"
-#endif
-#include "tccelf.c"
-#ifdef TCC_TARGET_I386
-#include "i386/i386-gen.c"
-#include "i386/i386-link.c"
-#include "i386/i386-asm.c"
-#elif defined(TCC_TARGET_RISCV64)
-#include "risc/riscv64-gen.c"
-#include "risc/riscv64-link.c"
-#include "risc/riscv64-asm.c"
-#elif defined(TCC_TARGET_WASM32)
-#include "wasm/wasm-gen.c"
-#include "wasm/wasm-link.c"
-#include "wasm/tccwasm.c"
-#else
-#error unknown target
-#endif
-#ifdef CONFIG_TCC_ASM
-#include "tccasm.c"
-#endif
-#endif /* ONE_SOURCE */
-
 #include "tcc.h"
 
 /********************************************************/

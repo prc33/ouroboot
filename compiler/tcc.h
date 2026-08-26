@@ -195,22 +195,12 @@ extern long double strtold (const char *__nptr, char **__endptr);
 # define PUB_FUNC
 #endif
 
-#ifndef ONE_SOURCE
-# define ONE_SOURCE 1
-#endif
-
 /* support using libtcc from threads */
 #define CONFIG_TCC_SEMLOCK
 
-#if ONE_SOURCE
-#define ST_INLN static inline
-#define ST_FUNC static
-#define ST_DATA static
-#else
 #define ST_INLN
 #define ST_FUNC
 #define ST_DATA extern
-#endif
 
 #ifdef TCC_PROFILE /* profile all functions */
 # define static
@@ -1083,6 +1073,8 @@ ST_FUNC void tcc_add_pragma_libs(TCCState *s1);
 PUB_FUNC int tcc_add_library_err(TCCState *s, const char *f);
 PUB_FUNC void tcc_print_stats(TCCState *s, unsigned total_time);
 PUB_FUNC int tcc_parse_args(TCCState *s, int *argc, char ***argv, int optind);
+ST_FUNC int tcc_tool_ar(TCCState *s, int argc, char **argv);
+ST_FUNC void gen_makedeps(TCCState *s, const char *target, const char *filename);
 
 /* tcc_parse_args return codes: */
 #define OPT_HELP 1
@@ -1401,10 +1393,13 @@ static inline void add64le(unsigned char *p, int64_t x) {
 /* ------------ i386-gen.c ------------ */
 #ifdef TCC_TARGET_I386
 ST_FUNC void lexpand(void);
-static void lbuild(int t);
-static void i386_gv_dup_llong(int t);
-static int i386_gen_cvt_i64(int dbt, int sbt, int ds, int ss);
-static void gen_opl(int op);
+ST_FUNC void i386_gv_dup_llong(int t);
+ST_FUNC int i386_gen_cvt_i64(int dbt, int sbt, int ds, int ss);
+ST_FUNC void gen_opl(int op);
+ST_FUNC void vdup(void);
+ST_FUNC void gv_dup(void);
+ST_FUNC int gvtst(int inv, int t);
+ST_FUNC void gvtst_set(int inv, int t);
 #endif
 #if defined TCC_TARGET_I386
 ST_FUNC void g(int c);
@@ -1469,11 +1464,7 @@ ST_FUNC void asm_clobber(uint8_t *clobber_regs, const char *str);
 
 /********************************************************/
 #undef ST_DATA
-#if ONE_SOURCE
-#define ST_DATA static
-#else
 #define ST_DATA
-#endif
 /********************************************************/
 
 #define text_section        TCC_STATE_VAR(text_section)

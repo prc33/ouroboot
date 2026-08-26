@@ -119,8 +119,8 @@ typedef struct WasmFuncIR {
     int cap_ops;
 } WasmFuncIR;
 
-ST_DATA WasmFuncIR *tcc_wasm_funcs;
-ST_DATA int tcc_wasm_nb_funcs;
+extern WasmFuncIR *tcc_wasm_funcs;
+extern int tcc_wasm_nb_funcs;
 
 ST_FUNC void tcc_wasm_reset(void);
 

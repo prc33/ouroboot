@@ -67,8 +67,8 @@ and the command-line/linking features those workflows need.
 
 - Remove compile-time developer tracing blocks that have no supported build
   mode, or expose one consistent tracing mechanism instead of many macros.
-- Collapse `ONE_SOURCE`/separate-compilation remnants if the repository will
-  permanently use the unity build.
+- Keep the separate-compilation build: it now gives each source file one
+  owner and keeps target objects isolated under `compiler/build/<target>`.
 - Remove stale compatibility comments and declarations left after deleted
   subsystems; several currently describe history rather than contracts.
 - Generate repetitive token/relocation tables from small declarative lists
