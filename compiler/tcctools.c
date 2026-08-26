@@ -30,7 +30,6 @@
 
 #include "tcc.h"
 
-//#define ARMAG  "!<arch>\n"
 #define ARFMAG "`\n"
 
 typedef struct {
@@ -276,68 +275,6 @@ the_end:
         fclose(fo), remove(tfile);
     return ret;
 }
-
-/* -------------------------------------------------------------- */
-/*
- * tiny_impdef creates an export definition file (.def) from a dll
- * on MS-Windows. Usage: tiny_impdef library.dll [-o outputfile]"
- *
- *  Copyright (c) 2005,2007 grischka
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
- */
-
-/* -------------------------------------------------------------- */
-/*
- *  TCC - Tiny C Compiler
- *
- *  Copyright (c) 2001-2004 Fabrice Bellard
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
-
-/* Mainline: re-execute the i386/x86_64 cross-compilers with
- * `tcc -m32`/`-m64` (a single binary dispatching to a sibling
- * i386-tcc/x86_64-tcc via execvp()). This project never builds
- * that dispatching binary -- exactly one fixed target per build,
- * chosen at build time by `make TARGET=i386` or `TARGET=riscv64`
- * (kernel/Makefile's own top comment) -- so `-m32`/`-m64` are
- * always unimplemented here, unconditionally, the same stub every
- * target gets rather than a real execvp()-based implementation for
- * i386/x86_64 specifically (mainline's own version of this function
- * for those two targets -- since removed, along with the
- * execvp() dependency it needed). */
-ST_FUNC void tcc_tool_cross(TCCState *s1, char **argv, int option)
-{
-    tcc_error("-m%d not implemented.", option);
-}
-/* -------------------------------------------------------------- */
-/* enable commandline wildcard expansion (tcc -o x.exe *.c) */
-
 
 /* -------------------------------------------------------------- */
 /* generate xxx.d file */

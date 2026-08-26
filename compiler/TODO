@@ -92,9 +92,6 @@ Fixed (probably):
 - gcc '-E' option.
 - #include_next support for /usr/include/limits ?
 - function pointers/lvalues in ? : (linux kernel net/core/dev.c)
-- win32: add __stdcall, check GetModuleHandle for dlls.
 - macro substitution with nested definitions (ShangHongzhang)
-- with "-run" and libtcc, a PLT is now built.
 - '-E' option was improved
 - packed attribute is now supported
-- ARM and ARM64 code generators have been added.

@@ -221,7 +221,7 @@ void relocate(TCCState *s1, ElfW_Rel *rel, int type, unsigned char *ptr, addr_t 
             return;
         case R_386_COPY:
             /* This relocation must copy initialized data from the library
-            to the program .bss segment. Currently made like for ARM
+            to the program .bss segment.
             (to remove noise of default case). Is this true?
             */
             return;

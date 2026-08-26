@@ -150,7 +150,7 @@ extern long double strtold (const char *__nptr, char **__endptr);
 # elif defined __GNU__
 #  define CONFIG_TCC_ELFINTERP "/lib/ld.so"
 # elif defined(TCC_UCLIBC)
-#  define CONFIG_TCC_ELFINTERP "/lib/ld-uClibc.so.0" /* is there a uClibc for x86_64 ? */
+#  define CONFIG_TCC_ELFINTERP "/lib/ld-uClibc.so.0"
 # elif defined(TCC_TARGET_RISCV64)
 #  define CONFIG_TCC_ELFINTERP "/lib/ld-linux-riscv64-lp64d.so.1"
 # else
@@ -592,8 +592,6 @@ struct TCCState {
     /* compile with built-in memory and bounds checker */
     unsigned char do_bounds_check;
 #endif
-    int run_test; /* nth test to run with -dt -run */
-
     addr_t text_addr; /* address of text section */
     unsigned char has_text_addr;
 
@@ -1105,9 +1103,6 @@ PUB_FUNC int tcc_parse_args(TCCState *s, int *argc, char ***argv, int optind);
 #define OPT_V 3
 #define OPT_PRINT_DIRS 4
 #define OPT_AR 5
-#define OPT_IMPDEF 6
-#define OPT_M32 32
-#define OPT_M64 64
 
 /* ------------ tccpp.c ------------ */
 
@@ -1320,7 +1315,7 @@ ST_FUNC void put_stabs_r(TCCState *s1, const char *str, int type, int other, int
 ST_FUNC void put_stabn(TCCState *s1, int type, int other, int desc, int value);
 
 ST_FUNC void resolve_common_syms(TCCState *s1);
-ST_FUNC void relocate_syms(TCCState *s1, Section *symtab, int do_resolve);
+ST_FUNC void relocate_syms(TCCState *s1, Section *symtab);
 ST_FUNC void relocate_section(TCCState *s1, Section *s);
 
 ST_FUNC ssize_t full_read(int fd, void *buf, size_t count);
@@ -1438,12 +1433,6 @@ ST_FUNC void gen_addrpc32(int r, Sym *sym, int c);
 ST_FUNC void gen_cvt_csti(int t);
 #endif
 
-/* ------------ x86_64-gen.c ------------ */
-
-/* ------------ arm-gen.c ------------ */
-
-/* ------------ arm64-gen.c ------------ */
-
 /* ------------ riscv64-gen.c ------------ */
 ST_DATA int riscv_emit_ecall;
 ST_FUNC void riscv_emit_raw(unsigned int insn);
@@ -1494,19 +1483,7 @@ ST_FUNC void asm_gen_code(ASMOperand *operands, int nb_operands, int nb_outputs,
 ST_FUNC void asm_clobber(uint8_t *clobber_regs, const char *str);
 #endif
 
-/* ------------ tccpe.c -------------- */
 #define ST_ASM_SET 0x04
-
-/* ------------ tccmacho.c ----------------- */
-/* ------------ tccrun.c ----------------- */
-/* tccrun.c is not part of this compiler. */
-
-/* ------------ tcctools.c ----------------- */
-#if 0 /* included in tcc.c */
-ST_FUNC int tcc_tool_ar(TCCState *s, int argc, char **argv);
-ST_FUNC void tcc_tool_cross(TCCState *s, char **argv, int option);
-ST_FUNC void gen_makedeps(TCCState *s, const char *target, const char *filename);
-#endif
 
 /********************************************************/
 #undef ST_DATA

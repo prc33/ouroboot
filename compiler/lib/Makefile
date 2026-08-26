@@ -84,8 +84,6 @@ $(TOP)/%.o : %.c
 	$S$(XCC) -c $< -o $@ $(XFLAGS)
 
 $(TOP)/bcheck.o : XFLAGS += -g
-$(TOP)/bt-exe.o : $(TOP)/tccrun.c
-
 $(X)crt1w.o : crt1.c
 $(X)wincrt1w.o : wincrt1.c
 

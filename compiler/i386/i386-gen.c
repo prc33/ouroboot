@@ -597,18 +597,6 @@ ST_FUNC void gjmp_addr(int a)
     }
 }
 
-#if 0
-/* generate a jump to a fixed address */
-ST_FUNC void gjmp_cond_addr(int a, int op)
-{
-    int r = a - ind - 2;
-    if (r == (char)r)
-        g(op - 32), g(r);
-    else
-        g(0x0f), gjmp2(op - 16, r - 4);
-}
-#endif
-
 ST_FUNC int gjmp_append(int n, int t)
 {
     void *p;

@@ -63,9 +63,7 @@ endif
 
 # ONE_SOURCE mode (tcc.h defaults it to 1): tcc.c textually includes
 # libtcc.c, which includes tccpp.c/tccgen.c/tccelf.c/tccasm.c and the
-# target-specific *-gen.c/*-asm.c/*-link.c (tccrun.c -- the -run mode
-# -- deliberately isn't one of them any more: removed from this fork,
-# unused by any build this project does; see libtcc.c's own comment).
+# target-specific *-gen.c/*-asm.c/*-link.c.
 # One file, one compile -- see docs/tcc-spike-findings.md for why this
 # replaced an earlier nine-file separate-compilation build that turned
 # out to be silently linking only one of its own objects.

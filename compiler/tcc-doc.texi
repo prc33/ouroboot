@@ -49,26 +49,17 @@ external assembler or linker because TCC does that for you.
 TCC compiles so @emph{fast} that even for big projects @code{Makefile}s may
 not be necessary.
 
-TCC not only supports ANSI C, but also most of the new ISO C99
-standard and many GNUC extensions including inline assembly.
-
-TCC can also be used to make @emph{C scripts}, i.e. pieces of C source
-that you run as a Perl or Python script. Compilation is so fast that
-your script will be as fast as if it was an executable.
+TCC supports ISO C and many GNU C extensions. The i386 target also
+supports inline assembly.
 
 TCC can also automatically generate memory and bound checks
 (@pxref{Bounds}) while allowing all C pointers operations. TCC can do
 these checks even if non patched libraries are used.
 
-With @code{libtcc}, you can use TCC as a backend for dynamic code
-generation (@pxref{Libtcc}).
+With @code{libtcc}, applications can compile C and write the resulting
+object or executable file (@pxref{Libtcc}).
 
-TCC mainly supports the i386 target on Linux and Windows. There are alpha
-ports for the ARM (@code{arm-tcc}) and the TMS320C67xx targets
-(@code{c67-tcc}). More information about the ARM port is available at
-@url{http://lists.gnu.org/archive/html/tinycc-devel/2003-10/msg00044.html}.
-
-For usage on Windows, see also @url{tcc-win32.txt}.
+This tree supports i386, RISC-V64, and WebAssembly targets.
 
 @node Invoke
 @chapter Command line invocation
@@ -77,34 +68,17 @@ For usage on Windows, see also @url{tcc-win32.txt}.
 
 @example
 @c man begin SYNOPSIS
-usage: tcc [options] [@var{infile1} @var{infile2}@dots{}] [@option{-run} @var{infile} @var{args}@dots{}]
+usage: tcc [options] [@var{infile1} @var{infile2}@dots{}]
 @c man end
 @end example
 
 @noindent
 @c man begin DESCRIPTION
-TCC options are a very much like gcc options. The main difference is that TCC
-can also execute directly the resulting program and give it runtime
-arguments.
+TCC options are similar to gcc options.
 
 Here are some examples to understand the logic:
 
 @table @code
-@item @samp{tcc -run a.c}
-Compile @file{a.c} and execute it directly
-
-@item @samp{tcc -run a.c arg1}
-Compile a.c and execute it directly. arg1 is given as first argument to
-the @code{main()} of a.c.
-
-@item @samp{tcc a.c -run b.c arg1}
-Compile @file{a.c} and @file{b.c}, link them together and execute them. arg1 is given
-as first argument to the @code{main()} of the resulting program. 
-@ignore 
-Because multiple C files are specified, @option{--} are necessary to clearly 
-separate the program arguments from the TCC options.
-@end ignore
-
 @item @samp{tcc -o myprog a.c b.c}
 Compile @file{a.c} and @file{b.c}, link them and generate the executable @file{myprog}.
 
@@ -127,27 +101,11 @@ Compile @file{a.c} and @file{b.c}, link them together and generate the object fi
 
 @end table
 
-Scripting:
-
-TCC can be invoked from @emph{scripts}, just as shell scripts. You just
-need to add @code{#!/usr/local/bin/tcc -run} at the start of your C source:
-
-@example
-#!/usr/local/bin/tcc -run
-#include <stdio.h>
-
-int main() 
-@{
-    printf("Hello World\n");
-    return 0;
-@}
-@end example
-
 TCC can read C source code from @emph{standard input} when @option{-} is used in 
 place of @option{infile}. Example:
 
 @example
-echo 'main()@{puts("hello");@}' | tcc -run -
+echo 'main()@{puts("hello");@}' | tcc -o hello -
 @end example
 @c man end
 
@@ -162,19 +120,6 @@ Generate an object file.
 
 @item -o outfile
 Put object file, executable, or dll into output file @file{outfile}.
-
-@item -run source [args...]
-Compile file @var{source} and run it with the command line arguments
-@var{args}. In order to be able to give more than one argument to a
-script, several TCC options can be given @emph{after} the
-@option{-run} option, separated by spaces:
-@example
-tcc "-run -L/usr/X11R6/lib -lX11" ex4.c
-@end example
-In a script, it gives the following header:
-@example
-#!/usr/local/bin/tcc -run -L/usr/X11R6/lib -lX11
-@end example
 
 @item -v
 Display TCC version.
@@ -318,17 +263,12 @@ Use @var{fmt} as output format. The supported output formats are:
 ELF output format (default)
 @item binary
 Binary image (only for executable output)
-@item coff
-COFF output format (only for executable output for TMS320C67xx target)
 @end table
 
 @item -Wl,--export-all-symbols
 @item -Wl,--export-dynamic
 Export global symbols to the dynamic linker. It is useful when a library
 opened with @code{dlopen()} needs to access executable symbols.
-
-@item -Wl,-subsystem=console/gui/wince/...
-Set type for PE (Windows) executables.
 
 @item -Wl,-[Ttext=# | section-alignment=# | file-alignment=# | image-base=# | stack=#]
 Modify executable layout.
@@ -370,7 +310,7 @@ Print statistic information at exit of program.
 Try to continue in case of a bound checking error.
 @end table
 
-Note: @option{-b} is only available on i386 (linux and windows), x86_64 (linux and windows), arm, arm64 and riscv64 for the moment.
+Availability of @option{-b} depends on the compiler build configuration.
 
 @item -bt[N]
 Display N callers in stack traces. This is useful with @option{-g} or @option{-b}.
@@ -405,15 +345,6 @@ Target specific options:
 @item -mms-bitfields
 Use an algorithm for bitfield alignment consistent with MSVC. Default is
 gcc's algorithm.
-
-@item -mfloat-abi (ARM only)
-Select the float ABI. Possible values: @code{softfp} and @code{hard}
-
-@item -mno-sse
-Do not use sse registers on x86_64
-
-@item -m32, -m64
-Pass command line to the i386/x86_64 cross compiler.
 
 @end table
 
@@ -845,14 +776,6 @@ options (@option{--start-group} and @option{--end-group}) are supported.
 TCC can load ELF object files, archives (.a files) and dynamic
 libraries (.so).
 
-@section PE-i386 file generation
-@cindex PE-i386
-
-TCC for Windows supports the native Win32 executable file format (PE-i386).  It
-generates EXE files (console and gui) and DLL files.
-
-For usage on Windows, see also tcc-win32.txt.
-
 @section GNU Linker Scripts
 @cindex scripts, linker
 @cindex linker scripts
@@ -1005,15 +928,9 @@ void run(const char *cmd)
 @node Libtcc
 @chapter The @code{libtcc} library
 
-The @code{libtcc} library enables you to use TCC as a backend for
-dynamic code generation. 
-
-Read the @file{libtcc.h} to have an overview of the API. Read
-@file{libtcc_test.c} to have a very simple example.
-
-The idea consists in giving a C string containing the program you want
-to compile directly to @code{libtcc}. Then you can access to any global
-symbol (function or variable) defined.
+The @code{libtcc} library exposes the compiler as a C API. It accepts C
+source strings or files and writes object files, executables, or libraries.
+See @file{libtcc.h} for the API.
 
 @node devel
 @chapter Developer's guide

@@ -65,7 +65,6 @@ LIBTCCAPI int tcc_compile_string(TCCState *s, const char *buf);
 
 /* set output type. MUST BE CALLED before any compilation */
 LIBTCCAPI int tcc_set_output_type(TCCState *s, int output_type);
-#define TCC_OUTPUT_MEMORY   1 /* output will be run in memory (default) */
 #define TCC_OUTPUT_EXE      2 /* executable file */
 #define TCC_OUTPUT_DLL      3 /* dynamic library */
 #define TCC_OUTPUT_OBJ      4 /* object file */
@@ -82,8 +81,6 @@ LIBTCCAPI int tcc_add_symbol(TCCState *s, const char *name, const void *val);
 
 /* output an executable, library or object file. */
 LIBTCCAPI int tcc_output_file(TCCState *s, const char *filename);
-
-/* The in-memory execution API was removed with tccrun.c. */
 
 /* return symbol value or NULL if not found */
 LIBTCCAPI void *tcc_get_symbol(TCCState *s, const char *name);

@@ -2,9 +2,8 @@
  *
  * The RISC-V lp64d ABI makes `long double` a 128-bit quad, but no
  * common hardware implements quad float, so the compiler is expected to
- * call libgcc/compiler-rt soft-float helpers. TCC ships neither for
- * this target (lib/libtcc1.c has no riscv64 support at all -- it errors
- * "unsupported CPU type"), and musl does not provide them either.
+ * call libgcc/compiler-rt soft-float helpers. TCC and musl do not provide
+ * those helpers for this target.
  *
  * These implementations back `long double` with a plain `double` (see plan
  * decision D9). Consequently, `long double` has double precision,

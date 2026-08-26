@@ -1453,31 +1453,6 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
         for (b_idx = 0; b_idx < nb_blocks; b_idx++) {
             int j, stack_reg = -1;
 
-#if 0
-            fprintf(stderr, "BLOCK %d: ops %d-%d, succ0=%d succ1=%d term=%d loop_hdr=%d\n",
-                b_idx, block_start[b_idx], block_end[b_idx]-1,
-                blk_succ0[b_idx], blk_succ1[b_idx], blk_term[b_idx],
-                is_loop_header[b_idx]);
-            if (is_loop_header[b_idx])
-                fprintf(stderr, "  loop_end=%d\n", loop_end[b_idx]);
-            if (needs_fwd_scope[b_idx])
-                fprintf(stderr, "  needs_fwd_scope, open_at=%d\n", fwd_scope_open[b_idx]);
-            { int dd; fprintf(stderr, "  scope stack (%d):", scope_depth);
-              for (dd = 0; dd < scope_depth; dd++)
-                fprintf(stderr, " %c%d", scope_type[dd] == 'L' ? 'L' : 'B', scope_target[dd]);
-              fprintf(stderr, "\n"); }
-            { int jj;
-              for (jj = block_start[b_idx]; jj < block_end[b_idx]; jj++) {
-                WasmOp *o = &f->ops[jj];
-                fprintf(stderr, "  op[%d] kind=%d", jj, o->kind);
-                if (o->kind == WASM_OP_JMP || o->kind == WASM_OP_JMP_CMP)
-                    fprintf(stderr, " target_pc=%d target_idx=%d flags=0x%x", o->target_pc,
-                        wasm_pc_to_index(f, o->target_pc), o->flags);
-                fprintf(stderr, "\n");
-              }
-            }
-#endif
-
             /* Close scopes that end before this block */
             while (scope_depth > 0) {
                 int top = scope_depth - 1;

@@ -379,21 +379,6 @@ ST_FUNC void check_vstack(void)
 }
 
 /* ------------------------------------------------------------------------- */
-/* vstack debugging aid */
-
-#if 0
-void pv (const char *lbl, int a, int b)
-{
-    int i;
-    for (i = a; i < a + b; ++i) {
-        SValue *p = &vtop[-i];
-        printf("%s vtop[-%d] : type.t:%04x  r:%04x  r2:%04x  c.i:%d\n",
-            lbl, i, p->type.t, p->r, p->r2, (int)p->c.i);
-    }
-}
-#endif
-
-/* ------------------------------------------------------------------------- */
 /* start of translation unit info */
 ST_FUNC void tcc_debug_start(TCCState *s1)
 {
@@ -855,17 +840,6 @@ ST_FUNC void update_storage(Sym *sym)
     if (sym_bind != old_sym_bind) {
         esym->st_info = ELFW(ST_INFO)(sym_bind, ELFW(ST_TYPE)(esym->st_info));
     }
-
-
-#if 0
-    printf("storage %s: bind=%c vis=%d exp=%d imp=%d\n",
-        get_tok_str(sym->v, NULL),
-        sym_bind == STB_WEAK ? 'w' : sym_bind == STB_LOCAL ? 'l' : 'g',
-        sym->a.visibility,
-        sym->a.dllexport,
-        sym->a.dllimport
-        );
-#endif
 }
 
 /* ------------------------------------------------------------------------- */
@@ -4036,7 +4010,6 @@ static void struct_layout(CType *type, AttributeDef *ad)
 		   of the containing struct using the base types alignment,
 		   except for packed fields (which here have correct align).  */
 		if (f->v & SYM_FIRST_ANOM
-                    // && bit_size // ??? gcc on ARM/rpi does that
                     )
 		    align = 1;
 
@@ -5442,16 +5415,7 @@ ST_FUNC void unary(void)
         break;
 
     case TOK_alloca:
-        /* No runtime helper function (unlike i386/arm/x86_64, which
-         * ship lib/alloca*.S) -- alloca has to grow THIS function's
-         * own stack frame, which only the compiler emitting code
-         * inline into the caller can do correctly. This is also how
-         * GCC/Clang actually implement __builtin_alloca themselves,
-         * not as a real call in optimized code. See gfunc_epilog's
-         * s0-based sp restoration for the other half of what makes
-         * this safe -- the space this carves out has to survive
-         * until the function returns, which an ordinary local's
-         * space doesn't need to. */
+        /* Grow this function's frame inline; gfunc_epilog restores sp from s0. */
         next(); skip('(');
         expr_eq();
         skip(')');
@@ -7971,13 +7935,6 @@ static int decl0(int l, int is_for_loop_init, Sym *func_sym)
 	    }
 	    ad = adbase;
             type_decl(&type, &ad, &v, TYPE_DIRECT);
-#if 0
-            {
-                char buf[500];
-                type_to_str(buf, sizeof(buf), &type, get_tok_str(v, NULL));
-                printf("type = '%s'\n", buf);
-            }
-#endif
             if ((type.t & VT_BTYPE) == VT_FUNC) {
                 if ((type.t & VT_STATIC) && (l == VT_LOCAL))
                     tcc_error("function without file scope cannot be static");
@@ -7995,12 +7952,6 @@ static int decl0(int l, int is_for_loop_init, Sym *func_sym)
                 ad.asm_label = asm_label_instr();
                 /* parse one last attribute list, after asm label */
                 parse_attribute(&ad);
-            #if 0
-                /* gcc does not allow __asm__("label") with function definition,
-                   but why not ... */
-                if (tok == '{')
-                    expect(";");
-            #endif
             }
 
             if (tok == '{') {

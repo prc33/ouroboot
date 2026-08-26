@@ -95,8 +95,7 @@ ST_FUNC void tccelf_stab_new(TCCState *s)
     TCCState *s1 = s;
     int shf = 0;
 #ifdef CONFIG_TCC_BACKTRACE
-    /* include stab info with standalone backtrace support */
-    if (s->do_backtrace && s->output_type != TCC_OUTPUT_MEMORY)
+    if (s->do_backtrace)
         shf = SHF_ALLOC;
 #endif
     stab_section = new_section(s, ".stab", SHT_PROGBITS, shf);
@@ -140,7 +139,7 @@ ST_FUNC void tccelf_delete(TCCState *s1)
     dynarray_reset(&s1->loaded_dlls, &s1->nb_loaded_dlls);
     tcc_free(s1->sym_attrs);
 
-    symtab_section = NULL; /* for tccrun.c:rt_printline() */
+    symtab_section = NULL;
 }
 
 /* save section data state */
@@ -680,10 +679,6 @@ ST_FUNC int set_elf_sym(Section *s, addr_t value, unsigned long size,
 		   we can override.  */
 		goto do_patch;
             } else {
-#if 0
-                printf("new_bind=%x new_shndx=%x new_vis=%x old_bind=%x old_shndx=%x old_vis=%x\n",
-                       sym_bind, shndx, new_vis, esym_bind, esym->st_shndx, esym_vis);
-#endif
                 tcc_error_noabort("'%s' defined twice", name);
             }
         } else {
@@ -908,7 +903,7 @@ static void sort_syms(TCCState *s1, Section *s)
 
 /* relocate symbol table, resolve undefined symbols if do_resolve is
    true and output error if undefined symbol. */
-ST_FUNC void relocate_syms(TCCState *s1, Section *symtab, int do_resolve)
+ST_FUNC void relocate_syms(TCCState *s1, Section *symtab)
 {
     ElfW(Sym) *sym;
     int sym_bind, sh_num;
@@ -918,10 +913,7 @@ ST_FUNC void relocate_syms(TCCState *s1, Section *symtab, int do_resolve)
         sh_num = sym->st_shndx;
         if (sh_num == SHN_UNDEF) {
             name = (char *) s1->symtab->link->data + sym->st_name;
-            /* Use ld.so to resolve symbol for us (for tcc -run) */
-            if (do_resolve) {
-            /* if dynamic symbol exist, it will be used in relocate_section */
-            } else if (s1->dynsym && find_elf_sym(s1->dynsym, name))
+            if (s1->dynsym && find_elf_sym(s1->dynsym, name))
                 goto found;
             /* XXX: _fp_hw seems to be part of the ABI, so we ignore
                it */
@@ -1079,9 +1071,7 @@ static struct sym_attr * put_got_entry(TCCState *s1, int dyn_reloc_type,
     section_ptr_add(s1->got, PTR_SIZE);
 
     /* Create the GOT relocation that will insert the address of the object or
-       function of interest in the GOT entry. This is a static relocation for
-       memory output (dlsym will give us the address of symbols) and dynamic
-       relocation otherwise (executable and DLLs). The relocation should be
+       function of interest in the GOT entry. The relocation should be
        done lazily for GOT entry with *_JUMP_SLOT relocation type (the one
        associated to a PLT entry) but is currently done at load time for an
        unknown reason. */
@@ -1194,7 +1184,6 @@ ST_FUNC void build_got_entries(TCCState *s1)
 		       and for functions we were generated a dynamic symbol
 		       of function type.  */
 		    if (s1->dynsym) {
-			/* dynsym isn't set for -run :-/  */
 			dynindex = get_sym_attr(s1, sym_index, 0)->dyn_index;
 			esym = (ElfW(Sym) *)s1->dynsym->data + dynindex;
 			if (dynindex
@@ -1316,7 +1305,7 @@ ST_FUNC void tcc_add_btstub(TCCState *s1)
 
     s = data_section;
     o = s->data_offset;
-    /* create (part of) a struct rt_context (see tccrun.c) */
+    /* Build the runtime backtrace descriptor. */
     put_ptr(s1, stab_section, 0);
     put_ptr(s1, stab_section, -1);
     put_ptr(s1, stab_section->link, 0);
@@ -1380,14 +1369,11 @@ ST_FUNC void tcc_add_runtime(TCCState *s1)
                 tcc_add_support(s1, "bt-exe.o");
             if (s1->output_type != TCC_OUTPUT_DLL)
                 tcc_add_support(s1, "bt-log.o");
-            if (s1->output_type != TCC_OUTPUT_MEMORY)
-                tcc_add_btstub(s1);
+            tcc_add_btstub(s1);
         }
 #endif
         tcc_add_support(s1, TCC_LIBTCC1);
-        /* add crt end if not memory output */
-        if (s1->output_type != TCC_OUTPUT_MEMORY)
-            tcc_add_crt(s1, "crtn.o");
+        tcc_add_crt(s1, "crtn.o");
     }
 }
 
@@ -2041,7 +2027,7 @@ static int final_sections_reloc(TCCState *s1)
     int i;
     Section *s;
 
-    relocate_syms(s1, s1->symtab, 0);
+    relocate_syms(s1, s1->symtab);
 
     if (s1->nb_errors != 0)
         return -1;

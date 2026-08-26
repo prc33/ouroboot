@@ -25,15 +25,6 @@
 #include "i386/i386-pair.c"
 #endif
 #include "tccelf.c"
-/* tccrun.c (the -run JIT-execute-in-memory mode) deliberately removed
- * from this fork -- unused by every build this project does (always
- * `tcc -c -o x.o x.c` / link to a real file, never -run), and its own
- * removal is what let self-hosting.md's exit bar ("tcc -o tcc_native
- * tcc.c") stop needing tccrun.c's mkstemp()/ftruncate() dependencies
- * this kernel doesn't (and, for -run's own JIT-execute-in-place
- * model, wouldn't want to) implement. See TCC_OPTION_run's own
- * comment below and docs/self-hosting-system-plan.md's own
- * fork-and-strip precedent (PE/COFF, other backends, etc). */
 #ifdef TCC_TARGET_I386
 #include "i386/i386-gen.c"
 #include "i386/i386-link.c"
@@ -504,7 +495,7 @@ no_file:
             printf("\n"), fflush(stdout);
         fflush(stdout); /* flush -v output */
         fprintf(stderr, "%s\n", buf);
-        fflush(stderr); /* print error/warning now (win32) */
+        fflush(stderr);
     } else {
         s1->error_func(s1->error_opaque, buf);
     }
@@ -739,16 +730,7 @@ LIBTCCAPI TCCState *tcc_new(void)
     tcc_define_symbol(s, "__STDC_VERSION__", "199901L");
     tcc_define_symbol(s, "__STDC_HOSTED__", NULL);
 #ifdef TCC_TARGET_RISCV64
-    /* musl's <alloca.h> does '#define alloca __builtin_alloca',
-     * expecting the compiler to recognize __builtin_alloca as a true
-     * builtin. Unlike i386/x86_64 (which satisfy plain alloca() via a
-     * real linked function, i386/alloca86.S), riscv64 has no such
-     * helper -- alloca must be inlined into the caller's own frame
-     * (see riscv_gen_alloca in riscv64-gen.c), which only our
-     * TOK_alloca intrinsic does. This predefine routes
-     * __builtin_alloca right back to plain alloca, undoing musl's
-     * redirect so it reaches that intrinsic instead of becoming an
-     * undefined external symbol at link time. */
+    /* Route musl's __builtin_alloca spelling to the backend intrinsic. */
     tcc_define_symbol(s, "__builtin_alloca", "alloca");
 #endif
 
@@ -797,7 +779,7 @@ LIBTCCAPI TCCState *tcc_new(void)
     tcc_define_symbol(s, "__PTRDIFF_TYPE__", "int");
     tcc_define_symbol(s, "__ILP32__", NULL);
 #elif LONG_SIZE == 4
-    /* 64bit Windows. */
+    /* 64-bit pointers with a 32-bit long. */
     tcc_define_symbol(s, "__SIZE_TYPE__", "unsigned long long");
     tcc_define_symbol(s, "__PTRDIFF_TYPE__", "long long");
     tcc_define_symbol(s, "__LLP64__", NULL);
@@ -880,10 +862,6 @@ LIBTCCAPI void tcc_delete(TCCState *s1)
 
     cstr_free(&s1->cmdline_defs);
     cstr_free(&s1->cmdline_incl);
-    /* no tcc_run_free() call here -- tccrun.c (the -run mode this
-     * would clean up after) is removed from this fork; see libtcc.c's
-     * own comment by the #include block above. */
-
     tcc_free(s1);
 #ifdef MEM_DEBUG
     if (0 == --nb_states)
@@ -1001,18 +979,8 @@ ST_FUNC int tcc_add_file_internal(TCCState *s1, const char *filename, int flags)
             ret = tcc_load_object_file(s1, fd, 0);
             break;
         case AFF_BINTYPE_DYN:
-            if (s1->output_type == TCC_OUTPUT_MEMORY) {
-                /* Only ever reachable via -run (TCC_OUTPUT_MEMORY),
-                 * which this fork doesn't support at all -- see
-                 * TCC_OPTION_run's own comment. No dlopen() here
-                 * (tccrun.c, which used to provide it, is removed)
-                 * to fail into; -1 is correct either way, since this
-                 * fork never links a real shared library dynamically. */
-                ret = -1;
-            } else {
-                ret = tcc_load_dll(s1, fd, filename,
-                                   (flags & AFF_REFERENCED_DLL) != 0);
-            }
+            ret = tcc_load_dll(s1, fd, filename,
+                               (flags & AFF_REFERENCED_DLL) != 0);
             break;
         case AFF_BINTYPE_AR:
             ret = tcc_load_archive(s1, fd, !(flags & AFF_WHOLE_ARCHIVE));
@@ -1400,7 +1368,6 @@ enum {
     TCC_OPTION_param,
     TCC_OPTION_pedantic,
     TCC_OPTION_pthread,
-    TCC_OPTION_run,
     TCC_OPTION_w,
     TCC_OPTION_pipe,
     TCC_OPTION_E,
@@ -1408,7 +1375,6 @@ enum {
     TCC_OPTION_MF,
     TCC_OPTION_x,
     TCC_OPTION_ar,
-    TCC_OPTION_impdef,
     TCC_OPTION_C
 };
 
@@ -1448,7 +1414,6 @@ static const TCCOption tcc_options[] = {
     { "-param", TCC_OPTION_param, TCC_OPTION_HAS_ARG },
     { "pedantic", TCC_OPTION_pedantic, 0},
     { "pthread", TCC_OPTION_pthread, 0},
-    { "run", TCC_OPTION_run, TCC_OPTION_HAS_ARG | TCC_OPTION_NOSEP },
     { "rdynamic", TCC_OPTION_rdynamic, 0 },
     { "r", TCC_OPTION_r, 0 },
     { "s", TCC_OPTION_s, 0 },
@@ -1576,7 +1541,6 @@ PUB_FUNC int tcc_parse_args(TCCState *s, int *pargc, char ***pargv, int optind)
     TCCState *s1 = s;
     const TCCOption *popt;
     const char *optarg, *r;
-    const char *run = NULL;
     int x;
     CString linker_arg; /* collect -Wl options */
     int tool = 0, arg_start = 0, noaction = optind;
@@ -1599,13 +1563,8 @@ PUB_FUNC int tcc_parse_args(TCCState *s, int *pargc, char ***pargv, int optind)
         }
 reparse:
         if (r[0] != '-' || r[1] == '\0') {
-            if (r[0] != '@') /* allow "tcc file(s) -run @ args ..." */
+            if (r[0] != '@')
                 args_parser_add_file(s, r, s->filetype);
-            if (run) {
-                tcc_set_options(s, run);
-                arg_start = optind - 1;
-                break;
-            }
             continue;
         }
 
@@ -1736,13 +1695,6 @@ reparse:
         case TCC_OPTION_nostdlib:
             s->nostdlib = 1;
             break;
-        case TCC_OPTION_run:
-            /* tccrun.c is absent, so -run has nothing to dispatch to. `run`
-             * (declared above, used by the
-             * "-run @ args..." trailing-argv handling further down)
-             * simply stays NULL forever now -- harmless, that handling
-             * is unreachable dead code along with -run itself. */
-            tcc_error("-run is not available (tccrun.c removed from this fork)");
         case TCC_OPTION_v:
             do ++s->verbose; while (*optarg++ == 'v');
             ++noaction;
@@ -1753,11 +1705,7 @@ reparse:
             break;
         case TCC_OPTION_m:
             if (set_flag(s, options_m, optarg) < 0) {
-                if (x = atoi(optarg), x != 32 && x != 64)
-                    goto unsupported_option;
-                if (PTR_SIZE != x/8)
-                    return x;
-                ++noaction;
+                goto unsupported_option;
             }
             break;
         case TCC_OPTION_W:
@@ -1816,9 +1764,6 @@ reparse:
             break;
         case TCC_OPTION_print_search_dirs:
             x = OPT_PRINT_DIRS;
-            goto extra_action;
-        case TCC_OPTION_impdef:
-            x = OPT_IMPDEF;
             goto extra_action;
         case TCC_OPTION_ar:
             x = OPT_AR;

@@ -1016,40 +1016,6 @@ _default:
     file->buf_ptr = p;
 }
 
-#if 0
-/* return the number of additional 'ints' necessary to store the
-   token */
-static inline int tok_size(const int *p)
-{
-    switch(*p) {
-        /* 4 bytes */
-    case TOK_CINT:
-    case TOK_CUINT:
-    case TOK_CCHAR:
-    case TOK_LCHAR:
-    case TOK_CFLOAT:
-    case TOK_LINENUM:
-        return 1 + 1;
-    case TOK_STR:
-    case TOK_LSTR:
-    case TOK_PPNUM:
-    case TOK_PPSTR:
-        return 1 + ((sizeof(CString) + ((CString *)(p+1))->size + 3) >> 2);
-    case TOK_CLONG:
-    case TOK_CULONG:
-	return 1 + LONG_SIZE / 4;
-    case TOK_CDOUBLE:
-    case TOK_CLLONG:
-    case TOK_CULLONG:
-        return 1 + 2;
-    case TOK_CLDOUBLE:
-        return 1 + LDOUBLE_SIZE / 4;
-    default:
-        return 1 + 0;
-    }
-}
-#endif
-
 /* token string handling */
 ST_INLN void tok_str_new(TokenString *s)
 {
@@ -1289,9 +1255,6 @@ static inline void tok_get(int *t, const int **pp, CValue *cv)
     *pp = p;
 }
 
-#if 0
-# define TOK_GET(t,p,c) tok_get(t,p,c)
-#else
 # define TOK_GET(t,p,c) do { \
     int _t = **(p); \
     if (TOK_HAS_VALUE(_t)) \
@@ -1299,7 +1262,6 @@ static inline void tok_get(int *t, const int **pp, CValue *cv)
     else \
         *(t) = _t, ++*(p); \
     } while (0)
-#endif
 
 static int macro_is_equal(const int *a, const int *b)
 {
@@ -1421,21 +1383,6 @@ ST_FUNC void label_pop(Sym **ptop, Sym *slast, int keep)
         *ptop = slast;
 }
 
-/* fake the nth "#if defined test_..." for tcc -dt -run */
-static void maybe_run_test(TCCState *s)
-{
-    const char *p;
-    if (s->include_stack_ptr != s->include_stack)
-        return;
-    p = get_tok_str(tok, NULL);
-    if (0 != memcmp(p, "test_", 5))
-        return;
-    if (0 != --s->run_test)
-        return;
-    fprintf(s->ppfp, &"\n[%s]\n"[!(s->dflag & 32)], p), fflush(s->ppfp);
-    define_push(tok, MACRO_OBJ, NULL, NULL);
-}
-
 /* eval an expression for #if/#elif */
 static int expr_preprocess(void)
 {
@@ -1454,8 +1401,6 @@ static int expr_preprocess(void)
                 next_nomacro();
             if (tok < TOK_IDENT)
                 expect("identifier");
-            if (tcc_state->run_test)
-                maybe_run_test(tcc_state);
             c = define_find(tok) != 0;
             if (t == '(') {
                 next_nomacro();
@@ -1797,12 +1742,6 @@ ST_FUNC void preprocess(int is_bof)
             }
             *q = '\0';
             minp();
-#if 0
-            /* eat all spaces and comments after include */
-            /* XXX: slightly incorrect */
-            while (ch1 != '\n' && ch1 != CH_EOF)
-                inp();
-#endif
         } else {
 	    int len;
             /* computed #include : concatenate everything up to linefeed,
@@ -2032,15 +1971,12 @@ include_done:
         /* ignore gas line comment in an 'S' file. */
         if (saved_parse_flags & PARSE_FLAG_ASM_FILE)
             goto ignore;
-        if (tok == '!' && is_bof)
-            /* '!' is ignored at beginning to allow C scripts. */
-            goto ignore;
         tcc_warning("Ignoring unknown preprocessing directive #%s", get_tok_str(tok, &tokc));
     ignore:
         file->buf_ptr = parse_line_comment(file->buf_ptr - 1);
         goto the_end;
     }
-    /* ignore other preprocess commands or #! for C scripts */
+    /* ignore the rest of the directive */
     while (tok != TOK_LINEFEED)
         next_nomacro();
  the_end:
@@ -3683,8 +3619,6 @@ ST_FUNC void preprocess_start(TCCState *s1, int filetype)
         cstr_printf(&cstr, "#define __BASE_FILE__ \"%s\"\n", file->filename);
         if (is_asm)
           cstr_printf(&cstr, "#define __ASSEMBLER__ 1\n");
-        if (s1->output_type == TCC_OUTPUT_MEMORY)
-          cstr_printf(&cstr, "#define __TCC_RUN__ 1\n");
         if (!is_asm && s1->output_type != TCC_OUTPUT_PREPROCESS)
           tcc_predefs(&cstr);
         if (s1->cmdline_incl.size)

@@ -27,11 +27,9 @@
 static const char help[] =
     "Tiny C Compiler "TCC_VERSION" - Copyright (C) 2001-2006 Fabrice Bellard\n"
     "Usage: tcc [options...] [-o outfile] [-c] infile(s)...\n"
-    "       tcc [options...] -run infile [arguments...]\n"
     "General options:\n"
     "  -c           compile only - generate an object file\n"
     "  -o outfile   set output filename\n"
-    "  -run         run compiled source\n"
     "  -fflag       set or reset (with 'no-' prefix) 'flag' (see tcc -hh)\n"
     "  -std=c99     Conform to the ISO 1999 C standard (default).\n"
     "  -std=c11     Conform to the ISO 2011 C standard.\n"
@@ -72,9 +70,6 @@ static const char help[] =
     "  -Bdir        set tcc's private include/library dir\n"
     "  -MD          generate dependency file for make\n"
     "  -MF file     specify dependency file name\n"
-#if defined(TCC_TARGET_I386)
-    "  -m32/64      defer to i386/x86_64 cross compiler\n"
-#endif
     "Tools:\n"
     "  create library  : tcc -ar [rcsv] lib.a files\n"
     ;
@@ -92,7 +87,7 @@ static const char help2[] =
     "  -static                       link to static libraries (not recommended)\n"
     "  -dumpversion                  print version\n"
     "  -print-search-dirs            print search paths\n"
-    "  -dt                           with -run/-E: auto-define 'test_...' macros\n"
+    "  -dt                           with -E: auto-define 'test_...' macros\n"
     "Ignored options:\n"
     "  --param  -pedantic  -pipe  -s  -traditional\n"
     "-W... warnings:\n"
@@ -207,7 +202,7 @@ static unsigned getclock_ms(void)
 int main(int argc0, char **argv0)
 {
     TCCState *s, *s1;
-    int ret, opt, n = 0, t = 0, done;
+    int ret, opt, n = 0, done;
     unsigned start_time = 0;
     const char *first_file;
     int argc; char **argv;
@@ -229,8 +224,6 @@ redo:
             fputs(help2, stdout);
             return 0;
         }
-        if (opt == OPT_M32 || opt == OPT_M64)
-            tcc_tool_cross(s, argv, opt); /* never returns */
         if (s->verbose)
             printf(version);
         if (opt == OPT_AR)
@@ -240,7 +233,7 @@ redo:
         if (opt == OPT_PRINT_DIRS) {
             /* initialize search dirs */
             set_environment(s);
-            tcc_set_output_type(s, TCC_OUTPUT_MEMORY);
+            tcc_set_output_type(s, TCC_OUTPUT_OBJ);
             print_search_dirs(s);
             return 0;
         }
@@ -271,16 +264,6 @@ redo:
     tcc_set_output_type(s, s->output_type);
     s->ppfp = ppfp;
 
-    if ((s->output_type == TCC_OUTPUT_MEMORY
-      || s->output_type == TCC_OUTPUT_PREPROCESS)
-        && (s->dflag & 16)) { /* -dt option */
-        if (t)
-            s->dflag |= 32;
-        s->run_test = ++t;
-        if (n)
-            --n;
-    }
-
     /* compile or add each files or library */
     first_file = NULL, ret = 0;
     do {
@@ -300,31 +283,22 @@ redo:
         done = ret || ++n >= s->nb_files;
     } while (!done && (s->output_type != TCC_OUTPUT_OBJ || s->option_r));
 
-    if (s->run_test) {
-        t = 0;
-    } else if (s->output_type == TCC_OUTPUT_PREPROCESS) {
+    if (s->output_type == TCC_OUTPUT_PREPROCESS) {
         ;
     } else if (0 == ret) {
-        if (s->output_type == TCC_OUTPUT_MEMORY) {
-            /* The parser rejects -run because tccrun.c is absent. */
-            tcc_error("memory output (-run) is not available in this build");
-        } else {
-            if (!s->outfile)
-                s->outfile = default_outputfile(s, first_file);
-            if (tcc_output_file(s, s->outfile))
-                ret = 1;
-            else if (s->gen_deps)
-                gen_makedeps(s, s->outfile, s->deps_outfile);
-        }
+        if (!s->outfile)
+            s->outfile = default_outputfile(s, first_file);
+        if (tcc_output_file(s, s->outfile))
+            ret = 1;
+        else if (s->gen_deps)
+            gen_makedeps(s, s->outfile, s->deps_outfile);
     }
 
-    if (s->do_bench && done && !(t | ret))
+    if (s->do_bench && done && !ret)
         tcc_print_stats(s, getclock_ms() - start_time);
     tcc_delete(s);
     if (!done)
         goto redo; /* compile more files with -c */
-    if (t)
-        goto redo; /* run more tests with -dt -run */
     if (ppfp && ppfp != stdout)
         fclose(ppfp);
     return ret;

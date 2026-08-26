@@ -145,8 +145,6 @@ for opt do
   ;;
   --with-libgcc) confvars="$confvars libgcc"
   ;;
-  --with-selinux) confvars="$confvars selinux"
-  ;;
   --config-mingw32*) mingw32=$(echo "$opt=yes" | cut -d '=' -f 2)
   ;;
   --config-*) confvars="$confvars ${opt#--config-}"; suggest="no"
@@ -304,7 +302,6 @@ Advanced options (experts only):
   --disable-rpath          disable use of -rpath with the above
   --with-libgcc            use libgcc_s.so.1 instead of libtcc1.a
   --enable-cross           build cross compilers
-  --with-selinux           use mmap for executable memory (with tcc -run)
   --sysincludepaths=...    specify system include paths, colon separated
   --libpaths=...           specify system library paths, colon separated
   --crtprefix=...          specify locations of crt?.o, colon separated
