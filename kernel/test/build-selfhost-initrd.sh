@@ -45,8 +45,28 @@ cp "$root"/musl-riscv64/lib/crt1.o "$root"/musl-riscv64/lib/crti.o \
     "$stage/musl/lib/"
 cp "$root"/kernel/test/selfhost-hello.c "$stage/hello.c"
 cp "$root"/kernel/test/selfhost.sh "$stage/"
-cp "$root"/kernel/test/build-musl.sh "$stage/"
+cp "$root"/demo/build-musl-guest.sh "$stage/build-musl.sh"
+cp "$root"/demo/build-busybox-guest.sh "$root"/demo/busybox-riscv64.sources "$stage/"
 cp "$root"/kernel/test/tcc-stage2.args "$stage/"
 
+extra=
+if test -n "${BUSYBOX_SRC:-}"; then
+    mkdir -p "$stage/busybox-src"
+    cp -R "$BUSYBOX_SRC/include" "$stage/busybox-src/"
+    . "$root/demo/busybox-riscv64.sources"
+    for file in $sources; do
+        mkdir -p "$stage/busybox-src/${file%/*}"
+        cp "$BUSYBOX_SRC/$file" "$stage/busybox-src/$file"
+    done
+    find "$BUSYBOX_SRC" -name '*.h' | while read file; do
+        relative=${file#"$BUSYBOX_SRC/"}
+        mkdir -p "$stage/busybox-src/${relative%/*}"
+        cp "$file" "$stage/busybox-src/$relative"
+    done
+    cp "$BUSYBOX_SRC/libbb/xatonum_template.c" "$stage/busybox-src/libbb/"
+    extra=busybox-src
+fi
+
 tar cf "$output" -C "$stage" busybox fetch tcc tcc-src musl hello.c \
-    selfhost.sh build-musl.sh tcc-stage2.args
+    selfhost.sh build-musl.sh build-busybox-guest.sh busybox-riscv64.sources \
+    tcc-stage2.args $extra
