@@ -17,31 +17,36 @@ i386 `test`/`test-initrd`/`test-busybox`/`test-selfhost`, riscv64
 it claims. Everything below is about *how much machinery* it takes to do it,
 plus one correctness problem found along the way.
 
-**Update, 2026-08-27: sections 2, 3, 4, 5, and most of 6 are done.** Each is
-marked `DONE` inline with its commit. Net: **8,813 lines removed** across
-five commits (`b9cbabd`, `1f9adbe`, `cb1ee23`, `aa1f235`, `29ed371`), with no
-loss of function — every test target above was re-run after each change and
-still passes. §1 (the i386 fragility) was deliberately *not* attempted as
-part of this work — see its own section for why proceeding with §2/§4/§5
-anyway, and what came of it, given the review's own original advice was to
-root-cause §1 first. §6's larger open item (unifying the two BusyBox patches)
-remains undone by design — see its own section.
+**Update, 2026-08-27: sections 2 through 6 are all done.** Each is marked
+`DONE` inline with its commit. Net: **11,320 lines removed** across six
+commits (`b9cbabd`, `1f9adbe`, `cb1ee23`, `aa1f235`, `29ed371`, `617730f`),
+with no loss of function — every test target above was re-run after each
+change and still passes. The repo's own tracked-line total dropped by less
+than that (60,090 → 49,187, −10,903) because `docs/` grew by ~400 lines in
+the same window — this review document being updated as the work landed. §1
+(the i386 fragility) was deliberately *not* attempted as part of this work —
+see its own section for why proceeding with §2 through §6 anyway, and what
+came of it, given the review's own original advice was to root-cause §1
+first.
 
 ---
 
 ## Where the lines are
 
-As measured 2026-08-26, before any of the work below. See the update note
-above for current totals (51,715 tracked lines overall, post-simplification).
+Original column as measured 2026-08-26, before any of the work below; current
+column as measured 2026-08-27, after §2–§6. "Juice left" is what's still on
+the table per area, per this review's own findings — not a re-scan, so it's
+only as complete as the sections below.
 
-| Area | Lines | Note |
-|---|---:|---|
-| `compiler/` | 37,806 | 63% of the repo |
-| `kernel/` | 13,373 | of which 3,696 is one generated payload header |
-| `demo/` | 4,293 | 3,846 of it vendor patches |
-| `docs/` | 3,475 | 18 files |
-| `emulator/` | 953 | tight; no findings |
-| `cpu/` | 21 | placeholder README, correctly scoped |
+| Area | Original | Current | Juice left |
+|---|---:|---:|---|
+| `compiler/` | 37,806 | 33,115 (−12%) | None identified. §2 and §3 (the two findings here) are both done. |
+| `kernel/` | 13,373 | 9,805 (−27%) | None sized. §4 and §5 (the findings here) are both done. §1 (i386 self-hosting fragility) lives here too but is a **correctness risk, not a size opportunity** — root-causing it could touch any amount of code, in either direction. |
+| `demo/` | 4,293 | 1,243 (−71%) | None identified. §6 (whole-file-deletion hunks + the two BusyBox patches) is done, both halves. |
+| `docs/` | 3,475 | 3,880 (+12%, from this review's own updates) | ~1,141 lines across four overlapping review docs (§7) — a proposed **move** to `docs/history/`, not a deletion, so no net reduction to claim. Two files (`README.md`, `self-hosting-todo.md`) need correction, not trimming. |
+| `emulator/` | 953 | 953 | None identified — reviewed, found tight. |
+| `cpu/` | 21 | 21 | None — placeholder, correctly scoped. |
+| **Total** | **60,090** | **49,187 (−18%)** | Remaining known opportunities are all in `docs/` (§7, reorganization) and the `kernel/Makefile` naming asymmetry (§8, unsized) — neither is a line-count play like §2–§6 were. |
 
 ---
 
@@ -288,29 +293,53 @@ against the freshly-rebuilt `libc.a` all passed. Patch: 1,107 → 568 lines
 (49%). The other three patches (`busybox-i386`, `busybox-riscv64`,
 `musl-i386`) have zero whole-file deletions — nothing to extract there.
 
-**Second half still open.** `patches/busybox-i386-tcc-compat.patch` (1,373
-lines) and `patches/busybox-riscv64-tcc-compat.patch` (1,295) differ in only
-**121 lines after normalising the arch name** — and a large part of that
-difference is a `build.sh` embedded inside the i386 patch that duplicates the
-real `demo/build-busybox-i386.sh`, plus index hashes and timestamps.
+**Second half DONE (`29ed371`, `617730f`).** `patches/busybox-i386-tcc-compat.patch`
+(1,373 lines) and `patches/busybox-riscv64-tcc-compat.patch` (1,295) differed
+in only 121 lines after normalising the arch name.
 
-**Embedded `build.sh` hunk DONE (`29ed371`).** Confirmed dead via
+First, the embedded `build.sh` hunk: confirmed dead via
 `demo/build-busybox-i386.sh`'s own comment disclaiming it ("assumes busybox
 sits as a sibling of tcc/musl... doesn't match this script's layout") and
-removed: 1,373 → 1,327 lines. Verified with a full real
-`demo/build-busybox-i386.sh` run (fresh upstream busybox 1.36.1 clone, patch
-apply, build, its own internal smoke test all passing) and the resulting
-binary passing `make ARCH=i386 test-busybox` (interactive ash session), run
-4x to rule out flakiness.
+removed (`29ed371`): 1,373 → 1,327 lines.
 
-**Unifying the two patches into one plus an arch delta remains undone.** It
-would remove ~1,200 duplicated lines, but patches are brittle and the payoff
-is maintenance-only; worth doing only if these are expected to change again —
-left as-is per the review's own original recommendation.
+Second — reopened after the user asked whether `.config` needed to be part of
+the patch at all, which turned out to be the real question here, not the
+121-line delta: **1,213 of the ~1,300 remaining lines in *each* patch were an
+identical checked-in `.config`**, and neither copy needed to exist as patch
+content:
 
-The **build scripts themselves are not duplicated** — `build-musl-i386.sh` vs
-`build-musl-riscv64.sh` differ on 111 of 116 lines, and the BusyBox pair on
-146 of 165. They diverged for real reasons. Leave them alone.
+- `build-busybox-riscv64.sh`'s own copy was **already 100% dead** — the
+  script applies the patch (writing `.config` from the "new file" hunk), then
+  immediately runs `make allnoconfig` for the real build, clobbering it
+  before a single byte is ever read.
+- `build-busybox-i386.sh`'s copy was live, but redundant: the script already
+  has its own `minimal_config()` (`allnoconfig` + a fixed applet list +
+  `CONFIG_LFS=y` + `oldconfig`), used until now only to reproduce the
+  deliberately-failing "attempt 1" probe. Running the same busybox 1.36.1
+  checkout through it and diffing against the patch's checked-in `.config`:
+  byte-for-byte identical, except one stale `CONFIG_PLATFORM_LINUX=y` line
+  that isn't even a real Kconfig symbol in this busybox version (no
+  `Config.in` anywhere in the tree defines it) — inert either way.
+
+With `.config` gone from both, the only remaining difference between the two
+patches was trylink-hunk comment verbosity — the code itself was already
+byte-identical (confirmed via diff after excluding comment lines). Unified
+into one `demo/patches/busybox-tcc-compat.patch` (108 lines, no arch string
+anywhere in it), applied by both build scripts, each now generating `.config`
+the same way via the same `minimal_config()`-shaped sequence. Combined: 2,622
+→ 108 lines.
+
+Verified: full real `build-musl-riscv64.sh` + `build-busybox-i386.sh` +
+`build-busybox-riscv64.sh` runs (fresh musl and busybox builds, both
+scripts' own smoke tests), then both kernels rebuilt clean and run against
+the freshly-built binaries — `make ARCH=i386`
+`test`/`test-initrd`/`test-busybox`/`test-selfhost` and `make ARCH=riscv64`
+`test`/`test-initrd`/`test-selfhost`/`test-wasm`, all passing.
+
+The **build scripts themselves are still not duplicated** — `build-musl-i386.sh`
+vs `build-musl-riscv64.sh` differ on 165 lines, and the BusyBox pair on 169.
+They diverged for real reasons (the i386 script's own three-attempt failure
+narrative has no riscv64 equivalent). Leave them alone.
 
 ## 7. `docs/`: drift and overlap
 
@@ -373,22 +402,22 @@ architectures. All eight QEMU test targets pass with the fix.
 
 ## Remaining, in suggested order
 
-1. **Root-cause §1**, now that §2, §4, and §5 have actually exercised its risk
+1. **Root-cause §1**, now that §2 through §5 have actually exercised its risk
    several times more (and survived, so far) rather than just theorized about
    it. The padding-based regression harness described there has still never
    been run.
-2. **§6's second half**, unifying the two BusyBox patches — lower priority,
-   patches are brittle and this is maintenance-only payoff.
-3. **§7, docs.** Cheap, and the README currently understates what the project
+2. **§7, docs.** Cheap, and the README currently understates what the project
    does — including, now, that i386 self-hosts too.
-4. **§8, minor** — `.gitignore` gaps, `kernel/Makefile`'s naming asymmetry
+3. **§8, minor** — `.gitignore` gaps, `kernel/Makefile`'s naming asymmetry
    between arch branches.
 
-**Done so far: 8,813 lines removed** (`b9cbabd` −4,680, `1f9adbe` −3,579,
-`cb1ee23` −497, `aa1f235` −11, `29ed371` −46), with no loss of function — the
-compiler still targets i386/riscv64/wasm32 and builds musl, BusyBox, both
-kernels and itself; both kernels still self-host TCC; all eleven QEMU/wasm
-test targets still pass.
+**Done so far: 11,320 lines removed** (`b9cbabd` −4,680, `1f9adbe` −3,579,
+`cb1ee23` −497, `aa1f235` −11, `29ed371` −46, `617730f` −2,507), with no loss
+of function — the compiler still targets i386/riscv64/wasm32 and builds musl,
+BusyBox, both kernels and itself; both kernels still self-host TCC; all
+eleven QEMU/wasm test targets still pass. §6, the last of the sized findings,
+is now fully done — see its own section for what "juice" is left overall
+(none sized; see the line-count table above).
 
 ## What not to simplify
 
