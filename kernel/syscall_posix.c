@@ -807,6 +807,23 @@ void sys_readv(struct regs *r) {
 	sys_ret(r, total);
 }
 
+/* ramfs infers directories from file paths and stores no metadata. These
+ * minimal Linux semantics are sufficient for archive extraction. */
+void sys_mkdirat(struct regs *r) {
+	char path[PATH_MAX_LOCAL];
+	resolve_user_path(path, (const char *)sys_arg(r, 1));
+	sys_ret(r, path[0] || ramfs_is_dir(path) ? 0 : (unsigned long)-EINVAL);
+}
+
+void sys_metadata_noop(struct regs *r) { sys_ret(r, 0); }
+
+void sys_umask(struct regs *r) {
+	static unsigned int mask = 022;
+	unsigned int old = mask;
+	mask = (unsigned int)sys_arg(r, 0) & 0777;
+	sys_ret(r, old);
+}
+
 /* checkpoint 12: real seeking -- needed for real file writes, not
  * just reads: compiler/tccelf.c's own ELF writer lays out sections at
  * their real file offsets via repeated lseek()+write() pairs, not

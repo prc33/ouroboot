@@ -173,27 +173,6 @@ static void sys_ouro_fetch(struct regs *r) {
 	sys_ret(r, failed ? (unsigned long)-ENOMEM : length);
 }
 
-/* ramfs is single-user and stores neither ownership, permission nor timestamp
- * metadata. Directories are inferred from the paths of their children. These
- * Linux calls therefore have real but deliberately minimal semantics: mkdir
- * validates its pathname, metadata changes succeed, and umask remembers and
- * returns its previous value. This is enough for ordinary archive extractors
- * without inventing state the filesystem never consults. */
-static void sys_mkdirat(struct regs *r) {
-	char path[PATH_MAX_LOCAL];
-	resolve_user_path(path, (const char *)sys_arg(r, 1));
-	sys_ret(r, path[0] || ramfs_is_dir(path) ? 0 : (unsigned long)-EINVAL);
-}
-
-static void sys_metadata_noop(struct regs *r) { sys_ret(r, 0); }
-
-static unsigned int file_creation_mask = 022;
-static void sys_umask(struct regs *r) {
-	unsigned int old = file_creation_mask;
-	file_creation_mask = (unsigned int)sys_arg(r, 0) & 0777;
-	sys_ret(r, old);
-}
-
 /* checkpoint 21: the is_dir -> dynamic -> fixed lookup order itself is
  * syscall_common.h's own shared stat_lookup() now (identical to
  * arch/i386/syscall.c's own equivalent, once compared side by side --
