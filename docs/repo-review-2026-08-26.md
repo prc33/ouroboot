@@ -17,9 +17,20 @@ i386 `test`/`test-initrd`/`test-busybox`/`test-selfhost`, riscv64
 it claims. Everything below is about *how much machinery* it takes to do it,
 plus one correctness problem found along the way.
 
+**Update, 2026-08-27: sections 2, 3, 4, and half of 6 are done.** Each is
+marked `DONE` inline with its commit. Net: **8,756 lines removed** across
+three commits (`b9cbabd`, `1f9adbe`, `cb1ee23`), with no loss of function —
+every test target above was re-run after each change and still passes. §1
+(the i386 fragility) was deliberately *not* attempted as part of this work —
+see its own section for why proceeding with §2/§4 anyway, and what came of
+it, given the review's own original advice was to root-cause §1 first.
+
 ---
 
 ## Where the lines are
+
+As measured 2026-08-26, before any of the work below. See the update note
+above for current totals (51,715 tracked lines overall, post-simplification).
 
 | Area | Lines | Note |
 |---|---:|---|
@@ -96,9 +107,26 @@ re-tuning around it. The suspects worth eliminating first, in order:
 
 A cheap regression harness for this class of bug: run `test-selfhost` against
 two or three deliberately different initrd paddings. If the result depends on
-padding, the bug is still there.
+padding, the bug is still there. **That harness has still never actually been
+run** (see below) — it remains the fastest way to get a real signal instead of
+more anecdotal passes.
+
+**Status, 2026-08-27: still unresolved, not fixed.** §2 and §4 below were both
+landed anyway (user decision, against this section's own original advice to
+root-cause this first) — both are exactly the kind of memory-layout-shifting
+change that flipped the bug the first time (§2 is literally the change that
+found it; §4 cut `kmain.c` by ~250 lines, replaced the embedded ELF payload
+with a real initrd file, and shrank `kernel.elf` by half). `test-selfhost` was
+re-run **three times back to back** after landing §4 and passed every time.
+That is evidence, not proof — the bug's whole signature is "passes reliably
+until something shifts memory, then fails deterministically until something
+shifts it back". If `test-selfhost` (i386) ever fails again, check this
+history before assuming it's a new regression, and finally run the padding
+harness above rather than adding more anecdotal passes to this tally.
 
 ## 2. `compiler/elf.h`: 2,128 of 3,290 lines are dead — proven zero-risk
+
+**DONE (`b9cbabd`).**
 
 `elf.h` defines 2,219 macros. Cross-referencing every compiler source
 (including `ElfW()`/`ELFW()` token-paste expansions) shows **153 are used and
@@ -116,16 +144,24 @@ definition stays) leaves **1,162 lines, saving 2,128**. Verified:
   is the strongest possible evidence that nothing semantic was removed;
 - riscv64 `test`, `test-initrd` and `test-selfhost` all pass against it.
 
-This is the single largest genuinely free deletion in the repo. The one
-caveat is §1: attempting it is what exposed the i386 fragility, so land the
-i386 root-cause first, then take this.
+This was the single largest genuinely free deletion in the repo. It's also
+the change that exposed §1's i386 fragility in the first place — the
+original recommendation here was to root-cause that first and land this
+after; it was landed anyway (user decision) and has passed every re-run
+since (§1's own updated status).
 
 `kernel/mm/elf.h` is a separate, already-minimal 70-line header and is not
 affected — nothing outside `compiler/tcc.h` includes `compiler/elf.h`.
 
 ## 3. `compiler/`: 2,563 lines of orphaned upstream files
 
-Files reachable from no build input, no script, and no other tracked file:
+**DONE (`b9cbabd`, same commit as §2).** All ten removed, each re-verified
+unreferenced immediately before deletion (a basename grep can have false
+positives — e.g. `TODO`/`VERSION` as plain words in comments and macros — each
+hit was checked individually). `COPYING`/`RELICENSING` kept, as recommended.
+
+Files that were reachable from no build input, no script, and no other
+tracked file:
 
 | File | Lines | |
 |---|---:|---|
@@ -144,6 +180,21 @@ Files reachable from no build input, no script, and no other tracked file:
 licensing records, not documentation.
 
 ## 4. `kernel/`: i386 never got the product/checkpoint split riscv64 has
+
+**DONE (`1f9adbe`).** `arch/i386/kmain.c` now mirrors `riscv64_kmain.c`'s own
+`#ifdef KERNEL_CHECKPOINTS` shape exactly: shared hardware/memory/filesystem
+bring-up, then either `run_checkpoint_boot()` (the historical chain, now in a
+new `test/i386_checkpoints.c` — a straight move, not a rewrite) or straight to
+an interactive BusyBox shell. The one genuine change, not just a move: P5
+checkpoint 2's real musl+TCC binary is now `user_test/hello_i386.c`, built and
+loaded from the checkpoint chain's own small initrd the same way
+`test/riscv64_checkpoints.c` already loads `hello_riscv64.c` — not a
+pre-built hex dump with no live rebuild path. `arch/i386/hello_elf_payload.h`
+is gone outright; `task.c`/`pit.c`/`usermode.S` moved out of the product
+`OBJS` into a new `I386_CHECKPOINT_OBJS`, mirroring `RISCV64_CHECKPOINT_OBJS`.
+Measured result: **`kernel.elf` shrank from 94,596 to 45,444 bytes (52%)**.
+Full sweep (both `kernel.elf` and the new `kernel-checkpoints.elf`, both
+architectures) passes — see §1 for the one open question this raised.
 
 Commit `c605aa3` moved riscv64's P1–P10 chain into
 `test/riscv64_checkpoints.c`, built only under `-DKERNEL_CHECKPOINTS`, so the
@@ -169,15 +220,8 @@ The cost is concrete and large:
 - A further **140 of `kmain.c`'s 418 lines** are checkpoint scaffolding
   (measured by attributing each function), against 126 lines of product boot.
 
-The enabling change already landed: i386 has a real Multiboot-module initrd
-as of `ab87337`, so the test payload can be an ordinary initrd file exactly
-as riscv64's is. The natural shape is a checked-in `user_test/hello_i386.c`
-(mirroring the existing `user_test/hello_riscv64.c`), built by the Makefile
-rule added for `proc_fork_test_i386.c`, shipped in the initrd — after which
-the generated header and its generator delete outright.
-
-This is the largest structural simplification available: it removes ~29% of
-the kernel's source and 47% of the i386 image, and it makes the two
+This was the largest structural simplification in the review: it removed
+~29% of the kernel's source and 47% of the i386 image, and it makes the two
 architectures describable by one sentence instead of two.
 
 ## 5. `kernel/`: duplication introduced by the arch split
@@ -202,13 +246,31 @@ is a day old:
   struct and missed in one of the five.
 - **`copy_regs()`, two copies** differing only in word width.
 
-## 6. `demo/`: the two BusyBox patches are 91% identical
+## 6. `demo/`: whole-file-deletion patch hunks, and the two BusyBox patches
 
-`patches/busybox-i386-tcc-compat.patch` (1,373 lines) and
-`patches/busybox-riscv64-tcc-compat.patch` (1,295) differ in only **121 lines
-after normalising the arch name** — and a large part of that difference is a
-`build.sh` embedded inside the i386 patch that duplicates the real
-`demo/build-busybox-i386.sh`, plus index hashes and timestamps.
+**First half DONE (`cb1ee23`).** Checked all four patches for hunks that
+delete a file outright (`deleted file mode`, cross-checked against the
+alternate `+++ /dev/null` marker some diff tools use instead — both give the
+same answer). Only `musl-riscv64-tcc-compat.patch` had any: **22**, roughly
+half its own line count. Each was verified against a fresh upstream musl
+v1.2.4 clone before being extracted, to tell whole-directory deletions
+(`src/fenv/riscv64/`, `src/math/riscv64/`, `src/ldso/riscv64/` — every file
+those leaf directories contain is gone, safe as `rm -rf`) from directories
+that keep other, differently-modified files (`crt/`, `src/setjmp/riscv64/`,
+`src/signal/riscv64/`, `src/thread/riscv64/` — 7 individual `rm`s). Verified
+by running the real build end to end against the trimmed patch: musl-riscv64
+built successfully, its own smoke test passed, and — the meaningful proof,
+since `fork()`/`setjmp`/`longjmp` are exactly what the deleted files touched
+— a full `make ARCH=riscv64 clean && test && test-initrd && test-selfhost`
+against the freshly-rebuilt `libc.a` all passed. Patch: 1,107 → 568 lines
+(49%). The other three patches (`busybox-i386`, `busybox-riscv64`,
+`musl-i386`) have zero whole-file deletions — nothing to extract there.
+
+**Second half still open.** `patches/busybox-i386-tcc-compat.patch` (1,373
+lines) and `patches/busybox-riscv64-tcc-compat.patch` (1,295) differ in only
+**121 lines after normalising the arch name** — and a large part of that
+difference is a `build.sh` embedded inside the i386 patch that duplicates the
+real `demo/build-busybox-i386.sh`, plus index hashes and timestamps.
 
 Deleting the embedded `build.sh` hunk is unambiguous. Unifying the rest into
 one patch plus a small arch delta would remove ~1,200 duplicated lines, but
@@ -257,7 +319,7 @@ The **build scripts themselves are not duplicated** — `build-musl-i386.sh` vs
 
 ---
 
-## Already done during this review
+## Already done
 
 **Out-of-bounds read past EOF — found, proven, fixed, committed (`6fd0e2c`).**
 
@@ -278,22 +340,24 @@ architectures. All eight QEMU test targets pass with the fix.
 
 ---
 
-## Suggested order
+## Remaining, in suggested order
 
-1. **Root-cause §1.** It is a correctness risk and it gates §2 honestly.
-2. **§4, the i386 checkpoint split.** Largest structural win (~3,900 lines,
-   47% of the i386 image), removes an architectural asymmetry, and makes the
-   project's own stated rule true everywhere.
-3. **§2 and §3, the compiler deletions.** ~4,691 lines, zero behavioural risk,
-   one of them proven by byte-identical output.
-4. **§5, the split's duplication.** Cheap, and it is the category that has
+1. **Root-cause §1**, now that §2 and §4 have actually exercised its risk
+   twice more (and survived, so far) rather than just theorized about it. The
+   padding-based regression harness described there has still never been run.
+2. **§5, the split's duplication.** Cheap, and it is the category that has
    already produced one real bug.
-5. **§7, docs.** Cheap, and the README currently understates what the project
-   does.
+3. **§6's second half**, the BusyBox patch overlap — lower priority, patches
+   are brittle and this is maintenance-only payoff.
+4. **§7, docs.** Cheap, and the README currently understates what the project
+   does — including, now, that i386 self-hosts too.
+5. **§8, minor** — `.gitignore` gaps, `kernel/Makefile`'s naming asymmetry
+   between arch branches.
 
-Totals if all are taken: roughly **10,000 of 60,090 lines (~17%)**, with no
-loss of function — the compiler still targets i386/riscv64/wasm32 and builds
-musl, BusyBox, both kernels and itself; both kernels still self-host TCC.
+**Done so far: 8,756 lines removed** (`b9cbabd` −4,680, `1f9adbe` −3,579,
+`cb1ee23` −497), with no loss of function — the compiler still targets
+i386/riscv64/wasm32 and builds musl, BusyBox, both kernels and itself; both
+kernels still self-host TCC; all eleven QEMU/wasm test targets still pass.
 
 ## What not to simplify
 
