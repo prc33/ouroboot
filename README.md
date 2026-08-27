@@ -20,6 +20,22 @@ a second implementation and self-hosting check. The wasm32 compiler target is
 deliberately freestanding and writes a final module directly; it is primarily
 used to build the emulator.
 
+## Line-count budgets
+
+These limits count tracked implementation, build, and test files inside each
+subdirectory; subsystem README prose is excluded. Generated files and ignored
+upstream build trees are not part of the repository count.
+
+| Component | Limit or target | Current | Status |
+|---|---:|---:|---|
+| Emulator | 1,000 hard limit | 939 | Within limit |
+| Kernel | 10,000 hard limit | 9,744 | Within limit |
+| Compiler | 25,000 target; 20,000 stretch | 33,087 | Not yet attained |
+
+New functionality must stay within the emulator and kernel limits. Compiler
+work should reduce the current count while preserving standard C, ELF output
+for i386/RISC-V64, and the freestanding wasm32 backend.
+
 ## Quick start: build the browser system from scratch
 
 You need a POSIX build environment with a host C compiler, Make, Git, Bash,

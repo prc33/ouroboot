@@ -9,6 +9,7 @@ typedef signed long long i64;
 #define RAM_BASE 0x80000000ULL
 #define RAM_SIZE 0x08000000U
 #define UART_BASE 0x10000000ULL
+#define FETCH_BASE 0x10000100ULL
 #define UART_CAP 4096U
 
 #define SSTATUS 0x100
@@ -37,6 +38,8 @@ static u64 fault_addr;
 
 static u8 uart_in[UART_CAP], uart_out[UART_CAP];
 static u32 in_read, in_write, out_read, out_write;
+static u64 fetch_url, fetch_destination;
+static u32 fetch_url_length, fetch_capacity, fetch_length, fetch_status;
 
 static u64 tlb_vpage[512], tlb_ppage[512], tlb_satp[512];
 static u8 tlb_context[512], tlb_valid[512];
@@ -94,6 +97,17 @@ static int physical_read(u64 addr, u32 size, u64 *value)
         } else *value = 0;
         return 1;
     }
+    if (addr >= FETCH_BASE && addr < FETCH_BASE + 32 && size == 4) {
+        u32 reg = (u32)(addr - FETCH_BASE);
+        if (reg == 0) *value = fetch_status;
+        else if (reg == 4) *value = (u32)fetch_url;
+        else if (reg == 8) *value = fetch_url_length;
+        else if (reg == 12) *value = (u32)fetch_destination;
+        else if (reg == 16) *value = fetch_capacity;
+        else if (reg == 20) *value = fetch_length;
+        else *value = 0;
+        return 1;
+    }
     fault_addr = addr;
     fault = 2;
     return 0;
@@ -113,6 +127,15 @@ static int physical_write(u64 addr, u32 size, u64 value)
     if (addr >= UART_BASE && addr < UART_BASE + 8 && size == 1) {
         if (addr == UART_BASE && out_write - out_read < UART_CAP)
             uart_out[out_write++ & (UART_CAP - 1)] = value;
+        return 1;
+    }
+    if (addr >= FETCH_BASE && addr < FETCH_BASE + 32 && size == 4) {
+        u32 reg = (u32)(addr - FETCH_BASE);
+        if (reg == 0) fetch_status = (u32)value;
+        else if (reg == 4) fetch_url = (u32)value;
+        else if (reg == 8) fetch_url_length = (u32)value;
+        else if (reg == 12) fetch_destination = (u32)value;
+        else if (reg == 16) fetch_capacity = (u32)value;
         return 1;
     }
     fault_addr = addr;
@@ -163,6 +186,15 @@ static int translate(u64 va, u32 access, u64 *pa)
 static int load(u64 va, u32 size, u32 access, u64 *v)
 {
     u64 pa;
+    if ((va & 4095) + size > 4096) {
+        u64 byte;
+        *v = 0;
+        for (u32 i = 0; i < size; i++) {
+            if (!translate(va + i, access, &pa) || !physical_read(pa, 1, &byte)) return 0;
+            *v |= byte << (i * 8);
+        }
+        return 1;
+    }
     if (!translate(va, access, &pa)) return 0;
     return physical_read(pa, size, v);
 }
@@ -170,6 +202,12 @@ static int load(u64 va, u32 size, u32 access, u64 *v)
 static int store(u64 va, u32 size, u64 v)
 {
     u64 pa;
+    if ((va & 4095) + size > 4096) {
+        for (u32 i = 0; i < size; i++) {
+            if (!translate(va + i, 2, &pa) || !physical_write(pa, 1, v >> (i * 8))) return 0;
+        }
+        return 1;
+    }
     if (!translate(va, 2, &pa)) return 0;
     return physical_write(pa, size, v);
 }
@@ -428,6 +466,8 @@ void rv_init(u64 entry)
     for (i = 0; i < 4096; ++i) csr[i] = 0;
     pc = entry; ticks = timecmp = 0; privilege = halted = fault = 0;
     in_read = in_write = out_read = out_write = 0;
+    fetch_url = fetch_destination = 0;
+    fetch_url_length = fetch_capacity = fetch_length = fetch_status = 0;
     flush_tlb();
 }
 
@@ -457,3 +497,9 @@ void rv_input(u32 byte)
 
 u32 rv_output_count(void) { return out_write - out_read; }
 u32 rv_output(void) { return out_read == out_write ? 0xffffffffU : uart_out[out_read++ & (UART_CAP - 1)]; }
+u32 rv_fetch_status(void) { return fetch_status; }
+u32 rv_fetch_url(void) { return (u32)fetch_url; }
+u32 rv_fetch_url_length(void) { return fetch_url_length; }
+u32 rv_fetch_destination(void) { return (u32)fetch_destination; }
+u32 rv_fetch_capacity(void) { return fetch_capacity; }
+void rv_fetch_complete(u32 length, u32 status) { fetch_length = length; fetch_status = status; }

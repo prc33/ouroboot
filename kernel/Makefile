@@ -38,7 +38,7 @@ TCCDIR  := ../compiler
 TCCINC  := $(TCCDIR)/include
 
 RISCV64_USER_PROGRAMS := hello proc_test proc_fork_test proc_exec_test \
-	init_test interactive_test exec_target
+	init_test interactive_test exec_target fetch
 RISCV64_USER_ELFS := $(addprefix user_test/,$(addsuffix _riscv64.elf,$(RISCV64_USER_PROGRAMS)))
 MUSL_DIR := ../musl-riscv64
 
@@ -538,7 +538,7 @@ test-initrd-wasm: kernel.elf initrd.tar
 # to an interactive shell (no checkpoint chain to feed proc_test/
 # proc_fork_test/etc to first), so test/build-selfhost-initrd.sh no
 # longer packages the rest of the P4-P10 fixture set either.
-selfhost-initrd tcc-initrd: user_test/busybox_riscv64.elf
+selfhost-initrd tcc-initrd: user_test/busybox_riscv64.elf user_test/fetch_riscv64.elf
 	$(MAKE) -C ../compiler clean
 	$(MAKE) -C ../compiler TARGET=riscv64 stage1
 	sh test/build-selfhost-initrd.sh .. $@.tar

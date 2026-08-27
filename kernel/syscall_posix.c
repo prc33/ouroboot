@@ -1,17 +1,4 @@
-/* Syscall handler bodies shared between i386 and riscv64 -- see
- * syscall_common.h's own "syscall_posix.c" comment for the full
- * rationale. Every argument comes through sys_arg(r, n), every return
- * value through sys_ret(r, val) -- both implemented per-arch (a plain
- * switch over eax/ebx/ecx/.../ebp for i386, a0-a5 for riscv64), never
- * a named `struct regs` field touched directly here. `r` itself is
- * still threaded through to process_fork()/process_execve(), which
- * already treat it opaquely (sched/process.h's own arch seam).
- *
- * This file used to be (most of) arch/risc/riscv64_syscall.c -- every
- * comment below explaining *why* some particular real bug or real
- * strace shaped a given handler is inherited unchanged from there, not
- * rewritten, since none of that reasoning was actually riscv64-
- * specific to begin with. */
+/* Architecture-neutral syscall bodies using sys_arg() and sys_ret(). */
 #include "kernel.h"
 #include "mm/pmm.h"
 #include "mm/paging.h"
@@ -34,6 +21,7 @@
  * not decimal. */
 #define O_CREAT  0100
 #define O_TRUNC  01000
+#define O_APPEND 02000
 
 #define SEEK_SET 0
 #define SEEK_CUR 1
@@ -345,6 +333,8 @@ void sys_mmap(struct regs *r) {
 		sys_ret(r, (unsigned long)-ENOMEM);
 		return;
 	}
+	if (flags & MAP_FIXED)
+		process_note_mmap_end(base + len);
 	sys_ret(r, base);
 }
 
@@ -538,8 +528,10 @@ static void openat_core(struct regs *r, long dirfd, const char *user_path, unsig
 	}
 	resolve_path(path, input, base);
 
-	/* Directories are inferred from stored file path prefixes. */
-	if (ramfs_is_dir(path)) {
+	/* O_CREAT is overwhelmingly a regular-file operation (compiler output and
+	 * archive extraction). Avoid enumerating the entire inferred directory tree
+	 * merely to prove that each new full pathname is not itself a directory. */
+	if (!(flags & O_CREAT) && ramfs_is_dir(path)) {
 		int idx = process_fd_alloc();
 		if (idx < 0) {
 			sys_ret(r, (unsigned long)-ENOMEM);
@@ -581,7 +573,7 @@ static void openat_core(struct regs *r, long dirfd, const char *user_path, unsig
 		struct fd_entry *fd = process_fd_get(idx);
 		fd->data = 0;
 		fd->size = 0;
-		fd->pos = 0;
+		fd->pos = (flags & O_APPEND) ? dyn->size : 0;
 		fd->is_dir = 0;
 		fd->dynfile = dyn;
 		sys_ret(r, (unsigned long)(idx + 3));
@@ -602,7 +594,7 @@ static void openat_core(struct regs *r, long dirfd, const char *user_path, unsig
 		struct fd_entry *fd = process_fd_get(idx);
 		fd->data = 0;
 		fd->size = 0;
-		fd->pos = 0;
+		fd->pos = (flags & O_APPEND) ? dyn->size : 0;
 		fd->is_dir = 0;
 		fd->dynfile = dyn;
 		sys_ret(r, (unsigned long)(idx + 3));
@@ -731,43 +723,10 @@ void sys_read(struct regs *r) {
 			process_schedule();
 		paging_ensure_writable((unsigned long)buf, 1); /* see mm/paging_common.c's own comment -- real bug found here first */
 		unsigned char c = serial_getc();
-		/* ICRNL, by hand: every real tty driver translates an
-		 * incoming CR to LF before a line-buffered reader ever sees
-		 * it (that's what termios' ICRNL flag is), because a real
-		 * terminal always sends '\r' (0x0D) for Enter, never '\n' --
-		 * confirmed for this kernel's own case by instrumenting
-		 * xterm.js's term.onData in the browser demo: pressing Enter
-		 * produces byte 13, not 10. shell/ash.c's own lexer only ever
-		 * treats '\n' as end-of-line, so without this translation no
-		 * real terminal (this browser demo, or a real one attached to
-		 * a real QEMU `-serial stdio` in interactive mode, as opposed
-		 * to checkpoint 10's own piped-literal-\n test input) could
-		 * ever get a command line to execute at all. There's no tty
-		 * layer to put this in otherwise (this function's own header
-		 * comment), so it lives right here at the only place raw
-		 * bytes become a line a shell reads. */
-		if (c == '\r')
-			c = '\n';
-		/* Local echo, by hand, same reasoning as the ICRNL translation
-		 * right above: on a real tty, ECHO is the *kernel* tty
-		 * driver's job, not the application's -- a shell only does
-		 * its own echoing when it's disabled canonical/ECHO mode
-		 * itself to do real line-editing (arrow keys, history), which
-		 * this busybox build doesn't do (FEATURE_EDITING is off --
-		 * see demo/build-busybox-riscv64.sh's allnoconfig-plus-applets
-		 * list; shell/ash.c's own preadfd() falls back to a plain
-		 * read() with zero echo logic without it). Without a tty layer
-		 * to do this for us, sys_read is the only place left, same as
-		 * ICRNL -- echo the byte actually stored (post-translation, so
-		 * Enter echoes as '\n', which serial_putc() below already
-		 * turns into a real "\r\n" for display, same as any other
-		 * newline this kernel prints). No backspace/line-editing
-		 * support is added here -- that needs a real line discipline
-		 * (a whole feature, not a one-line fix); this only restores
-		 * the baseline "I can see what I'm typing" a human doing
-		 * interactive work expects, without asking them to write their
-		 * own line editor first. */
-		serial_putc(c);
+			/* Minimal tty behavior for an interactive shell. */
+			if (c == '\r')
+				c = '\n';
+			serial_putc(c);
 		buf[0] = c;
 		sys_ret(r, 1);
 		return;
@@ -783,6 +742,40 @@ void sys_read(struct regs *r) {
 		return;
 	}
 	sys_ret(r, read_from_fd_entry(entry, buf, count));
+}
+
+void sys_readv(struct regs *r) {
+	unsigned long fd = sys_arg(r, 0);
+	unsigned long *iov = (unsigned long *)sys_arg(r, 1);
+	unsigned long iovcnt = sys_arg(r, 2);
+	struct fd_entry *entry = fd == 0 ? process_stdio_get(0) :
+		(fd >= 3 ? process_fd_get((int)fd - 3) : 0);
+	if (!entry) { sys_ret(r, (unsigned long)-EBADF); return; }
+	unsigned long total = 0;
+	for (unsigned long i = 0; i < iovcnt; i++) {
+		unsigned long n = read_from_fd_entry(entry,
+			(unsigned char *)iov[i * 2], iov[i * 2 + 1]);
+		total += n;
+		if (n < iov[i * 2 + 1]) break;
+	}
+	sys_ret(r, total);
+}
+
+/* ramfs infers directories from file paths and stores no metadata. These
+ * minimal Linux semantics are sufficient for archive extraction. */
+void sys_mkdirat(struct regs *r) {
+	char path[PATH_MAX_LOCAL];
+	resolve_user_path(path, (const char *)sys_arg(r, 1));
+	sys_ret(r, path[0] || ramfs_is_dir(path) ? 0 : (unsigned long)-EINVAL);
+}
+
+void sys_metadata_noop(struct regs *r) { sys_ret(r, 0); }
+
+void sys_umask(struct regs *r) {
+	static unsigned int mask = 022;
+	unsigned int old = mask;
+	mask = (unsigned int)sys_arg(r, 0) & 0777;
+	sys_ret(r, old);
 }
 
 /* checkpoint 12: real seeking -- needed for real file writes, not
@@ -952,24 +945,7 @@ void sys_dup2(struct regs *r) {
 	dup_into(r, oldfd, newfd);
 }
 
-/* checkpoint 9: ash dup()s its script fd to a fresh slot right after
- * opening it (shell/ash.c: `fd = fcntl(fd, F_DUPFD_CLOEXEC, 10)`),
- * standard shell practice to keep the script's own fd out of the way
- * of whatever low fd numbers the script's commands might use.
- * F_DUPFD/F_DUPFD_CLOEXEC here allocate a fresh mm/ramfs.h fd table
- * slot and copy the entry (data/size/pos) into it -- a real dup()
- * shares the underlying file description (so both fds' positions
- * stay in sync), this makes an independent copy instead; nothing in
- * this checkpoint's tests reads through both the old and new fd
- * concurrently, so the difference doesn't show. The `arg` minimum-fd-
- * number argument (real dup() promises the new fd is >= arg) is
- * ignored -- this fd table is tiny (MAX_FDS) and dense from 3, always
- * comfortably below whatever avoidance threshold a caller asks for.
- * close-on-exec itself is a no-op for the same reason
- * F_GETFD/F_SETFD are: nothing in this kernel enforces it (fork()/
- * execve() already just keep every fd open, see sched/process.h's
- * own comment on process_fork()'s fd copy), so there's no flag to
- * actually store. */
+/* F_DUPFD copies the entry; close-on-exec and the minimum fd are omitted. */
 void sys_fcntl(struct regs *r) {
 	unsigned long fd = sys_arg(r, 0);
 	unsigned long cmd = sys_arg(r, 1);
@@ -1016,20 +992,7 @@ void sys_fcntl(struct regs *r) {
 	sys_ret(r, (unsigned long)-ENOSYS);
 }
 
-/* checkpoint 11: real ls -- musl's readdir() (src/dirent/readdir.c) is
- * a thin wrapper around this one syscall, refilling its own 2KB
- * buffer whenever exhausted. struct linux_dirent64's layout (this is
- * a Linux kernel ABI struct, not the C library's own struct dirent,
- * even though musl's arch/generic/bits/dirent.h happens to define
- * struct dirent with the exact same field order/sizes and just
- * treats a raw getdents64 buffer as an array of them -- confirmed by
- * reading both, not assumed): d_ino (8), d_off (8), d_reclen (2),
- * d_type (1), then a NUL-terminated name. d_off is real Linux's
- * "seek cookie for the next entry" (what a real filesystem's
- * seekdir()/telldir() round-trips through); nothing this kernel runs
- * calls those, so it's left 0 rather than computed. Same layout on
- * both arches -- this is the Linux kernel ABI struct, not something
- * either arch's own struct dirent lays out differently. */
+/* Linux dirent64 layout: ino, offset, record length, type, name. */
 #define DT_DIR 4
 #define DT_REG 8
 #define DT_LNK 10
@@ -1103,24 +1066,15 @@ void sys_getdents64(struct regs *r) {
  * that function's own signature can just be "two NUL-terminated
  * char* arrays", arch-neutral in spirit even though nothing else
  * uses it yet). */
-/* checkpoint 14: bumped from 8 -- must match sched/process.c's own
- * copy (duplicated rather than shared via a header, same convention
- * as that file's own FORK_MMAP_HI comment). A real self-hosted
- * `tcc -B... -I... -I... -I... -I... -nostdinc -c -o out.o in.c`
- * invocation (see compiler/Makefile's own stage1 recipe, the proven
- * command line this mirrors) needs 13 argv entries; 20 is headroom
- * above that measured count. */
-#define EXECVE_MAX_ARGV 20
-
 void sys_execve(struct regs *r) {
 	char path[PATH_MAX_LOCAL];
 	resolve_user_path(path, (const char *)sys_arg(r, 0));
 
-	char *argv[EXECVE_MAX_ARGV + 1];
+	char *argv[PROCESS_EXEC_MAX_ARGS + 1];
 	unsigned long *user_argv = (unsigned long *)sys_arg(r, 1);
 	int argc = 0;
 	if (user_argv)
-		while (argc < EXECVE_MAX_ARGV && user_argv[argc]) {
+		while (argc < PROCESS_EXEC_MAX_ARGS && user_argv[argc]) {
 			argv[argc] = (char *)user_argv[argc];
 			argc++;
 		}
@@ -1135,24 +1089,7 @@ void sys_execve(struct regs *r) {
 	 * to this call site at all) */
 }
 
-/* checkpoint 9: busybox ash's own startup needs all of these -- see
- * arch/risc/riscv64_syscall.c's own git history for the real strace
- * this was derived from (a real ash -c/script run under
- * qemu-riscv64-static, same methodology as everything else in this
- * file).
- *
- * struct stat layout confirmed by compiling a small offsetof() probe
- * with the riscv64 toolchain and running it under qemu-riscv64-static,
- * rather than hand-deriving field offsets from musl's typedefs
- * (nlink_t/blksize_t/etc.'s actual sizes depend on ifdef branches easy
- * to misread): dev_t/ino_t/rdev at byte offsets 0/8/32 (8 bytes
- * each), mode_t/nlink_t/uid_t/gid_t at 16/20/24/28 (4 bytes each), an
- * 8-byte pad, then off_t/blksize_t/blkcnt_t at 48/56/64 (8 bytes
- * each), three 16-byte timespecs from byte 72 -- 128 bytes total.
- * i386's own struct stat (musl's arch/i386/bits/stat.h) is a
- * *different* real layout, not yet confirmed the same rigorous way --
- * sys_newfstatat is deliberately not shared for that reason, see its
- * own comment right below. */
+/* RISC-V stat layout is filled by the architecture-specific handler. */
 #define S_IFDIR 0040000
 #define S_IFREG 0100000
 

@@ -1,17 +1,5 @@
-/* Bitmap physical page allocator. Covers up to MAX_MEMORY_MB of RAM --
- * fixed-size static bitmap rather than a dynamically-sized one, since
- * we don't have a working allocator yet to size one with (chicken and
- * egg); 128MB is comfortably more than any phase up to and including
- * the kernel-builds-itself milestone needs.
- *
- * phys_base: i386 RAM starts at physical 0, so it's always 0 there.
- * riscv64 RAM starts at 0x80000000 (QEMU virt machine) -- without
- * this, the bitmap would need to cover pages 0..0x80000000/PAGE_SIZE
- * just to reach the start of usable memory, wasting almost all of it.
- * Internally the bitmap is indexed by page number *relative to*
- * phys_base; every address crossing this file's API boundary
- * (pmm_alloc_page's return value, pmm_free_page's argument) is an
- * absolute physical address, same as before this parameter existed. */
+/* Bitmap allocator. Bitmap indices are relative to each architecture's RAM
+ * base; public addresses are absolute. */
 #include "kernel.h"
 #include "pmm.h"
 
@@ -25,6 +13,7 @@
 extern unsigned char kernel_end;
 
 static unsigned int bitmap[BITMAP_WORDS];
+static unsigned short refs[MAX_PAGES];
 static unsigned int total_pages;
 static unsigned int free_pages;
 static unsigned int phys_base;
@@ -52,6 +41,8 @@ void pmm_init(unsigned int mem_top, unsigned int base) {
 	 * remember to apply everywhere */
 	for (unsigned int i = 0; i < BITMAP_WORDS; i++)
 		bitmap[i] = 0xFFFFFFFFu;
+	for (unsigned int i = 0; i < MAX_PAGES; i++)
+		refs[i] = 1;
 
 	/* everything from the kernel's load address up through the page
 	 * containing kernel_end is not free -- it's us. Everything below
@@ -63,6 +54,7 @@ void pmm_init(unsigned int mem_top, unsigned int base) {
 	free_pages = 0;
 	for (unsigned int p = first_free_page; p < total_pages; p++) {
 		bitmap_clear(p);
+		refs[p] = 0;
 		free_pages++;
 	}
 
@@ -70,28 +62,13 @@ void pmm_init(unsigned int mem_top, unsigned int base) {
 		(void *)(unsigned long)kend, free_pages, free_pages * 4);
 }
 
-/* Scans from next_free_hint (wrapping around, so this still finds any
- * free page that exists) instead of always restarting at page 0 --
- * real bug in the original always-from-0 version, found running
- * checkpoint 9's much larger, more allocation-heavy kernel image
- * under emulator/web/: every call re-scanned however many already-
- * permanently-used low pages had accumulated so far, an O(total
- * allocations so far) cost *per call* that made the whole boot
- * sequence's cumulative cost effectively quadratic in how much had
- * been allocated -- fine at P1-P8's scale (never enough allocations
- * for the effect to be visible), bad enough by checkpoint 9's real
- * busybox-sized workload that the Wasm emulator's own test genuinely
- * didn't finish in 20 real minutes where QEMU took seconds (QEMU
- * runs the *actual instructions* at native speed regardless of how
- * many extra ones this loop executes; the JS interpreter pays for
- * every one of them). Still worst-case O(total_pages) if the bitmap
- * is nearly full, but the common case (monotonically allocating into
- * still-free space) is now O(1) amortized. */
+/* The rotating hint makes sequential allocation amortized O(1). */
 unsigned int pmm_alloc_page(void) {
 	for (unsigned int i = 0; i < total_pages; i++) {
 		unsigned int p = (next_free_hint + i) % total_pages;
 		if (!bitmap_test(p)) {
 			bitmap_set(p);
+			refs[p] = 1;
 			free_pages--;
 			next_free_hint = p + 1;
 			return phys_base + p * PAGE_SIZE;
@@ -100,15 +77,12 @@ unsigned int pmm_alloc_page(void) {
 	return 0; /* out of memory */
 }
 
-/* Straight scan from page 0, not next_free_hint -- unlike
- * pmm_alloc_page()'s single-page case, this isn't a hot path (called
- * O(log(file size)) times per file, on growth, not once per byte), so
- * there's no need for its amortized-O(1) trick; starting from 0 finds
- * the lowest-addressed run rather than risking missing one below
- * next_free_hint entirely. */
+/* Contiguous allocation scans from zero so it cannot miss an earlier run. */
 unsigned int pmm_alloc_contiguous(unsigned int count) {
 	if (count == 0 || count > total_pages)
 		return 0;
+	if (count == 1)
+		return pmm_alloc_page();
 	unsigned int run_start = 0;
 	unsigned int run_len = 0;
 	for (unsigned int p = 0; p < total_pages; p++) {
@@ -118,7 +92,7 @@ unsigned int pmm_alloc_contiguous(unsigned int count) {
 			run_len++;
 			if (run_len == count) {
 				for (unsigned int q = run_start; q < run_start + count; q++)
-					bitmap_set(q);
+					bitmap_set(q), refs[q] = 1;
 				free_pages -= count;
 				return phys_base + run_start * PAGE_SIZE;
 			}
@@ -129,9 +103,15 @@ unsigned int pmm_alloc_contiguous(unsigned int count) {
 	return 0; /* no run of `count` contiguous free pages -- real fragmentation, not a bug */
 }
 
+void pmm_retain_page(unsigned int addr) {
+	unsigned int p = (addr - phys_base) / PAGE_SIZE;
+	if (p < total_pages && bitmap_test(p) && refs[p] != 0xffff)
+		refs[p]++;
+}
+
 void pmm_free_page(unsigned int addr) {
 	unsigned int p = (addr - phys_base) / PAGE_SIZE;
-	if (p < total_pages && bitmap_test(p)) {
+	if (p < total_pages && bitmap_test(p) && refs[p] && --refs[p] == 0) {
 		bitmap_clear(p);
 		free_pages++;
 	}
@@ -149,6 +129,7 @@ void pmm_reserve_range(unsigned int lo, unsigned int hi) {
 	for (unsigned int p = first; p < last; p++) {
 		if (!bitmap_test(p)) {
 			bitmap_set(p);
+			refs[p] = 1;
 			free_pages--;
 		}
 	}

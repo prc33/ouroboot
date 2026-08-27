@@ -194,6 +194,10 @@ void sys_openat(struct regs *r);
 void sys_open(struct regs *r); /* i386 only -- see syscall_posix.c's own comment */
 void sys_close(struct regs *r);
 void sys_read(struct regs *r);
+void sys_readv(struct regs *r);
+void sys_mkdirat(struct regs *r);
+void sys_metadata_noop(struct regs *r);
+void sys_umask(struct regs *r);
 void sys_lseek(struct regs *r);
 void sys_unlinkat(struct regs *r);
 void sys_unlink(struct regs *r); /* i386 only -- see syscall_posix.c's own comment */

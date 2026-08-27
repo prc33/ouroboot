@@ -1,49 +1,4 @@
-/* General process table -- checkpoint 6. Real, independent U-mode
- * processes: each gets its own address space (mm/paging.h's
- * paging_new_addrspace/paging_activate), its own kernel stack, and a
- * saved trapframe restored via the architecture's own trap-return
- * mechanism (process_arch_activate_and_restore() -- see this file's
- * own "arch seam" comment in process.h) -- see arch/risc/riscv64_trap_entry.S's
- * own comment for why unifying "trap stack" and "process kernel
- * stack" is what makes a process able to genuinely block mid-syscall
- * (this checkpoint's SYS_sched_yield) and be resumed later exactly
- * where it left off.
- *
- * checkpoint 16 (docs/kernel-arch-split-plan.md): this file used to be
- * sched/riscv64_process.c, and was about 94% architecture-neutral
- * already -- see docs/kernel-complexity-review.md section 12's own
- * measurement. The genuinely riscv64-specific ~6% (struct regs's own
- * layout, CSR/SSTATUS bits, the trap-return mechanism, the hand-built
- * initial-kernel-stack-frame convention switch_context() expects) now
- * lives in arch/risc/riscv64_process.c instead, behind the small
- * process_arch_*() interface declared in process.h. This file only
- * ever touches `struct regs` opaquely (as a pointer to snapshot/pass
- * along), never a named field of it.
- *
- * Two distinct "kernel-side execution" mechanisms coexist here, both
- * ultimately switch_context() (arch/risc/riscv64_switch_context.S),
- * unchanged from P4's task scheduler -- it's a generic "swap callee-
- * saved regs + sp, ret" coroutine primitive that's never cared what
- * call chain it's swapping:
- *   1. A process being dispatched *for the first time*: its
- *      kernel_sp is a hand-built initial frame (same technique as
- *      arch/risc/riscv64_task.c's task_init) whose `ra` is
- *      process_arch_trampoline -- switch_context's `ret` jumps
- *      straight there, which activates the process's address space,
- *      seeds the global trapframe from its saved user_regs, and falls
- *      into the architecture's own trap-return path to actually enter
- *      U-mode.
- *   2. A process *resuming after a blocking syscall*: its kernel_sp
- *      is wherever process_schedule()'s own switch_context() call
- *      left off, deep inside that process's own C call stack (e.g.
- *      inside sys_sched_yield). Resuming here just continues that C
- *      code normally; it eventually returns out through
- *      syscall_dispatch/trap_dispatch and falls into the trap entry
- *      code's restore-and-return tail via the ordinary call site, the
- *      same path every non-blocking syscall already used in P1-P5.
- * Both end up executing in U-mode via the exact same restore code,
- * just entered two different ways.
- */
+/* Architecture-neutral process table; process_arch_* owns trap details. */
 #include "kernel.h"
 #include "mm/pmm.h"
 #include "mm/paging.h"
@@ -91,40 +46,21 @@ void process_init(void) {
 	current_process = 0;
 }
 
-/* checkpoint 15: the single canonical user-stack/argv/envp/auxv
- * builder -- process_create_from_elf() and process_execve() used to
- * each hand-roll their own nearly-identical version (see
- * docs/kernel-complexity-review.md section 3). This is process_execve()'s
- * own version, kept as the one canonical implementation rather than
- * process_create_from_elf()'s older one: it's the one that's actually
- * been stress-tested end to end -- every self-hosted TCC compile
- * (kernel/test/selfhost.sh) runs its own deeply recursive parser
- * through exactly this stack, including its lazy growth
- * (process_handle_stack_fault(), below) down to USER_STACK_LIMIT.
- *
- * kernel/test/riscv64_checkpoints.c's own run_elf_test() deliberately
- * stays unconverged -- see that file's own comment for why (it runs
- * before there's a process table at all, so there's no `struct
- * process` for this to write into).
- *
- * Maps and zeroes EXECVE_STACK_PAGES pages at the top of `p`'s address
- * space, records the committed range, writes `argc` NUL-terminated
- * strings from `argv` into the top STRDATA_SIZE bytes, and the
- * argc/argv/envp/auxv pointer block (envp always empty, one real
- * auxv entry -- AT_PAGESZ, which musl's __libc_start_main has no
- * fallback for) into PTRBLOCK_SIZE bytes below that. Returns the
- * resulting sp. Every `argv[i]` must already be kernel-resident by the
- * time this is called -- process_execve()'s own caller is responsible
- * for snapshotting real (user-space) argv strings first, since this
- * function runs *after* the new address space is already active. */
-#define EXECVE_MAX_ARGV 20
-#define EXECVE_ARG_MAX 128
-#define STRDATA_SIZE 2560
-#define PTRBLOCK_SIZE 512
-#define EXECVE_STACK_PAGES USER_STACK_INITIAL_PAGES
+/* Build the initial argc/argv/envp/auxv stack. argv must be kernel-resident. */
+#define EXECVE_ARG_MAX 256
 
 static unsigned long build_user_stack(struct process *p, char *const argv[], int argc) {
-	unsigned long stack_pages = EXECVE_STACK_PAGES;
+	unsigned long string_bytes = 0;
+	for (int a = 0; a < argc; a++) {
+		unsigned long len = 1;
+		while (argv[a][len - 1]) len++;
+		string_bytes += len;
+	}
+	unsigned long pointer_bytes = (unsigned long)(argc + 7) * sizeof(unsigned long);
+	unsigned long needed = string_bytes + pointer_bytes + 15;
+	unsigned long stack_pages = (needed + PAGE_SIZE - 1) / PAGE_SIZE;
+	if (stack_pages < USER_STACK_INITIAL_PAGES)
+		stack_pages = USER_STACK_INITIAL_PAGES;
 	unsigned long stack_top = USER_STACK_TOP;
 	unsigned long stack_va = stack_top - stack_pages * PAGE_SIZE;
 	for (unsigned long i = 0; i < stack_pages; i++) {
@@ -142,8 +78,8 @@ static unsigned long build_user_stack(struct process *p, char *const argv[], int
 	p->user_brk = USER_BRK_BASE;
 	p->user_mmap_next = USER_MMAP_BASE;
 
-	unsigned char *strp = (unsigned char *)(stack_top - STRDATA_SIZE);
-	unsigned long argv_ptrs[EXECVE_MAX_ARGV];
+	unsigned char *strp = (unsigned char *)(stack_top - string_bytes);
+	unsigned long argv_ptrs[PROCESS_EXEC_MAX_ARGS];
 	for (int a = 0; a < argc; a++) {
 		int len = 0;
 		while (argv[a][len])
@@ -154,7 +90,7 @@ static unsigned long build_user_stack(struct process *p, char *const argv[], int
 		strp += len + 1;
 	}
 
-	unsigned long *sp = (unsigned long *)(stack_top - STRDATA_SIZE - PTRBLOCK_SIZE);
+	unsigned long *sp = (unsigned long *)((unsigned long)(stack_top - string_bytes - pointer_bytes) & ~15UL);
 	int idx = 0;
 	sp[idx++] = argc;
 	for (int a = 0; a < argc; a++)
@@ -187,6 +123,7 @@ struct process *process_create_from_elf_argv(const unsigned char *elf_data, unsi
 	unsigned long entry = elf_load(elf_data, elf_size);
 	if (!entry) {
 		paging_activate(prev_root);
+		paging_destroy_addrspace(new_root);
 		return 0;
 	}
 
@@ -359,6 +296,11 @@ unsigned long process_take_mmap(unsigned long length) {
 	return base;
 }
 
+void process_note_mmap_end(unsigned long end) {
+	if (current_process && end > current_process->user_mmap_next)
+		current_process->user_mmap_next = end;
+}
+
 int process_handle_stack_fault(unsigned long address) {
 	if (!current_process || address < current_process->user_stack_limit ||
 	    address >= current_process->user_stack_hi)
@@ -387,77 +329,7 @@ void process_set_current_cwd(const char *path) {
 	current_process->cwd[i] = 0;
 }
 
-/* checkpoint 7: real fork(), via SYS_clone -- see process.h's own
- * comment for why clone() rather than a dedicated fork syscall, and
- * arch/risc/riscv64_syscall.c for the narrow flags check that gates
- * getting here at all.
- *
- * The [lo,hi) ranges cloned below are a real, deliberate
- * simplification, not the general case: this checkpoint has no
- * per-process VMA list recording what a process has actually mapped
- * (process_create_from_elf hardcodes its own ELF-load and stack
- * ranges the same way), so fork() just clones the same fixed windows
- * every process is known to actually use -- 16MB from 0, comfortably
- * covering any of this kernel's real ELF payloads' code/data/BSS; the
- * process's actual mapped stack at 0xB0000000; and 1MB of
- * arch/risc/riscv64_syscall.c's own mmap arena
- * (MMAP_BASE, same value duplicated here rather than shared via a
- * header -- matches this function's existing "each fixed window
- * hardcoded where it's used" style).
- *
- * That third range is checkpoint 9's own real bug, found running
- * busybox ash for the first time: ash mmap()s a buffer for reading
- * its script *before* fork()ing to run an external command (this
- * function originally only cloned the first two ranges) -- the
- * forked child's own post-fork/pre-execve code (still running ash's
- * own binary, same as any real fork()) touched that buffer, which
- * its own COW-cloned address space never had mapped at all (not
- * missing a copy -- genuinely absent, unlike a stale-but-present COW
- * page), producing an unhandled load page fault. Every earlier
- * fork()-using test in this kernel used a program that never called
- * mmap, so this was invisible until a real, more complex program
- * exercised fork() and mmap() together. A process that mapped
- * anything outside these three windows still wouldn't survive a fork
- * -- true of every real program this checkpoint actually runs, but
- * not the general case, same spirit as mm/elf.c's own "no filesystem
- * yet" caveat elsewhere in this kernel.
- *
- * checkpoint 19: FORK_CLONE_LO/HI is the one real arch-specific value
- * in this otherwise fully generic function -- not because fork()
- * itself differs, but because where a real ELF actually loads
- * genuinely differs between the two arches' address layouts. riscv64
- * puts user code at small virtual addresses (0x100b0 in this
- * checkpoint's own test payloads) nowhere near arch/risc/riscv64_paging.c's
- * own kernel-shared region (which starts at RV64_RAM_BASE,
- * 0x80000000), so [0, 16MB) never collides with it. i386 is the
- * opposite: standard i386 ELF binaries load at 0x08048000+ (musl's
- * own convention, confirmed by every real test payload's own printed
- * entry address), which *would* fall inside [0, 16MB) -- and
- * arch/i386/paging.c's own kernel-shared region *also* starts at 0,
- * not some higher base. Cloning [0, 16MB) on i386 doesn't just miss
- * the real ELF (wrong window, silently incomplete) -- it's much worse:
- * paging_fork_cow() would COW-mark *shared kernel page-table pages*
- * (the ones arch/i386/paging.c's paging_new_addrspace() copied PDE
- * pointers to, not copies), corrupting every address space's view of
- * that memory the instant anything touched it. Real bug, found
- * running this exact checkpoint on i386 for the first time: a page
- * fault deep inside the kernel's own fork() handling itself,
- * eventually a triple fault, confirmed via QEMU's own `-d int` trace
- * rather than guessed. i386's own window instead starts at 0x08000000
- * (128MB) -- arch/i386/paging.c's own MAX_SHARED_MB cap guarantees the
- * kernel-shared region never reaches that high regardless of how much
- * RAM QEMU is given, so this is safely disjoint by construction, not
- * by coincidence. */
-#ifndef KERNEL_ARCH_RISCV64
-#define FORK_CLONE_LO 0x08000000UL /* 128MB -- see this function's own comment */
-#define FORK_CLONE_HI 0x09000000UL /* +16MB */
-#else
-#define FORK_CLONE_LO 0x0UL
-#define FORK_CLONE_HI 0x1000000UL   /* 16MB */
-#endif
-#define FORK_MMAP_LO 0x60000000UL  /* arch/risc/riscv64_syscall.c's MMAP_BASE */
-#define FORK_MMAP_HI 0x60100000UL  /* 1MB -- comfortably past what any real fork()+mmap() test here actually uses */
-
+/* Fork every mapped user page copy-on-write. */
 int process_fork(struct regs *r) {
 	struct process *parent = current_process;
 	struct process *child = alloc_slot();
@@ -465,9 +337,7 @@ int process_fork(struct regs *r) {
 		return -1;
 
 	unsigned long *child_root = paging_new_addrspace();
-	paging_fork_cow(child_root, parent->root_table, FORK_CLONE_LO, FORK_CLONE_HI);
-	paging_fork_cow(child_root, parent->root_table, parent->user_stack_lo, parent->user_stack_hi);
-	paging_fork_cow(child_root, parent->root_table, FORK_MMAP_LO, FORK_MMAP_HI);
+	paging_fork_user(child_root, parent->root_table);
 
 	child->root_table = child_root;
 	child->pid = next_pid++;
@@ -544,6 +414,8 @@ long process_wait4(int pid, int *status_out, int options) {
 				int reaped_pid = p->pid;
 				if (status_out)
 					*status_out = (p->exit_code & 0xff) << 8; /* WIFEXITED/WEXITSTATUS-decodable, real Linux encoding */
+				paging_destroy_addrspace(p->root_table);
+				p->root_table = 0;
 				p->state = PROC_UNUSED; /* reaped -- slot free for reuse */
 				return reaped_pid;
 			}
@@ -670,17 +542,21 @@ int process_execve(struct regs *r, const char *path, char **argv, char **envp) {
 	 * activated, `argv`/`argv[i]` (pointers into the *old* one) stop
 	 * meaning anything. Bounded: nothing this kernel execve()s needs
 	 * more than a handful of short arguments. */
-	static char argbuf[EXECVE_MAX_ARGV][EXECVE_ARG_MAX];
+	static char argbuf[PROCESS_EXEC_MAX_ARGS][EXECVE_ARG_MAX];
 	int argc = 0;
-	while (argv && argv[argc] && argc < EXECVE_MAX_ARGV) {
+	while (argv && argv[argc] && argc < PROCESS_EXEC_MAX_ARGS) {
 		int i = 0;
 		while (argv[argc][i] && i < EXECVE_ARG_MAX - 1) {
 			argbuf[argc][i] = argv[argc][i];
 			i++;
 		}
 		argbuf[argc][i] = 0;
+		if (argv[argc][i])
+			return -1;
 		argc++;
 	}
+	if (argv && argv[argc])
+		return -1;
 
 	struct process *p = current_process;
 	unsigned long *prev_root = paging_active_root(); /* == p->root_table, still valid until we succeed */
@@ -690,6 +566,7 @@ int process_execve(struct regs *r, const char *path, char **argv, char **envp) {
 	unsigned long entry = elf_load(elf_data, elf_data_size);
 	if (!entry) {
 		paging_activate(prev_root);
+		paging_destroy_addrspace(new_root);
 		return -1;
 	}
 
@@ -698,19 +575,13 @@ int process_execve(struct regs *r, const char *path, char **argv, char **envp) {
 	 * actual array of pointers to them, not the 2D array itself (whose
 	 * row stride, EXECVE_ARG_MAX, isn't the pointer-array layout it
 	 * expects). */
-	char *argv_kernel[EXECVE_MAX_ARGV];
+	char *argv_kernel[PROCESS_EXEC_MAX_ARGS];
 	for (int a = 0; a < argc; a++)
 		argv_kernel[a] = argbuf[a];
 	unsigned long sp = build_user_stack(p, argv_kernel, argc);
 
-	/* Replace this process's address space in place -- old physical
-	 * pages (code/data/stack of whatever was running before) are
-	 * simply never freed. Documented leak, not an oversight: this
-	 * kernel has no "tear down an address space" walk yet (same
-	 * "no reclaim yet" simplification as arch/risc/riscv64_syscall.c's
-	 * sys_brk shrink path), and every process in this checkpoint's
-	 * tests execve()s at most once. */
 	p->root_table = new_root;
+	paging_destroy_addrspace(prev_root);
 	/* the old program's TLS pointer is meaningless in the new address
 	 * space it was never mapped into -- see struct process's own
 	 * tls_base comment. The new program gets a clean slate, same as a

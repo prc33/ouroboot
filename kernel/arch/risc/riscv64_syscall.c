@@ -37,8 +37,10 @@
 #include "riscv64_trap.h"
 #include "mm/pmm.h"
 #include "mm/paging.h"
+#include "mm/ramfs.h"
 #include "sched/process.h"
 #include "syscall_common.h"
+#include "riscv64_memmap.h"
 
 #define SYS_ioctl             29
 #define SYS_sched_yield      124
@@ -58,6 +60,7 @@
 #define SYS_openat                                        56
 #define SYS_close                                            57
 #define SYS_read                                                63
+#define SYS_readv                                               65
 #define SYS_execve                                                221
 #define SYS_getcwd                                                    17
 #define SYS_chdir                                                        49
@@ -73,10 +76,24 @@
 #define SYS_getdents64                                                                          61
 #define SYS_lseek                                                                                   62
 #define SYS_unlinkat                                                                                   35
+#define SYS_mkdirat                                                                                    34
+#define SYS_fchmodat                                                                                       53
+#define SYS_fchownat                                                                                         54
+#define SYS_utimensat                                                                                              88
+#define SYS_umask                                                                                                              166
 #define SYS_dup3                                                                                           24
 #define SYS_faccessat                                                                                          48
+#define SYS_ouro_fetch 1000
 
 #define ENOSYS  38
+#define ENOENT   2
+#define EIO       5
+#define EINVAL   22
+#define ENOMEM   12
+
+#define FETCH ((volatile unsigned int *)0x10000100UL)
+
+static char fetch_url[1024];
 
 /* --- register accessors syscall_posix.c calls through --- */
 unsigned long sys_arg(struct regs *r, int n) {
@@ -133,6 +150,29 @@ static void fill_stat(unsigned char *sb, unsigned int mode, unsigned long size) 
  * used to each have a private copy here -- see syscall_common.h's own
  * comment (checkpoint 21); this file just uses the shared ones now. */
 
+static void sys_ouro_fetch(struct regs *r) {
+	const char *url = (const char *)sys_arg(r, 0);
+	char path[PATH_MAX_LOCAL];
+	resolve_user_path(path, (const char *)sys_arg(r, 1));
+	unsigned int n = 0;
+	while (url[n] && n < sizeof(fetch_url)) { fetch_url[n] = url[n]; n++; }
+	if (!n || n == sizeof(fetch_url)) { sys_ret(r, (unsigned long)-EINVAL); return; }
+	FETCH[1] = (unsigned int)(unsigned long)fetch_url;
+	FETCH[2] = n;
+	FETCH[3] = (unsigned int)RV64_FETCH_BUFFER;
+	FETCH[4] = (unsigned int)RV64_FETCH_BUFFER_SIZE;
+	FETCH[0] = 1;
+	while (FETCH[0] == 1) { }
+	if (FETCH[0] != 2) { FETCH[0] = 0; sys_ret(r, (unsigned long)-EIO); return; }
+	struct ramfs_dynamic_file *f = ramfs_dynamic_open_or_create(path);
+	if (!f) { FETCH[0] = 0; sys_ret(r, (unsigned long)-ENOMEM); return; }
+	ramfs_dynamic_truncate(f);
+	unsigned int length = FETCH[5];
+	int failed = ramfs_dynamic_write(f, 0, (const unsigned char *)RV64_FETCH_BUFFER, length);
+	FETCH[0] = 0;
+	sys_ret(r, failed ? (unsigned long)-ENOMEM : length);
+}
+
 /* checkpoint 21: the is_dir -> dynamic -> fixed lookup order itself is
  * syscall_common.h's own shared stat_lookup() now (identical to
  * arch/i386/syscall.c's own equivalent, once compared side by side --
@@ -169,6 +209,7 @@ static void syscall_dispatch(struct regs *r) {
 	case SYS_openat:                                    sys_openat(r); return;
 	case SYS_close:                                        sys_close(r); return;
 	case SYS_read:                                            sys_read(r); return;
+	case SYS_readv:                                           sys_readv(r); return;
 	case SYS_execve:                                              sys_execve(r); return;
 	case SYS_getcwd:                                                 sys_getcwd(r); return;
 	case SYS_chdir:                                                     sys_chdir(r); return;
@@ -184,8 +225,14 @@ static void syscall_dispatch(struct regs *r) {
 	case SYS_getdents64:                                                                                   sys_getdents64(r); return;
 	case SYS_lseek:                                                                                           sys_lseek(r); return;
 	case SYS_unlinkat:                                                                                           sys_unlinkat(r); return;
+	case SYS_mkdirat:                                                                                              sys_mkdirat(r); return;
+	case SYS_fchmodat:                                                                                              sys_metadata_noop(r); return;
+	case SYS_fchownat:                                                                                              sys_metadata_noop(r); return;
+	case SYS_utimensat:                                                                                             sys_metadata_noop(r); return;
+	case SYS_umask:                                                                                                 sys_umask(r); return;
 	case SYS_dup3:                                                                                                  sys_dup3(r); return;
 	case SYS_faccessat:                                                                                               sys_faccessat(r); return;
+	case SYS_ouro_fetch:                                                                                                  sys_ouro_fetch(r); return;
 	default:
 		kprintf("FATAL: unimplemented syscall %lu\n", r->a7);
 		r->a0 = (unsigned long)-ENOSYS;
@@ -198,5 +245,6 @@ void syscall_init(void) {
 		"brk, mmap, mremap, munmap, ioctl, sched_yield, set_tid_address, "
 		"clone, wait4, rt_sigprocmask, gettid, openat, close, read, execve, "
 		"getcwd, chdir, newfstatat, rt_sigaction, getppid, geteuid, "
-		"getpid, fcntl, getdents64, lseek, unlinkat, dup3, faccessat)\n");
+		"getpid, fcntl, getdents64, lseek, unlinkat, mkdirat, metadata, umask, "
+		"dup3, faccessat, ouro_fetch)\n");
 }

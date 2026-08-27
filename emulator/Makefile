@@ -2,7 +2,7 @@ WASM_TCC := ../compiler/wasm32-tcc
 I386_TCC ?= ../compiler/tcc
 RV64_WASM := web/rv64.wasm
 
-.PHONY: all native test test-boot test-shell clean
+.PHONY: all native test test-boot test-shell test-fetch clean
 
 all: $(RV64_WASM)
 
@@ -31,6 +31,14 @@ test-shell: $(RV64_WASM)
 	node test/boot.mjs ../kernel/kernel.elf 200000000 \
 		'\r\recho hello ash\rls\recho writable-fs-works > wtest\rls\rexit 7\r' \
 		'process: all processes exited' ../kernel/initrd.tar
+
+# Exercises the browser-hosted fetch device without relying on the public
+# network: Node's data: URL support follows the same asynchronous host path.
+test-fetch: $(RV64_WASM)
+	node test/boot.mjs ../kernel/kernel.elf 200000000 \
+		'\r\r/fetch data:text/plain,hello-network fetched\rcat fetched\rexit 7\r' \
+		'fetched 13 bytes to fetched\nhello-network# exit 7\nprocess: all processes exited' \
+		../kernel/tcc-initrd.tar
 
 clean:
 	rm -f $(RV64_WASM) rv64-run

@@ -1,32 +1,4 @@
-/* Sv39 paging: 3-level radix tree, 9+9+9 bits of VPN plus a 12-bit
- * page offset, 4KB pages throughout. Same design simplification as
- * i386's arch/i386/paging.c, stated there and equally true here: the whole
- * address space this kernel manages is identity-mapped, so there's
- * no separate phys->virt translation function anywhere in this file.
- *
- * Genuinely simpler than i386's two-level scheme in one respect:
- * RISC-V only checks R/W/X/U permission bits at the *leaf* PTE --
- * intermediate (non-leaf) PTEs just need V=1 to be walked through, no
- * i386-style "PDE must ALSO carry the USER bit or the PTE's USER bit
- * is vetoed" AND-ing to replicate.
- *
- * Checkpoint 6 (sched/riscv64_process.c) change: P1-P5 only ever had
- * one address space, `root_table` below, used implicitly everywhere.
- * Real processes need their own -- paging_new_addrspace()/
- * paging_activate() and the _in() variants of the original API are
- * new; `root_table` itself is now just "the kernel's own address
- * space" (still what every *_in-less call operates on until something
- * calls paging_activate(), and still what every new address space's
- * kernel-region mapping is shared from -- see paging_new_addrspace()).
- *
- * Checkpoint 17 (docs/kernel-arch-split-plan.md): the actual COW-copy
- * logic (paging_fork_cow(), the page-fault dispatch, paging_ensure_writable())
- * moved out to mm/paging_common.c -- it turned out not to need
- * anything about the walk shape at all, just the accessor functions
- * this file still provides (get_pte_in() and everything built on it
- * stay right here, genuinely riscv64-specific). See that file's own
- * comment for the full rationale.
- */
+/* Sv39 page-table traversal; COW policy lives in mm/paging_common.c. */
 #include "kernel.h"
 #include "riscv64_trap.h"
 #include "riscv64_memmap.h"
@@ -216,6 +188,56 @@ unsigned long *paging_new_addrspace(void) {
 		share_l1_slot(root, va);
 	share_l1_slot(root, 0x10000000UL); /* UART0 */
 	return root;
+}
+
+void paging_destroy_addrspace(unsigned long *root) {
+	if (!root || root == root_table)
+		return;
+	for (unsigned int l2 = 0; l2 < ENTRIES; l2++) {
+		if (!(root[l2] & 1))
+			continue;
+		unsigned long *l1 = (unsigned long *)((root[l2] >> PPN_SHIFT) << 12);
+		unsigned long *master_l1 = 0;
+		if (root_table[l2] & 1)
+			master_l1 = (unsigned long *)((root_table[l2] >> PPN_SHIFT) << 12);
+		for (unsigned int i = 0; i < ENTRIES; i++) {
+			if (!(l1[i] & 1) || (master_l1 && l1[i] == master_l1[i]))
+				continue;
+			unsigned long *l0 = (unsigned long *)((l1[i] >> PPN_SHIFT) << 12);
+			for (unsigned int j = 0; j < ENTRIES; j++)
+				if ((l0[j] & (1 | PTE_USER)) == (1 | PTE_USER))
+					pmm_free_page((unsigned int)((l0[j] >> PPN_SHIFT) << 12));
+			pmm_free_page((unsigned int)(unsigned long)l0);
+		}
+		pmm_free_page((unsigned int)(unsigned long)l1);
+	}
+	pmm_free_page((unsigned int)(unsigned long)root);
+}
+
+void paging_fork_user(unsigned long *dst, unsigned long *src) {
+	for (unsigned int l2 = 0; l2 < ENTRIES; l2++) {
+		if (!(src[l2] & 1))
+			continue;
+		unsigned long *l1 = (unsigned long *)((src[l2] >> PPN_SHIFT) << 12);
+		for (unsigned int i = 0; i < ENTRIES; i++) {
+			if (!(l1[i] & 1))
+				continue;
+			unsigned long *l0 = (unsigned long *)((l1[i] >> PPN_SHIFT) << 12);
+			for (unsigned int j = 0; j < ENTRIES; j++) {
+				unsigned long pte = l0[j];
+				if ((pte & (1 | PTE_USER)) != (1 | PTE_USER))
+					continue;
+				unsigned long phys = (pte >> PPN_SHIFT) << 12;
+				unsigned long flags = (pte & 0x3FFUL & ~PTE_WRITABLE) | PTE_COW;
+				unsigned long va = ((unsigned long)l2 << 30) | ((unsigned long)i << 21) | ((unsigned long)j << 12);
+				l0[j] = ((phys >> 12) << PPN_SHIFT) | flags;
+				pmm_retain_page((unsigned int)phys);
+				paging_map_page_in(dst, va, phys, flags);
+			}
+		}
+	}
+	if (src == active_root)
+		paging_flush_tlb();
 }
 
 /* mm/paging_common.c's paging_fork_cow()/paging_ensure_writable()/
