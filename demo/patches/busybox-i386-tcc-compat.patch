@@ -1217,52 +1217,6 @@ index 0000000..9eabe56
 +# CONFIG_FEATURE_IPC_SYSLOG is not set
 +CONFIG_FEATURE_IPC_SYSLOG_BUFFER_SIZE=0
 +# CONFIG_FEATURE_KMSG_SYSLOG is not set
-diff --git a/build.sh b/build.sh
-new file mode 100755
-index 0000000..5e00b03
---- /dev/null
-+++ b/build.sh
-@@ -0,0 +1,40 @@
-+#!/bin/sh
-+# Builds busybox with our stripped TCC + patched musl, exactly as
-+# used to produce the verified binary in docs/busybox-findings.md.
-+#
-+# Expects to be run from this directory, with sibling checkouts at
-+# ../tcc and ../musl (both already built -- ../compiler/tcc and
-+# ../musl/lib/libc.a must exist).
-+set -e
-+
-+HERE="$(cd "$(dirname "$0")" && pwd)"
-+TCC="${TCC:-$HERE/../compiler/tcc}"
-+MUSL="${MUSL:-$HERE/../musl}"
-+
-+if [ ! -x "$TCC" ]; then
-+	echo "error: $TCC not found -- build the tcc repo first" >&2
-+	exit 1
-+fi
-+if [ ! -f "$MUSL/lib/libc.a" ]; then
-+	echo "error: $MUSL/lib/libc.a not found -- build the musl repo first" >&2
-+	exit 1
-+fi
-+
-+cat > /tmp/busybox-tcc-wrapper.sh << WRAPEOF
-+#!/bin/sh
-+exec "$TCC" -B"$HERE/../compiler" -I"$HERE/../compiler/include" \\
-+  -I"$MUSL/obj/include" -I"$MUSL/include" -I"$MUSL/arch/i386" -I"$MUSL/arch/generic" \\
-+  -L"$MUSL/lib" \\
-+  -nostdinc \\
-+  -D__GNUC__=2 -D__GNUC_MINOR__=95 \\
-+  "\$@"
-+WRAPEOF
-+chmod +x /tmp/busybox-tcc-wrapper.sh
-+
-+make CC=/tmp/busybox-tcc-wrapper.sh AR=ar STRIP=strip SKIP_STRIP=y \
-+	EXTRA_LDFLAGS="-static -nostdlib" \
-+	-j1 "$@"
-+
-+echo ""
-+echo "Built: $HERE/busybox_unstripped"
-+echo "Test with: qemu-i386-static ./busybox_unstripped echo hello"
 diff --git a/scripts/Makefile.host b/scripts/Makefile.host
 index 2e62850..4fedc41 100644
 --- a/scripts/Makefile.host
