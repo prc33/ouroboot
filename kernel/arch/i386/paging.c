@@ -1,29 +1,4 @@
-/* Standard non-PAE x86 paging: two-level page directory + page tables,
- * 4KB pages throughout (not 4MB/PSE -- COW needs per-page control).
- *
- * Design simplification, worth stating explicitly: the whole address
- * space this kernel manages is identity-mapped (virt == phys for
- * every page ever handed out via pmm_alloc_page). That means a
- * physical address is always safely dereferenceable as a pointer,
- * paging on or off, so there's no separate phys->virt translation
- * function anywhere in this file -- same simplification
- * arch/risc/riscv64_paging.c states for itself.
- *
- * Checkpoint 17 (docs/kernel-arch-split-plan.md, "genericize rather
- * than write afresh"): this used to be the whole story -- one fixed
- * page directory, one fixed pool of page tables, no per-process
- * address space at all. Brought up to riscv64_paging.c's own shape
- * instead of inventing a separate one: dynamic table allocation via
- * pmm_alloc_page() (alloc_table(), same technique, same reason --
- * scales with however many processes actually exist instead of a pool
- * sized for exactly one address space), paging_new_addrspace()/
- * paging_activate()/the _in() accessor variants, and the actual
- * COW-copy/page-fault-dispatch logic now shared outright via
- * mm/paging_common.c (this file only decodes CR2/the error code and
- * hands them to paging_handle_fault() -- see that file's own comment
- * for why it doesn't need to know anything about this two-level walk
- * at all). `root_table` below is "the kernel's own address space",
- * same role riscv64_paging.c's own root_table plays. */
+/* Non-PAE two-level paging; COW policy lives in mm/paging_common.c. */
 #include "kernel.h"
 #include "idt.h"
 #include "mm/pmm.h"

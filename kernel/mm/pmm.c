@@ -1,17 +1,5 @@
-/* Bitmap physical page allocator. Covers up to MAX_MEMORY_MB of RAM --
- * fixed-size static bitmap rather than a dynamically-sized one, since
- * we don't have a working allocator yet to size one with (chicken and
- * egg); 128MB is comfortably more than any phase up to and including
- * the kernel-builds-itself milestone needs.
- *
- * phys_base: i386 RAM starts at physical 0, so it's always 0 there.
- * riscv64 RAM starts at 0x80000000 (QEMU virt machine) -- without
- * this, the bitmap would need to cover pages 0..0x80000000/PAGE_SIZE
- * just to reach the start of usable memory, wasting almost all of it.
- * Internally the bitmap is indexed by page number *relative to*
- * phys_base; every address crossing this file's API boundary
- * (pmm_alloc_page's return value, pmm_free_page's argument) is an
- * absolute physical address, same as before this parameter existed. */
+/* Bitmap allocator. Bitmap indices are relative to each architecture's RAM
+ * base; public addresses are absolute. */
 #include "kernel.h"
 #include "pmm.h"
 
@@ -74,23 +62,7 @@ void pmm_init(unsigned int mem_top, unsigned int base) {
 		(void *)(unsigned long)kend, free_pages, free_pages * 4);
 }
 
-/* Scans from next_free_hint (wrapping around, so this still finds any
- * free page that exists) instead of always restarting at page 0 --
- * real bug in the original always-from-0 version, found running
- * checkpoint 9's much larger, more allocation-heavy kernel image
- * under emulator/web/: every call re-scanned however many already-
- * permanently-used low pages had accumulated so far, an O(total
- * allocations so far) cost *per call* that made the whole boot
- * sequence's cumulative cost effectively quadratic in how much had
- * been allocated -- fine at P1-P8's scale (never enough allocations
- * for the effect to be visible), bad enough by checkpoint 9's real
- * busybox-sized workload that the Wasm emulator's own test genuinely
- * didn't finish in 20 real minutes where QEMU took seconds (QEMU
- * runs the *actual instructions* at native speed regardless of how
- * many extra ones this loop executes; the JS interpreter pays for
- * every one of them). Still worst-case O(total_pages) if the bitmap
- * is nearly full, but the common case (monotonically allocating into
- * still-free space) is now O(1) amortized. */
+/* The rotating hint makes sequential allocation amortized O(1). */
 unsigned int pmm_alloc_page(void) {
 	for (unsigned int i = 0; i < total_pages; i++) {
 		unsigned int p = (next_free_hint + i) % total_pages;
@@ -105,18 +77,10 @@ unsigned int pmm_alloc_page(void) {
 	return 0; /* out of memory */
 }
 
-/* Straight scan from page 0, not next_free_hint -- unlike
- * pmm_alloc_page()'s single-page case, this isn't a hot path (called
- * O(log(file size)) times per file, on growth, not once per byte), so
- * there's no need for its amortized-O(1) trick; starting from 0 finds
- * the lowest-addressed run rather than risking missing one below
- * next_free_hint entirely. */
+/* Contiguous allocation scans from zero so it cannot miss an earlier run. */
 unsigned int pmm_alloc_contiguous(unsigned int count) {
 	if (count == 0 || count > total_pages)
 		return 0;
-	/* Most ramfs files fit in one page. A one-page run is precisely the
-	 * hinted allocator's job; rescanning from page zero for thousands of
-	 * source files turns archive extraction quadratic for no benefit. */
 	if (count == 1)
 		return pmm_alloc_page();
 	unsigned int run_start = 0;

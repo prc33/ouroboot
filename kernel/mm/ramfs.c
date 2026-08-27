@@ -26,11 +26,7 @@ static const char *basename_of(const char *path) {
 	return base;
 }
 
-/* Strips a leading root slash and any leading "./" components --
- * "/tcc-src/tcc.c" and "tcc-src/tcc.c", or "./wtest" and "wtest", name the same
- * dynamic file (see ramfs.h's own comment on struct ramfs_dynamic_file),
- * matching how sys_openat/execve treat this ramfs as having one root.
- * Other path components are kept verbatim. */
+/* Store paths relative to the single ramfs root. */
 static const char *normalize_path(const char *path) {
 	if (path[0] == '/')
 		path++;
@@ -59,22 +55,7 @@ const struct ramfs_file *ramfs_lookup(const char *path) {
 	return 0;
 }
 
-/* The file table has fixed capacity; file contents use dynamically allocated
- * backing storage.
- *
- * checkpoint 14: bumped from 16 to 512 -- a real self-hosting TCC
- * build needs far more than "one invocation's worth of output files"
- * open at once, since every input file the build reads also lives
- * here now (the tar-loaded initrd creates a dynamic file per entry,
- * mm/tar.c's own tar_load_initrd()): TCC's own ~20 source/header
- * files, musl-riscv64's header tree (~230 files, measured directly --
- * `find include arch/riscv64 arch/generic obj/include -type f | wc -l`),
- * crt1.o/crti.o/crtn.o/libc.a/libtcc1.a, the prebuilt riscv64 tcc
- * binary that does the compiling, plus whatever the build itself
- * writes out. 512 is real headroom above that measured ~260, not a
- * guess padded for its own sake. The source-build closure later raised this
- * to 8192: musl and BusyBox together contain several thousand regular files,
- * and their object files must coexist with those inputs while building. */
+/* Fixed metadata capacity; file contents are allocated separately. */
 #define RAMFS_MAX_DYNAMIC_FILES 8192
 static struct ramfs_dynamic_file dynamic_files[RAMFS_MAX_DYNAMIC_FILES];
 static unsigned int dynamic_high_water;
@@ -158,10 +139,6 @@ int ramfs_dynamic_load(const char *path, const unsigned char *data, unsigned lon
 }
 
 void ramfs_dynamic_truncate(struct ramfs_dynamic_file *f) {
-	/* Content beyond `size` is never trusted to already be zero (see
-	 * ramfs_dynamic_write's own comment on why it re-zeros a gap
-	 * itself rather than relying on that) -- this really is just the
-	 * one-line "forget the content" it looks like. */
 	f->size = 0;
 }
 
@@ -188,17 +165,7 @@ void ramfs_dynamic_unlink(const char *path) {
 	f->capacity = 0;
 }
 
-/* Grows f's backing capacity to at least `needed` bytes if it isn't
- * already -- a fresh, larger contiguous run, the old content copied
- * over, the old pages freed one at a time. Doubling growth (starting
- * from one page) for amortized O(1) reallocations per byte written
- * overall, the same reasoning as any growable-array design; an empty
- * file (capacity 0) costs nothing until the first write actually
- * needs somewhere to go. Capacity beyond the logical size is left
- * uninitialized because it is unobservable; ramfs_dynamic_write() zeros any
- * sparse gap at the moment it becomes part of the file. Returns 0 on success, -1 if
- * pmm_alloc_contiguous() can't find enough contiguous free RAM (real
- * ENOMEM, not a bug -- see its own comment). */
+/* Double capacity; return -1 when no contiguous run is available. */
 static int ramfs_dynamic_grow(struct ramfs_dynamic_file *f, unsigned long needed) {
 	if (needed <= f->capacity)
 		return 0;
@@ -229,17 +196,7 @@ int ramfs_dynamic_write(struct ramfs_dynamic_file *f, unsigned long offset, cons
 		return 0;
 	if (ramfs_dynamic_grow(f, offset + len) < 0)
 		return -1;
-	/* A write starting past the current logical size leaves a real
-	 * gap -- a sparse-file hole, same POSIX semantics as a real
-	 * lseek()-past-EOF-then-write(), which TCC's own ELF writer
-	 * genuinely does (tccelf.c's tcc_write_elf_file() lays out
-	 * sections at their real file offsets, not necessarily strictly
-	 * increasing). ramfs_dynamic_grow() already zeroed any *newly
-	 * allocated* capacity, but that's not sufficient by itself: if
-	 * capacity already covered this offset from an earlier, larger
-	 * write later ramfs_dynamic_truncate()'d back down, the bytes
-	 * sitting there are stale old content, not zero -- so the gap is
-	 * re-zeroed explicitly here regardless of whether grow() just ran. */
+	/* POSIX sparse writes expose a zero-filled gap, even after truncation. */
 	if (offset > f->size)
 		for (unsigned long i = f->size; i < offset; i++)
 			f->data[i] = 0;

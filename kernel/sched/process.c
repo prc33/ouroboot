@@ -1,49 +1,4 @@
-/* General process table -- checkpoint 6. Real, independent U-mode
- * processes: each gets its own address space (mm/paging.h's
- * paging_new_addrspace/paging_activate), its own kernel stack, and a
- * saved trapframe restored via the architecture's own trap-return
- * mechanism (process_arch_activate_and_restore() -- see this file's
- * own "arch seam" comment in process.h) -- see arch/risc/riscv64_trap_entry.S's
- * own comment for why unifying "trap stack" and "process kernel
- * stack" is what makes a process able to genuinely block mid-syscall
- * (this checkpoint's SYS_sched_yield) and be resumed later exactly
- * where it left off.
- *
- * checkpoint 16 (docs/kernel-arch-split-plan.md): this file used to be
- * sched/riscv64_process.c, and was about 94% architecture-neutral
- * already -- see docs/kernel-complexity-review.md section 12's own
- * measurement. The genuinely riscv64-specific ~6% (struct regs's own
- * layout, CSR/SSTATUS bits, the trap-return mechanism, the hand-built
- * initial-kernel-stack-frame convention switch_context() expects) now
- * lives in arch/risc/riscv64_process.c instead, behind the small
- * process_arch_*() interface declared in process.h. This file only
- * ever touches `struct regs` opaquely (as a pointer to snapshot/pass
- * along), never a named field of it.
- *
- * Two distinct "kernel-side execution" mechanisms coexist here, both
- * ultimately switch_context() (arch/risc/riscv64_switch_context.S),
- * unchanged from P4's task scheduler -- it's a generic "swap callee-
- * saved regs + sp, ret" coroutine primitive that's never cared what
- * call chain it's swapping:
- *   1. A process being dispatched *for the first time*: its
- *      kernel_sp is a hand-built initial frame (same technique as
- *      arch/risc/riscv64_task.c's task_init) whose `ra` is
- *      process_arch_trampoline -- switch_context's `ret` jumps
- *      straight there, which activates the process's address space,
- *      seeds the global trapframe from its saved user_regs, and falls
- *      into the architecture's own trap-return path to actually enter
- *      U-mode.
- *   2. A process *resuming after a blocking syscall*: its kernel_sp
- *      is wherever process_schedule()'s own switch_context() call
- *      left off, deep inside that process's own C call stack (e.g.
- *      inside sys_sched_yield). Resuming here just continues that C
- *      code normally; it eventually returns out through
- *      syscall_dispatch/trap_dispatch and falls into the trap entry
- *      code's restore-and-return tail via the ordinary call site, the
- *      same path every non-blocking syscall already used in P1-P5.
- * Both end up executing in U-mode via the exact same restore code,
- * just entered two different ways.
- */
+/* Architecture-neutral process table; process_arch_* owns trap details. */
 #include "kernel.h"
 #include "mm/pmm.h"
 #include "mm/paging.h"
@@ -91,32 +46,7 @@ void process_init(void) {
 	current_process = 0;
 }
 
-/* checkpoint 15: the single canonical user-stack/argv/envp/auxv
- * builder -- process_create_from_elf() and process_execve() used to
- * each hand-roll their own nearly-identical version (see
- * docs/kernel-complexity-review.md section 3). This is process_execve()'s
- * own version, kept as the one canonical implementation rather than
- * process_create_from_elf()'s older one: it's the one that's actually
- * been stress-tested end to end -- every self-hosted TCC compile
- * (kernel/test/selfhost.sh) runs its own deeply recursive parser
- * through exactly this stack, including its lazy growth
- * (process_handle_stack_fault(), below) down to USER_STACK_LIMIT.
- *
- * kernel/test/riscv64_checkpoints.c's own run_elf_test() deliberately
- * stays unconverged -- see that file's own comment for why (it runs
- * before there's a process table at all, so there's no `struct
- * process` for this to write into).
- *
- * Maps and zeroes enough pages for the actual argument data (with two
- * pages as the minimum), records the committed range, writes the
- * NUL-terminated strings followed by the
- * argc/argv/envp/auxv pointer block (envp always empty, one real
- * auxv entry -- AT_PAGESZ, which musl's __libc_start_main has no
- * fallback for) into PTRBLOCK_SIZE bytes below that. Returns the
- * resulting sp. Every `argv[i]` must already be kernel-resident by the
- * time this is called -- process_execve()'s own caller is responsible
- * for snapshotting real (user-space) argv strings first, since this
- * function runs *after* the new address space is already active. */
+/* Build the initial argc/argv/envp/auxv stack. argv must be kernel-resident. */
 #define EXECVE_ARG_MAX 256
 
 static unsigned long build_user_stack(struct process *p, char *const argv[], int argc) {
@@ -399,42 +329,7 @@ void process_set_current_cwd(const char *path) {
 	current_process->cwd[i] = 0;
 }
 
-/* checkpoint 7: real fork(), via SYS_clone -- see process.h's own
- * comment for why clone() rather than a dedicated fork syscall, and
- * arch/risc/riscv64_syscall.c for the narrow flags check that gates
- * getting here at all.
- *
- * The [lo,hi) ranges cloned below are a real, deliberate
- * simplification, not the general case: this checkpoint has no
- * per-process VMA list recording what a process has actually mapped
- * (process_create_from_elf hardcodes its own ELF-load and stack
- * ranges the same way), so fork() just clones the same fixed windows
- * every process is known to actually use -- 16MB from 0, comfortably
- * covering any of this kernel's real ELF payloads' code/data/BSS; the
- * process's actual mapped stack at 0xB0000000; and 1MB of
- * arch/risc/riscv64_syscall.c's own mmap arena
- * (MMAP_BASE, same value duplicated here rather than shared via a
- * header -- matches this function's existing "each fixed window
- * hardcoded where it's used" style).
- *
- * That third range is checkpoint 9's own real bug, found running
- * busybox ash for the first time: ash mmap()s a buffer for reading
- * its script *before* fork()ing to run an external command (this
- * function originally only cloned the first two ranges) -- the
- * forked child's own post-fork/pre-execve code (still running ash's
- * own binary, same as any real fork()) touched that buffer, which
- * its own COW-cloned address space never had mapped at all (not
- * missing a copy -- genuinely absent, unlike a stale-but-present COW
- * page), producing an unhandled load page fault. Every earlier
- * fork()-using test in this kernel used a program that never called
- * mmap, so this was invisible until a real, more complex program
- * exercised fork() and mmap() together. A process that mapped
- * anything outside these three windows still wouldn't survive a fork
- * -- true of every real program this checkpoint actually runs, but
- * not the general case, same spirit as mm/elf.c's own "no filesystem
- * yet" caveat elsewhere in this kernel. The implementation now walks
- * every present user PTE, so it needs no architecture-specific address
- * windows. */
+/* Fork every mapped user page copy-on-write. */
 int process_fork(struct regs *r) {
 	struct process *parent = current_process;
 	struct process *child = alloc_slot();

@@ -1,32 +1,4 @@
-/* Sv39 paging: 3-level radix tree, 9+9+9 bits of VPN plus a 12-bit
- * page offset, 4KB pages throughout. Same design simplification as
- * i386's arch/i386/paging.c, stated there and equally true here: the whole
- * address space this kernel manages is identity-mapped, so there's
- * no separate phys->virt translation function anywhere in this file.
- *
- * Genuinely simpler than i386's two-level scheme in one respect:
- * RISC-V only checks R/W/X/U permission bits at the *leaf* PTE --
- * intermediate (non-leaf) PTEs just need V=1 to be walked through, no
- * i386-style "PDE must ALSO carry the USER bit or the PTE's USER bit
- * is vetoed" AND-ing to replicate.
- *
- * Checkpoint 6 (sched/riscv64_process.c) change: P1-P5 only ever had
- * one address space, `root_table` below, used implicitly everywhere.
- * Real processes need their own -- paging_new_addrspace()/
- * paging_activate() and the _in() variants of the original API are
- * new; `root_table` itself is now just "the kernel's own address
- * space" (still what every *_in-less call operates on until something
- * calls paging_activate(), and still what every new address space's
- * kernel-region mapping is shared from -- see paging_new_addrspace()).
- *
- * Checkpoint 17 (docs/kernel-arch-split-plan.md): the actual COW-copy
- * logic (paging_fork_cow(), the page-fault dispatch, paging_ensure_writable())
- * moved out to mm/paging_common.c -- it turned out not to need
- * anything about the walk shape at all, just the accessor functions
- * this file still provides (get_pte_in() and everything built on it
- * stay right here, genuinely riscv64-specific). See that file's own
- * comment for the full rationale.
- */
+/* Sv39 page-table traversal; COW policy lives in mm/paging_common.c. */
 #include "kernel.h"
 #include "riscv64_trap.h"
 #include "riscv64_memmap.h"
