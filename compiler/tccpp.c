@@ -144,20 +144,10 @@ typedef struct TinyAlloc {
     uint8_t *p;
     unsigned  nb_allocs;
     struct TinyAlloc *next, *top;
-#ifdef TAL_INFO
-    unsigned  nb_peak;
-    unsigned  nb_total;
-    unsigned  nb_missed;
-    uint8_t *peak_p;
-#endif
 } TinyAlloc;
 
 typedef struct tal_header_t {
     unsigned  size;
-#ifdef TAL_DEBUG
-    int     line_num; /* negative line_num used for double free check */
-    char    file_name[TAL_DEBUG_FILE_LEN + 1];
-#endif
 } tal_header_t;
 
 /* ------------------------------------------------------------------------- */
@@ -179,30 +169,6 @@ static void tal_delete(TinyAlloc *al)
 tail_call:
     if (!al)
         return;
-#ifdef TAL_INFO
-    fprintf(stderr, "limit=%5d, size=%5g MB, nb_peak=%6d, nb_total=%8d, nb_missed=%6d, usage=%5.1f%%\n",
-            al->limit, al->size / 1024.0 / 1024.0, al->nb_peak, al->nb_total, al->nb_missed,
-            (al->peak_p - al->buffer) * 100.0 / al->size);
-#endif
-#ifdef TAL_DEBUG
-    if (al->nb_allocs > 0) {
-        uint8_t *p;
-        fprintf(stderr, "TAL_DEBUG: memory leak %d chunk(s) (limit= %d)\n",
-                al->nb_allocs, al->limit);
-        p = al->buffer;
-        while (p < al->p) {
-            tal_header_t *header = (tal_header_t *)p;
-            if (header->line_num > 0) {
-                fprintf(stderr, "%s:%d: chunk of %d bytes leaked\n",
-                        header->file_name, header->line_num, header->size);
-            }
-            p += header->size + sizeof(tal_header_t);
-        }
-#if MEM_DEBUG-0 == 2
-        exit(2);
-#endif
-    }
-#endif
     next = al->next;
     tcc_free(al->buffer);
     tcc_free(al);
@@ -216,16 +182,6 @@ static void tal_free_impl(TinyAlloc *al, void *p TAL_DEBUG_PARAMS)
         return;
 tail_call:
     if (al->buffer <= (uint8_t *)p && (uint8_t *)p < al->buffer + al->size) {
-#ifdef TAL_DEBUG
-        tal_header_t *header = (((tal_header_t *)p) - 1);
-        if (header->line_num < 0) {
-            fprintf(stderr, "%s:%d: TAL_DEBUG: double frees chunk from\n",
-                    file, line);
-            fprintf(stderr, "%s:%d: %d bytes\n",
-                    header->file_name, (int)-header->line_num, (int)header->size);
-        } else
-            header->line_num = -header->line_num;
-#endif
         al->nb_allocs--;
         if (!al->nb_allocs)
             al->p = al->buffer;
@@ -251,39 +207,20 @@ tail_call:
         if (al->p - al->buffer + adj_size + sizeof(tal_header_t) < al->size) {
             header = (tal_header_t *)al->p;
             header->size = adj_size;
-#ifdef TAL_DEBUG
-            { int ofs = strlen(file) - TAL_DEBUG_FILE_LEN;
-            strncpy(header->file_name, file + (ofs > 0 ? ofs : 0), TAL_DEBUG_FILE_LEN);
-            header->file_name[TAL_DEBUG_FILE_LEN] = 0;
-            header->line_num = line; }
-#endif
             ret = al->p + sizeof(tal_header_t);
             al->p += adj_size + sizeof(tal_header_t);
             if (is_own) {
                 header = (((tal_header_t *)p) - 1);
                 if (p) memcpy(ret, p, header->size);
-#ifdef TAL_DEBUG
-                header->line_num = -header->line_num;
-#endif
             } else {
                 al->nb_allocs++;
             }
-#ifdef TAL_INFO
-            if (al->nb_peak < al->nb_allocs)
-                al->nb_peak = al->nb_allocs;
-            if (al->peak_p < al->p)
-                al->peak_p = al->p;
-            al->nb_total++;
-#endif
             return ret;
         } else if (is_own) {
             al->nb_allocs--;
             ret = tal_realloc(*pal, 0, size);
             header = (((tal_header_t *)p) - 1);
             if (p) memcpy(ret, p, header->size);
-#ifdef TAL_DEBUG
-            header->line_num = -header->line_num;
-#endif
             return ret;
         }
         if (al->next) {
@@ -302,17 +239,11 @@ tail_call:
         ret = tcc_malloc(size);
         header = (((tal_header_t *)p) - 1);
         if (p) memcpy(ret, p, header->size);
-#ifdef TAL_DEBUG
-        header->line_num = -header->line_num;
-#endif
     } else if (al->next) {
         al = al->next;
         goto tail_call;
     } else
         ret = tcc_realloc(p, size);
-#ifdef TAL_INFO
-    al->nb_missed++;
-#endif
     return ret;
 }
 
@@ -1569,9 +1500,6 @@ static CachedInclude *search_cached_include(TCCState *s1, const char *filename, 
     /* add in hash table */
     e->hash_next = s1->cached_includes_hash[h];
     s1->cached_includes_hash[h] = s1->nb_cached_includes;
-#ifdef INC_DEBUG
-    printf("adding cached '%s'\n", filename);
-#endif
     return e;
 }
 
@@ -1804,9 +1732,6 @@ ST_FUNC void preprocess(int is_bof)
             if (e && (define_find(e->ifndef_macro) || e->once == pp_once)) {
                 /* no need to parse the include because the 'ifndef macro'
                    is defined (or had #pragma once) */
-#ifdef INC_DEBUG
-                printf("%s: skipping cached %s\n", file->filename, buf1);
-#endif
                 goto include_done;
             }
 
@@ -1814,9 +1739,6 @@ ST_FUNC void preprocess(int is_bof)
                 continue;
 
             file->include_next_index = i;
-#ifdef INC_DEBUG
-            printf("%s: including %s\n", file->prev->filename, file->filename);
-#endif
             /* update target deps */
             if (s1->gen_deps) {
                 BufferedFile *bf = file;
@@ -1827,8 +1749,6 @@ ST_FUNC void preprocess(int is_bof)
                     dynarray_add(&s1->target_deps, &s1->nb_target_deps,
                         tcc_strdup(buf1));
             }
-            /* add include file debug info */
-            tcc_debug_bincl(tcc_state);
             tok_flags |= TOK_FLAG_BOF | TOK_FLAG_BOL;
             ch = file->buf_ptr[0];
             goto the_end;
@@ -1851,9 +1771,6 @@ include_done:
             tcc_error("invalid argument for '#if%sdef'", c ? "n" : "");
         if (is_bof) {
             if (c) {
-#ifdef INC_DEBUG
-                printf("#ifndef %s\n", get_tok_str(tok, NULL));
-#endif
                 file->ifndef_macro = tok;
             }
         }
@@ -1930,7 +1847,7 @@ include_done:
                 pstrcpy(buf, sizeof buf, file->true_filename);
                 *tcc_basename(buf) = 0;
                 pstrcat(buf, sizeof buf, (char *)tokc.str.data);
-                tcc_debug_putfile(s1, buf);
+                tcc_set_cur_filename(buf);
             } else if (parse_flags & PARSE_FLAG_ASM_FILE)
                 break;
             else
@@ -2564,16 +2481,11 @@ static inline void next_nomacro1(void)
                 /* test if previous '#endif' was after a #ifdef at
                    start of file */
                 if (tok_flags & TOK_FLAG_ENDIF) {
-#ifdef INC_DEBUG
-                    printf("#endif %s\n", get_tok_str(file->ifndef_macro_saved, NULL));
-#endif
                     search_cached_include(s1, file->filename, 1)
                         ->ifndef_macro = file->ifndef_macro_saved;
                     tok_flags &= ~TOK_FLAG_ENDIF;
                 }
 
-                /* add end of include file debug info */
-                tcc_debug_eincl(tcc_state);
                 /* pop include stack */
                 tcc_close();
                 s1->include_stack_ptr--;
@@ -3590,6 +3502,20 @@ static void tcc_predefs(CString *cstr)
     "#undef __BOTH\n"
     "#undef __MAYBE_REDIR\n"
     , -1);
+}
+
+/* Point the current BufferedFile at `filename` -- what a `#line N "file"`
+ * directive means for diagnostics. Was tcc_debug_putfile(), which did this
+ * *and* flagged a stabs file change; stabs is gone (see
+ * docs/compiler-file-review-2026-08-27.md section C) but the filename fix
+ * is not debug-only -- it is what makes an error inside such a region
+ * report the right file. Also called from tccgen.c when a deferred inline
+ * function is finally generated. */
+ST_FUNC void tcc_set_cur_filename(const char *filename)
+{
+    if (0 == strcmp(file->filename, filename))
+        return;
+    pstrcpy(file->filename, sizeof(file->filename), filename);
 }
 
 ST_FUNC void preprocess_start(TCCState *s1, int filetype)

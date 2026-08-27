@@ -23,7 +23,6 @@ cp "$root/kernel/user_test/busybox_riscv64.elf" "$stage/busybox"
 cp "$root/kernel/user_test/fetch_riscv64.elf" "$stage/fetch"
 
 cp "$root"/compiler/*.c "$root"/compiler/*.h "$stage/tcc-src/"
-cp "$root"/compiler/*.def "$stage/tcc-src/"
 cp "$root"/compiler/i386/*.c "$root"/compiler/i386/*.h \
     "$root"/compiler/i386/*.S "$stage/tcc-src/i386/"
 # riscv64 has no integrated assembler for real instructions (see

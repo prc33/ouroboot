@@ -1,6 +1,14 @@
 #ifndef LIBTCC_H
 #define LIBTCC_H
 
+/* Upstream TCC's public library interface. This project never uses TCC
+ * as a library -- only the tcc binary -- so everything here that had no
+ * in-tree caller is gone (tcc_set_error_func/tcc_get_error_func/
+ * tcc_get_error_opaque and the TCCErrorFunc typedef, tcc_compile_string,
+ * tcc_add_symbol, tcc_get_symbol, tcc_list_symbols). What remains is
+ * exactly what tcc.c's own main() and libtcc.c's option handling call.
+ * See docs/compiler-file-review-2026-08-27.md section B. */
+
 #ifndef LIBTCCAPI
 # define LIBTCCAPI
 #endif
@@ -13,8 +21,6 @@ struct TCCState;
 
 typedef struct TCCState TCCState;
 
-typedef void (*TCCErrorFunc)(void *opaque, const char *msg);
-
 /* create a new TCC compilation context */
 LIBTCCAPI TCCState *tcc_new(void);
 
@@ -23,15 +29,6 @@ LIBTCCAPI void tcc_delete(TCCState *s);
 
 /* set CONFIG_TCCDIR at runtime */
 LIBTCCAPI void tcc_set_lib_path(TCCState *s, const char *path);
-
-/* set error/warning display callback */
-LIBTCCAPI void tcc_set_error_func(TCCState *s, void *error_opaque, TCCErrorFunc error_func);
-
-/* return error/warning callback */
-LIBTCCAPI TCCErrorFunc tcc_get_error_func(TCCState *s);
-
-/* return error/warning callback opaque pointer */
-LIBTCCAPI void *tcc_get_error_opaque(TCCState *s);
 
 /* set options as from command line (multiple supported) */
 LIBTCCAPI void tcc_set_options(TCCState *s, const char *str);
@@ -54,11 +51,8 @@ LIBTCCAPI void tcc_undefine_symbol(TCCState *s, const char *sym);
 /*****************************/
 /* compiling */
 
-/* add a file (C file, dll, object, library, ld script). Return -1 if error. */
+/* add a file (C file, object, library, ld script). Return -1 if error. */
 LIBTCCAPI int tcc_add_file(TCCState *s, const char *filename);
-
-/* compile a string containing a C source. Return -1 if error. */
-LIBTCCAPI int tcc_compile_string(TCCState *s, const char *buf);
 
 /*****************************/
 /* linking commands */
@@ -76,18 +70,8 @@ LIBTCCAPI int tcc_add_library_path(TCCState *s, const char *pathname);
 /* the library name is the same as the argument of the '-l' option */
 LIBTCCAPI int tcc_add_library(TCCState *s, const char *libraryname);
 
-/* add a symbol to the compiled program */
-LIBTCCAPI int tcc_add_symbol(TCCState *s, const char *name, const void *val);
-
 /* output an executable, library or object file. */
 LIBTCCAPI int tcc_output_file(TCCState *s, const char *filename);
-
-/* return symbol value or NULL if not found */
-LIBTCCAPI void *tcc_get_symbol(TCCState *s, const char *name);
-
-/* return symbol value or NULL if not found */
-LIBTCCAPI void tcc_list_symbols(TCCState *s, void *ctx,
-    void (*symbol_cb)(void *ctx, const char *name, const void *val));
 
 #ifdef __cplusplus
 }

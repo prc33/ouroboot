@@ -131,10 +131,6 @@
      DEF(TOK_DESTRUCTOR2, "__destructor__")
      DEF(TOK_ALWAYS_INLINE1, "always_inline")
      DEF(TOK_ALWAYS_INLINE2, "__always_inline__")
-#ifdef CONFIG_TCC_BCHECK
-     DEF(TOK_NO_BOUND_CHECK1, "bound_no_checking")
-     DEF(TOK_NO_BOUND_CHECK2, "__bound_no_checking__")
-#endif
 
      DEF(TOK_MODE, "__mode__")
      DEF(TOK_MODE_QI, "__QI__")
@@ -249,25 +245,6 @@
 #endif
 
 /* bound checking symbols */
-#ifdef CONFIG_TCC_BCHECK
-     DEF(TOK___bound_ptr_add, "__bound_ptr_add")
-     DEF(TOK___bound_ptr_indir1, "__bound_ptr_indir1")
-     DEF(TOK___bound_ptr_indir2, "__bound_ptr_indir2")
-     DEF(TOK___bound_ptr_indir4, "__bound_ptr_indir4")
-     DEF(TOK___bound_ptr_indir8, "__bound_ptr_indir8")
-     DEF(TOK___bound_ptr_indir12, "__bound_ptr_indir12")
-     DEF(TOK___bound_ptr_indir16, "__bound_ptr_indir16")
-     DEF(TOK___bound_main_arg, "__bound_main_arg")
-     DEF(TOK___bound_local_new, "__bound_local_new")
-     DEF(TOK___bound_local_delete, "__bound_local_delete")
-     DEF(TOK___bound_setjmp, "__bound_setjmp")
-     DEF(TOK___bound_new_region, "__bound_new_region")
-     DEF(TOK_sigsetjmp, "sigsetjmp")
-     DEF(TOK___sigsetjmp, "__sigsetjmp")
-     DEF(TOK_siglongjmp, "siglongjmp")
-     DEF(TOK_setjmp, "setjmp")
-     DEF(TOK__setjmp, "_setjmp")
-#endif
 
 /* Tiny Assembler */
  DEF_ASMDIR(byte)              /* must be first directive */

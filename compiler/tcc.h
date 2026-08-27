@@ -187,7 +187,6 @@ extern long double strtold (const char *__nptr, char **__endptr);
 
 #include "libtcc.h"
 #include "elf.h"
-#include "stab.h"
 
 /* -------------------------------------------- */
 
@@ -543,7 +542,6 @@ struct TCCState {
     unsigned char nostdlib; /* if true, no standard libraries are added */
     unsigned char nocommon; /* if true, do not use common symbols for .bss data */
     unsigned char static_link; /* if true, static linking is performed */
-    unsigned char rdynamic; /* if true, all symbols are exported */
     unsigned char symbolic; /* if true, resolve symbols in the current module first */
     unsigned char filetype; /* file type for compilation (NONE,C,ASM) */
     unsigned char optimize; /* only to #define __OPTIMIZE__ */
@@ -552,7 +550,6 @@ struct TCCState {
     unsigned int  cversion; /* supported C ISO version, 199901 (the default), 201112, ... */
 
     char *tcc_lib_path; /* CONFIG_TCCDIR or -B option */
-    char *soname; /* as specified on the command line (-soname) */
     char *rpath; /* as specified on the command line (-Wl,-rpath=) */
 
     /* output type, see TCC_OUTPUT_XXX */
@@ -573,11 +570,6 @@ struct TCCState {
     unsigned char warn_gcc_compat;
 
     /* compile with debug symbol (and use them if error during execution) */
-    unsigned char do_debug;
-#ifdef CONFIG_TCC_BCHECK
-    /* compile with built-in memory and bounds checker */
-    unsigned char do_bounds_check;
-#endif
     addr_t text_addr; /* address of text section */
     unsigned char has_text_addr;
 
@@ -619,9 +611,7 @@ struct TCCState {
     /* -include options */
     CString cmdline_incl;
 
-    /* error handling */
-    void *error_opaque;
-    void (*error_func)(void *opaque, const char *msg);
+    /* error handling (no caller-installed callback -- see libtcc.h) */
     int error_set_jmp_enabled;
     jmp_buf error_jmp_buf;
     int nb_errors;
@@ -678,15 +668,9 @@ struct TCCState {
     Section *text_section, *data_section, *bss_section;
     Section *common_section;
     Section *cur_text_section; /* current section where function code is generated */
-#ifdef CONFIG_TCC_BCHECK
-    /* bound check related sections */
-    Section *bounds_section; /* contains global data bound description */
-    Section *lbounds_section; /* contains local data bound description */
-#endif
     /* symbol sections */
     Section *symtab_section;
     /* debug sections */
-    Section *stab_section;
     /* Is there a new undefined sym since last new_undef_sym() */
     int new_undef_sym;
 
@@ -1043,6 +1027,7 @@ ST_FUNC Sym *global_identifier_push(int v, int t, int c);
 
 ST_FUNC void tcc_open_bf(TCCState *s1, const char *filename, int initlen);
 ST_FUNC int tcc_open(TCCState *s1, const char *filename);
+ST_FUNC void tcc_set_cur_filename(const char *filename);
 ST_FUNC void tcc_close(void);
 
 ST_FUNC int tcc_add_file_internal(TCCState *s1, const char *filename, int flags);
@@ -1066,9 +1051,6 @@ ST_FUNC int tcc_add_file_internal(TCCState *s1, const char *filename, int flags)
 ST_FUNC int tcc_add_crt(TCCState *s, const char *filename);
 #endif
 ST_FUNC int tcc_add_dll(TCCState *s, const char *filename, int flags);
-#ifdef CONFIG_TCC_BCHECK
-ST_FUNC void tcc_add_bcheck(TCCState *s1);
-#endif
 ST_FUNC void tcc_add_pragma_libs(TCCState *s1);
 PUB_FUNC int tcc_add_library_err(TCCState *s, const char *f);
 PUB_FUNC void tcc_print_stats(TCCState *s, unsigned total_time);
@@ -1185,11 +1167,6 @@ ST_DATA int func_var; /* true if current function is variadic */
 ST_DATA int func_vc;
 ST_DATA const char *funcname;
 
-ST_FUNC void tcc_debug_start(TCCState *s1);
-ST_FUNC void tcc_debug_end(TCCState *s1);
-ST_FUNC void tcc_debug_bincl(TCCState *s1);
-ST_FUNC void tcc_debug_eincl(TCCState *s1);
-ST_FUNC void tcc_debug_putfile(TCCState *s1, const char *filename);
 ST_FUNC void tcc_debug_funcstart(TCCState *s1, Sym *sym);
 ST_FUNC void tcc_debug_funcend(TCCState *s1, int size);
 ST_FUNC void tcc_debug_line(TCCState *s1);
@@ -1234,13 +1211,6 @@ ST_FUNC void indir(void);
 ST_FUNC void unary(void);
 ST_FUNC void gexpr(void);
 ST_FUNC int expr_const(void);
-#if defined CONFIG_TCC_BCHECK
-ST_FUNC Sym *get_sym_ref(CType *type, Section *sec, unsigned long offset, unsigned long size);
-#endif
-#ifdef CONFIG_TCC_BCHECK
-ST_FUNC void gbound_args(int nb_args);
-ST_DATA int func_bound_add_epilog;
-#endif
 
 /* ------------ tccelf.c ------------ */
 
@@ -1256,12 +1226,8 @@ typedef struct {
 
 ST_FUNC void tccelf_new(TCCState *s);
 ST_FUNC void tccelf_delete(TCCState *s);
-ST_FUNC void tccelf_stab_new(TCCState *s);
 ST_FUNC void tccelf_begin_file(TCCState *s1);
 ST_FUNC void tccelf_end_file(TCCState *s1);
-#ifdef CONFIG_TCC_BCHECK
-ST_FUNC void tccelf_bounds_new(TCCState *s);
-#endif
 ST_FUNC Section *new_section(TCCState *s1, const char *name, int sh_type, int sh_flags);
 ST_FUNC void section_realloc(Section *sec, unsigned long new_size);
 ST_FUNC size_t section_add(Section *sec, addr_t size, int align);
@@ -1284,9 +1250,6 @@ ST_FUNC int find_elf_sym(Section *s, const char *name);
 ST_FUNC void put_elf_reloc(Section *symtab, Section *s, unsigned long offset, int type, int symbol);
 ST_FUNC void put_elf_reloca(Section *symtab, Section *s, unsigned long offset, int type, int symbol, addr_t addend);
 
-ST_FUNC void put_stabs(TCCState *s1, const char *str, int type, int other, int desc, unsigned long value);
-ST_FUNC void put_stabs_r(TCCState *s1, const char *str, int type, int other, int desc, unsigned long value, Section *sec, int sym_index);
-ST_FUNC void put_stabn(TCCState *s1, int type, int other, int desc, int value);
 
 ST_FUNC void resolve_common_syms(TCCState *s1);
 ST_FUNC void relocate_syms(TCCState *s1, Section *symtab);
@@ -1315,8 +1278,6 @@ ST_FUNC int set_global_sym(TCCState *s1, const char *name, Section *sec, addr_t 
          elem < (type *) (sec->data + sec->data_offset); elem++)
 
 #ifndef ELF_OBJ_ONLY
-ST_FUNC int tcc_load_dll(TCCState *s1, int fd, const char *filename, int level);
-ST_FUNC int tcc_load_ldscript(TCCState *s1, int fd);
 #endif
 ST_FUNC void tcc_add_runtime(TCCState *s1);
 
@@ -1475,8 +1436,6 @@ ST_FUNC void asm_clobber(uint8_t *clobber_regs, const char *str);
 #define bounds_section      TCC_STATE_VAR(bounds_section)
 #define lbounds_section     TCC_STATE_VAR(lbounds_section)
 #define symtab_section      TCC_STATE_VAR(symtab_section)
-#define stab_section        TCC_STATE_VAR(stab_section)
-#define stabstr_section     stab_section->link
 #define gnu_ext             TCC_STATE_VAR(gnu_ext)
 #define tcc_error_noabort   TCC_SET_STATE(_tcc_error_noabort)
 #define tcc_error           TCC_SET_STATE(_tcc_error)

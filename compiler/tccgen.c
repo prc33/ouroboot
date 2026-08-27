@@ -45,7 +45,6 @@ static Sym *all_cleanups, *pending_gotos;
 static int local_scope;
 static int in_sizeof;
 static int in_generic;
-static int section_sym;
 
 ST_DATA SValue *vtop;
 static SValue _vstack[1 + VSTACK_SIZE];
@@ -78,7 +77,7 @@ ST_DATA int global_expr;  /* true if compound literals must be allocated globall
 ST_DATA CType func_vt; /* current function return type (used by return instruction) */
 ST_DATA int func_var; /* true if current function is variadic (used by return instruction) */
 ST_DATA int func_vc;
-static int last_line_num, new_file, func_ind; /* debug info control */
+static int func_ind; /* start of current function's code, for sh_size */
 ST_DATA const char *funcname;
 ST_DATA CType int_type, func_old_type, char_type, char_pointer_type;
 static CString initstr;
@@ -123,75 +122,11 @@ static struct scope {
     Sym *lstk, *llstk;
 } *cur_scope, *loop_scope, *root_scope;
 
-/********************************************************/
-/* stab debug support */
 
-static const struct {
-  int type;
-  const char *name;
-} default_debug[] = {
-    {   VT_INT, "int:t1=r1;-2147483648;2147483647;" },
-    {   VT_BYTE, "char:t2=r2;0;127;" },
-#if LONG_SIZE == 4
-    {   VT_LONG | VT_INT, "long int:t3=r3;-2147483648;2147483647;" },
-#else
-    {   VT_LLONG | VT_LONG, "long int:t3=r3;-9223372036854775808;9223372036854775807;" },
-#endif
-    {   VT_INT | VT_UNSIGNED, "unsigned int:t4=r4;0;037777777777;" },
-#if LONG_SIZE == 4
-    {   VT_LONG | VT_INT | VT_UNSIGNED, "long unsigned int:t5=r5;0;037777777777;" },
-#else
-    /* use octal instead of -1 so size_t works (-gstabs+ in gcc) */
-    {   VT_LLONG | VT_LONG | VT_UNSIGNED, "long unsigned int:t5=r5;0;01777777777777777777777;" },
-#endif
-    {   VT_QLONG, "__int128:t6=r6;0;-1;" },
-    {   VT_QLONG | VT_UNSIGNED, "__int128 unsigned:t7=r7;0;-1;" },
-    {   VT_LLONG, "long long int:t8=r8;-9223372036854775808;9223372036854775807;" },
-    {   VT_LLONG | VT_UNSIGNED, "long long unsigned int:t9=r9;0;01777777777777777777777;" },
-    {   VT_SHORT, "short int:t10=r10;-32768;32767;" },
-    {   VT_SHORT | VT_UNSIGNED, "short unsigned int:t11=r11;0;65535;" },
-    {   VT_BYTE | VT_DEFSIGN, "signed char:t12=r12;-128;127;" },
-    {   VT_BYTE | VT_DEFSIGN | VT_UNSIGNED, "unsigned char:t13=r13;0;255;" },
-    {   VT_FLOAT, "float:t14=r1;4;0;" },
-    {   VT_DOUBLE, "double:t15=r1;8;0;" },
-    {   VT_LDOUBLE, "long double:t16=r1;16;0;" },
-    {   -1, "_Float32:t17=r1;4;0;" },
-    {   -1, "_Float64:t18=r1;8;0;" },
-    {   -1, "_Float128:t19=r1;16;0;" },
-    {   -1, "_Float32x:t20=r1;8;0;" },
-    {   -1, "_Float64x:t21=r1;16;0;" },
-    {   -1, "_Decimal32:t22=r1;4;0;" },
-    {   -1, "_Decimal64:t23=r1;8;0;" },
-    {   -1, "_Decimal128:t24=r1;16;0;" },
-    /* if default char is unsigned */
-    {   VT_BYTE | VT_UNSIGNED, "unsigned char:t25=r25;0;255;" },
-    /* boolean type */
-    {   VT_BOOL, "bool:t26=r26;0;255;" },
-    {   VT_VOID, "void:t27=27" },
-};
 
-static int debug_next_type;
 
-static struct debug_hash {
-    int debug_type;
-    Sym *type;
-} *debug_hash;
 
-static int n_debug_hash;
 
-static struct debug_info {
-    int start;
-    int end;
-    int n_sym;
-    struct debug_sym {
-        int type;
-        unsigned long value;
-        char *str;
-        Section *sec;
-        int sym_index;
-    } *sym;
-    struct debug_info *child, *next, *last, *parent;
-} *debug_info, *debug_info_root;
 
 static void init_prec(void);
 #ifndef CONFIG_TCC_ASM
@@ -374,372 +309,12 @@ ST_FUNC void check_vstack(void)
 }
 
 /* ------------------------------------------------------------------------- */
-/* start of translation unit info */
-ST_FUNC void tcc_debug_start(TCCState *s1)
-{
-    if (s1->do_debug) {
-        int i;
-        char buf[512];
-
-        /* file info: full path + filename */
-        section_sym = put_elf_sym(symtab_section, 0, 0,
-                                  ELFW(ST_INFO)(STB_LOCAL, STT_SECTION), 0,
-                                  text_section->sh_num, NULL);
-        getcwd(buf, sizeof(buf));
-        pstrcat(buf, sizeof(buf), "/");
-        put_stabs_r(s1, buf, N_SO, 0, 0,
-                    text_section->data_offset, text_section, section_sym);
-        put_stabs_r(s1, file->prev->filename, N_SO, 0, 0,
-                    text_section->data_offset, text_section, section_sym);
-        for (i = 0; i < sizeof (default_debug) / sizeof (default_debug[0]); i++)
-            put_stabs(s1, default_debug[i].name, N_LSYM, 0, 0, 0);
-
-        new_file = last_line_num = 0;
-        func_ind = -1;
-        debug_next_type = sizeof(default_debug) / sizeof(default_debug[0]);
-        debug_hash = NULL;
-        n_debug_hash = 0;
-
-        /* we're currently 'including' the <command line> */
-        tcc_debug_bincl(s1);
-    }
-
-    /* an elf symbol of type STT_FILE must be put so that STB_LOCAL
-       symbols can be safely used */
-    put_elf_sym(symtab_section, 0, 0,
-                ELFW(ST_INFO)(STB_LOCAL, STT_FILE), 0,
-                SHN_ABS, file->filename);
-}
-
-static void tcc_debug_stabs (TCCState *s1, const char *str, int type, unsigned long value,
-                             Section *sec, int sym_index)
-{
-    struct debug_sym *s;
-
-    if (debug_info) {
-        debug_info->sym =
-            (struct debug_sym *)tcc_realloc (debug_info->sym,
-                                             sizeof(struct debug_sym) *
-                                             (debug_info->n_sym + 1));
-        s = debug_info->sym + debug_info->n_sym++;
-        s->type = type;
-        s->value = value;
-        s->str = tcc_strdup(str);
-        s->sec = sec;
-        s->sym_index = sym_index;
-    }
-    else if (sec)
-        put_stabs_r (s1, str, type, 0, 0, value, sec, sym_index);
-    else
-        put_stabs (s1, str, type, 0, 0, value);
-}
-
-static void tcc_debug_stabn(int type, int value)
-{
-    if (type == N_LBRAC) {
-        struct debug_info *info =
-            (struct debug_info *) tcc_mallocz(sizeof (*info));
-
-        info->start = value;
-        info->parent = debug_info;
-        if (debug_info) {
-            if (debug_info->child) {
-                if (debug_info->child->last)
-                    debug_info->child->last->next = info;
-                else
-                    debug_info->child->next = info;
-                debug_info->child->last = info;
-            }
-            else
-                debug_info->child = info;
-        }
-        else
-            debug_info_root = info;
-        debug_info = info;
-    }
-    else {
-        debug_info->end = value;
-        debug_info = debug_info->parent;
-    }
-}
-
-static void tcc_get_debug_info(TCCState *s1, Sym *s, CString *result)
-{
-    int type;
-    int n = 0;
-    int debug_type = -1;
-    Sym *t = s;
-    CString str;
-
-    for (;;) {
-        type = t->type.t & ~(VT_EXTERN | VT_STATIC | VT_CONSTANT | VT_VOLATILE);
-        if ((type & VT_BTYPE) != VT_BYTE)
-            type &= ~VT_DEFSIGN;
-        if (type == VT_PTR || type == (VT_PTR | VT_ARRAY))
-            n++, t = t->type.ref;
-        else
-            break;
-    }
-    if ((type & VT_BTYPE) == VT_STRUCT) {
-        int i;
-
-        t = t->type.ref;
-        for (i = 0; i < n_debug_hash; i++) {
-            if (t == debug_hash[i].type) {
-                debug_type = debug_hash[i].debug_type;
-                break;
-            }
-        }
-        if (debug_type == -1) {
-            debug_type = ++debug_next_type;
-            debug_hash = (struct debug_hash *)
-                tcc_realloc (debug_hash,
-                             (n_debug_hash + 1) * sizeof(*debug_hash));
-            debug_hash[n_debug_hash].debug_type = debug_type;
-            debug_hash[n_debug_hash++].type = t;
-            cstr_new (&str);
-            cstr_printf (&str, "%s:T%d=%c%d",
-                         (t->v & ~SYM_STRUCT) >= SYM_FIRST_ANOM
-                         ? "" : get_tok_str(t->v & ~SYM_STRUCT, NULL),
-                         debug_type,
-                         IS_UNION (t->type.t) ? 'u' : 's',
-                         t->c);
-            while (t->next) {
-                int pos, size, align;
-
-                t = t->next;
-                cstr_printf (&str, "%s:",
-                             (t->v & ~SYM_FIELD) >= SYM_FIRST_ANOM
-                             ? "" : get_tok_str(t->v & ~SYM_FIELD, NULL));
-                tcc_get_debug_info (s1, t, &str);
-                if (t->type.t & VT_BITFIELD) {
-                    pos = t->c * 8 + BIT_POS(t->type.t);
-                    size = BIT_SIZE(t->type.t);
-                }
-                else {
-                    pos = t->c * 8;
-                    size = type_size(&t->type, &align) * 8;
-                }
-                cstr_printf (&str, ",%d,%d;", pos, size);
-            }
-            cstr_printf (&str, ";");
-            tcc_debug_stabs(s1, str.data, N_LSYM, 0, NULL, 0);
-            cstr_free (&str);
-        }
-    }
-    else if (IS_ENUM(type)) {
-        Sym *e = t = t->type.ref;
-
-        debug_type = ++debug_next_type;
-        cstr_new (&str);
-        cstr_printf (&str, "%s:T%d=e",
-                     (t->v & ~SYM_STRUCT) >= SYM_FIRST_ANOM
-                     ? "" : get_tok_str(t->v & ~SYM_STRUCT, NULL),
-                     debug_type);
-        while (t->next) {
-            t = t->next;
-            cstr_printf (&str, "%s:",
-                         (t->v & ~SYM_FIELD) >= SYM_FIRST_ANOM
-                         ? "" : get_tok_str(t->v & ~SYM_FIELD, NULL));
-            cstr_printf (&str, e->type.t & VT_UNSIGNED ? "%u," : "%d,",
-                         (int)t->enum_val);
-        }
-        cstr_printf (&str, ";");
-        tcc_debug_stabs(s1, str.data, N_LSYM, 0, NULL, 0);
-        cstr_free (&str);
-    }
-    else if ((type & VT_BTYPE) != VT_FUNC) {
-        type &= ~VT_STRUCT_MASK;
-        for (debug_type = 1;
-             debug_type <= sizeof(default_debug) / sizeof(default_debug[0]);
-             debug_type++)
-            if (default_debug[debug_type - 1].type == type)
-                break;
-        if (debug_type > sizeof(default_debug) / sizeof(default_debug[0]))
-            return;
-    }
-    if (n > 0)
-        cstr_printf (result, "%d=", ++debug_next_type);
-    t = s;
-    for (;;) {
-        type = t->type.t & ~(VT_EXTERN | VT_STATIC | VT_CONSTANT | VT_VOLATILE);
-        if ((type & VT_BTYPE) != VT_BYTE)
-            type &= ~VT_DEFSIGN;
-        if (type == VT_PTR)
-            cstr_printf (result, "%d=*", ++debug_next_type);
-        else if (type == (VT_PTR | VT_ARRAY))
-            cstr_printf (result, "%d=ar1;0;%d;",
-                         ++debug_next_type, t->type.ref->c - 1);
-        else if (type == VT_FUNC) {
-            cstr_printf (result, "%d=f", ++debug_next_type);
-            tcc_get_debug_info (s1, t->type.ref, result);
-            return;
-        }
-        else
-            break;
-        t = t->type.ref;
-    }
-    cstr_printf (result, "%d", debug_type);
-}
-
-static void tcc_debug_finish (TCCState *s1, struct debug_info *cur)
-{
-    while (cur) {
-        int i;
-        struct debug_info *next = cur->next;
-
-        for (i = 0; i < cur->n_sym; i++) {
-            struct debug_sym *s = &cur->sym[i];
-
-            if (s->sec)
-                put_stabs_r(s1, s->str, s->type, 0, 0, s->value,
-                            s->sec, s->sym_index);
-            else
-                put_stabs(s1, s->str, s->type, 0, 0, s->value);
-            tcc_free (s->str);
-        }
-        tcc_free (cur->sym);
-        put_stabn(s1, N_LBRAC, 0, 0, cur->start);
-        tcc_debug_finish (s1, cur->child);
-        put_stabn(s1, N_RBRAC, 0, 0, cur->end);
-        tcc_free (cur);
-        cur = next;
-    }
-}
-
-static void tcc_add_debug_info(TCCState *s1, int param, Sym *s, Sym *e)
-{
-    CString debug_str;
-    cstr_new (&debug_str);
-    for (; s != e; s = s->prev) {
-        if (!s->v || (s->r & VT_VALMASK) != VT_LOCAL)
-            continue;
-        cstr_reset (&debug_str);
-        cstr_printf (&debug_str, "%s:%s", get_tok_str(s->v, NULL), param ? "p" : "");
-        tcc_get_debug_info(s1, s, &debug_str);
-        tcc_debug_stabs(s1, debug_str.data, param ? N_PSYM : N_LSYM, s->c, NULL, 0);
-    }
-    cstr_free (&debug_str);
-}
-
-static void tcc_debug_extern_sym(TCCState *s1, Sym *sym, int sh_num, int sym_bind)
-{
-    Section *s = s1->sections[sh_num];
-    CString str;
-
-    cstr_new (&str);
-    cstr_printf (&str, "%s:%c",
-        get_tok_str(sym->v, NULL),
-        sym_bind == STB_GLOBAL ? 'G' : local_scope ? 'V' : 'S'
-        );
-    tcc_get_debug_info(s1, sym, &str);
-    if (sym_bind == STB_GLOBAL)
-        tcc_debug_stabs(s1, str.data, N_GSYM, 0, NULL, 0);
-    else
-        tcc_debug_stabs(s1, str.data,
-            (sym->type.t & VT_STATIC) && data_section == s
-            ? N_STSYM : N_LCSYM, 0, s, sym->c);
-    cstr_free (&str);
-}
-
-/* put end of translation unit info */
-ST_FUNC void tcc_debug_end(TCCState *s1)
-{
-    if (!s1->do_debug)
-        return;
-    put_stabs_r(s1, NULL, N_SO, 0, 0,
-        text_section->data_offset, text_section, section_sym);
-    tcc_free(debug_hash);
-}
-
-static BufferedFile* put_new_file(TCCState *s1)
-{
-    BufferedFile *f = file;
-    /* use upper file if from inline ":asm:" */
-    if (f->filename[0] == ':')
-        f = f->prev;
-    if (f && new_file) {
-        put_stabs_r(s1, f->filename, N_SOL, 0, 0, ind, text_section, section_sym);
-        new_file = last_line_num = 0;
-    }
-    return f;
-}
-
-/* generate line number info */
-ST_FUNC void tcc_debug_line(TCCState *s1)
-{
-    BufferedFile *f;
-    if (!s1->do_debug
-        || cur_text_section != text_section
-        || !(f = put_new_file(s1))
-        || last_line_num == f->line_num)
-        return;
-    if (func_ind != -1) {
-        put_stabn(s1, N_SLINE, 0, f->line_num, ind - func_ind);
-    } else {
-        /* from tcc_assemble */
-        put_stabs_r(s1, NULL, N_SLINE, 0, f->line_num, ind, text_section, section_sym);
-    }
-    last_line_num = f->line_num;
-}
-
-/* put function symbol */
-ST_FUNC void tcc_debug_funcstart(TCCState *s1, Sym *sym)
-{
-    CString debug_str;
-    BufferedFile *f;
-    if (!s1->do_debug)
-        return;
-    debug_info_root = NULL;
-    debug_info = NULL;
-    tcc_debug_stabn(N_LBRAC, ind - func_ind);
-    if (!(f = put_new_file(s1)))
-        return;
-    cstr_new (&debug_str);
-    cstr_printf(&debug_str, "%s:%c", funcname, sym->type.t & VT_STATIC ? 'f' : 'F');
-    tcc_get_debug_info(s1, sym->type.ref, &debug_str);
-    put_stabs_r(s1, debug_str.data, N_FUN, 0, f->line_num, 0, cur_text_section, sym->c);
-    cstr_free (&debug_str);
-
-    tcc_debug_line(s1);
-}
-
-/* put function size */
-ST_FUNC void tcc_debug_funcend(TCCState *s1, int size)
-{
-    if (!s1->do_debug)
-        return;
-    tcc_debug_stabn(N_RBRAC, size);
-    tcc_debug_finish (s1, debug_info_root);
-}
-
-/* put alternative filename */
-ST_FUNC void tcc_debug_putfile(TCCState *s1, const char *filename)
-{
-    if (0 == strcmp(file->filename, filename))
-        return;
-    pstrcpy(file->filename, sizeof(file->filename), filename);
-    new_file = 1;
-}
-
-/* begin of #include */
-ST_FUNC void tcc_debug_bincl(TCCState *s1)
-{
-    if (!s1->do_debug)
-        return;
-    put_stabs(s1, file->filename, N_BINCL, 0, 0, 0);
-    new_file = 1;
-}
-
-/* end of #include */
-ST_FUNC void tcc_debug_eincl(TCCState *s1)
-{
-    if (!s1->do_debug)
-        return;
-    put_stabn(s1, N_EINCL, 0, 0, 0);
-    new_file = 1;
-}
-
+/* Upstream TCC emits stabs debug info here (tcc_debug_start/_end/_line/
+ * _funcstart/_funcend/_bincl/_eincl and the tcc_get_debug_info type
+ * walker). Removed with the rest of -g support: nothing in this project
+ * ever passes -g, and no debugger in its toolchain consumes stabs -- the
+ * actual debugging method is serial kprintf plus QEMU. See
+ * docs/compiler-file-review-2026-08-27.md section C. */
 /* ------------------------------------------------------------------------- */
 /* initialize vstack and types.  This must be done also for tcc -E */
 ST_FUNC void tccgen_init(TCCState *s1)
@@ -769,22 +344,15 @@ ST_FUNC int tccgen_compile(TCCState *s1)
     cur_text_section = NULL;
     funcname = "";
     anon_sym = SYM_FIRST_ANOM;
-    section_sym = 0;
     const_wanted = 0;
     nocode_wanted = 0x80000000;
     local_scope = 0;
 
-    tcc_debug_start(s1);
-#ifdef INC_DEBUG
-    printf("%s: **** new file\n", file->filename);
-#endif
     parse_flags = PARSE_FLAG_PREPROCESS | PARSE_FLAG_TOK_NUM | PARSE_FLAG_TOK_STR;
     next();
     decl(VT_CONST);
     gen_inline_functions(s1);
     check_vstack();
-    /* end of translation unit info */
-    tcc_debug_end(s1);
     return 0;
 }
 
@@ -881,10 +449,6 @@ ST_FUNC void put_extern_sym2(Sym *sym, int sh_num,
         info = ELFW(ST_INFO)(sym_bind, sym_type);
         sym->c = put_elf_sym(symtab_section, value, size, info, other, sh_num, name);
 
-        if (tcc_state->do_debug
-            && sym_type != STT_FUNC
-            && sym->v < SYM_FIRST_ANOM)
-            tcc_debug_extern_sym(tcc_state, sym, sh_num, sym_bind);
 
     } else {
         esym = elfsym(sym);
@@ -1780,149 +1344,10 @@ ST_FUNC void gaddrof(void)
         vtop->r = (vtop->r & ~VT_VALMASK) | VT_LOCAL | VT_LVAL;
 }
 
-#ifdef CONFIG_TCC_BCHECK
-/* generate a bounded pointer addition */
-static void gen_bounded_ptr_add(void)
-{
-    int save = (vtop[-1].r & VT_VALMASK) == VT_LOCAL;
-    if (save) {
-      vpushv(&vtop[-1]);
-      vrott(3);
-    }
-    vpush_global_sym(&func_old_type, TOK___bound_ptr_add);
-    vrott(3);
-    gfunc_call(2);
-    vtop -= save;
-    vpushi(0);
-    /* returned pointer is in REG_IRET */
-    vtop->r = REG_IRET | VT_BOUNDED;
-    if (nocode_wanted)
-        return;
-    /* relocation offset of the bounding function call point */
-    vtop->c.i = (cur_text_section->reloc->data_offset - sizeof(ElfW_Rel));
-}
-
-/* patch pointer addition in vtop so that pointer dereferencing is
-   also tested */
-static void gen_bounded_ptr_deref(void)
-{
-    addr_t func;
-    int size, align;
-    ElfW_Rel *rel;
-    Sym *sym;
-
-    if (nocode_wanted)
-        return;
-
-    size = type_size(&vtop->type, &align);
-    switch(size) {
-    case  1: func = TOK___bound_ptr_indir1; break;
-    case  2: func = TOK___bound_ptr_indir2; break;
-    case  4: func = TOK___bound_ptr_indir4; break;
-    case  8: func = TOK___bound_ptr_indir8; break;
-    case 12: func = TOK___bound_ptr_indir12; break;
-    case 16: func = TOK___bound_ptr_indir16; break;
-    default:
-        /* may happen with struct member access */
-        return;
-    }
-    sym = external_global_sym(func, &func_old_type);
-    if (!sym->c)
-        put_extern_sym(sym, NULL, 0, 0);
-    /* patch relocation */
-    /* XXX: find a better solution ? */
-    rel = (ElfW_Rel *)(cur_text_section->reloc->data + vtop->c.i);
-    rel->r_info = ELFW(R_INFO)(sym->c, ELFW(R_TYPE)(rel->r_info));
-}
-
-/* generate lvalue bound code */
-static void gbound(void)
-{
-    CType type1;
-
-    vtop->r &= ~VT_MUSTBOUND;
-    /* if lvalue, then use checking code before dereferencing */
-    if (vtop->r & VT_LVAL) {
-        /* if not VT_BOUNDED value, then make one */
-        if (!(vtop->r & VT_BOUNDED)) {
-            /* must save type because we must set it to int to get pointer */
-            type1 = vtop->type;
-            vtop->type.t = VT_PTR;
-            gaddrof();
-            vpushi(0);
-            gen_bounded_ptr_add();
-            vtop->r |= VT_LVAL;
-            vtop->type = type1;
-        }
-        /* then check for dereferencing */
-        gen_bounded_ptr_deref();
-    }
-}
-
-/* we need to call __bound_ptr_add before we start to load function
-   args into registers */
-ST_FUNC void gbound_args(int nb_args)
-{
-    int i, v;
-    SValue *sv;
-
-    for (i = 1; i <= nb_args; ++i)
-        if (vtop[1 - i].r & VT_MUSTBOUND) {
-            vrotb(i);
-            gbound();
-            vrott(i);
-        }
-
-    sv = vtop - nb_args;
-    if (sv->r & VT_SYM) {
-        v = sv->sym->v;
-        if (v == TOK_setjmp
-          || v == TOK__setjmp
-          || v == TOK_sigsetjmp
-          || v == TOK___sigsetjmp
-          ) {
-            vpush_global_sym(&func_old_type, TOK___bound_setjmp);
-            vpushv(sv + 1);
-            gfunc_call(1);
-            func_bound_add_epilog = 1;
-        }
-#if defined TCC_TARGET_I386
-        if (v == TOK_alloca)
-            func_bound_add_epilog = 1;
-#endif
-    }
-}
-
-/* Add bounds for local symbols from S to E (via ->prev) */
-static void add_local_bounds(Sym *s, Sym *e)
-{
-    for (; s != e; s = s->prev) {
-        if (!s->v || (s->r & VT_VALMASK) != VT_LOCAL)
-          continue;
-        /* Add arrays/structs/unions because we always take address */
-        if ((s->type.t & VT_ARRAY)
-            || (s->type.t & VT_BTYPE) == VT_STRUCT
-            || s->a.addrtaken) {
-            /* add local bound info */
-            int align, size = type_size(&s->type, &align);
-            addr_t *bounds_ptr = section_ptr_add(lbounds_section,
-                                                 2 * sizeof(addr_t));
-            bounds_ptr[0] = s->c;
-            bounds_ptr[1] = size;
-        }
-    }
-}
-#endif
 
 /* Wrapper around sym_pop, that potentially also registers local bounds.  */
 static void pop_local_syms(Sym **ptop, Sym *b, int keep, int ellipsis)
 {
-#ifdef CONFIG_TCC_BCHECK
-    if (tcc_state->do_bounds_check && !ellipsis && !keep)
-        add_local_bounds(*ptop, b);
-#endif
-    if (tcc_state->do_debug)
-        tcc_add_debug_info (tcc_state, !local_scope, *ptop, b);
     sym_pop(ptop, b, keep);
 }
 
@@ -2076,10 +1501,6 @@ ST_FUNC int gv(int rc)
 	    init_putv(&vtop->type, data_section, offset);
 	    vtop->r |= VT_LVAL;
         }
-#ifdef CONFIG_TCC_BCHECK
-        if (vtop->r & VT_MUSTBOUND) 
-            gbound();
-#endif
 
         bt = vtop->type.t & VT_BTYPE;
 
@@ -2889,18 +2310,6 @@ redo:
 #endif
             }
             gen_op('*');
-#ifdef CONFIG_TCC_BCHECK
-            if (tcc_state->do_bounds_check && !const_wanted) {
-                /* if bounded pointers, we generate a special code to
-                   test bounds */
-                if (op == '-') {
-                    vpushi(0);
-                    vswap();
-                    gen_op('-');
-                }
-                gen_bounded_ptr_add();
-            } else
-#endif
             {
                 gen_opic(op);
             }
@@ -3478,10 +2887,6 @@ ST_FUNC void vstore(void)
 
             /* destination */
             vswap();
-#ifdef CONFIG_TCC_BCHECK
-            if (vtop->r & VT_MUSTBOUND)
-                gbound(); /* check would be wrong after gaddrof() */
-#endif
             vtop->type.t = VT_PTR;
             gaddrof();
 
@@ -3492,10 +2897,6 @@ ST_FUNC void vstore(void)
             vswap();
             /* source */
             vpushv(vtop - 2);
-#ifdef CONFIG_TCC_BCHECK
-            if (vtop->r & VT_MUSTBOUND)
-                gbound();
-#endif
             vtop->type.t = VT_PTR;
             gaddrof();
             /* type size */
@@ -3571,14 +2972,6 @@ ST_FUNC void vstore(void)
                 gen_cast(&vtop[-1].type);
             }
 
-#ifdef CONFIG_TCC_BCHECK
-            /* bound check case */
-            if (vtop[-1].r & VT_MUSTBOUND) {
-                vswap();
-                gbound();
-                vswap();
-            }
-#endif
             gv(RC_TYPE(dbt)); /* generate value */
 
             if (delayed_cast) {
@@ -3723,12 +3116,6 @@ redo:
         case TOK_ALWAYS_INLINE2:
             ad->f.func_alwinl = 1;
             break;
-#ifdef CONFIG_TCC_BCHECK
-        case TOK_NO_BOUND_CHECK1:
-        case TOK_NO_BOUND_CHECK2:
-            ad->f.no_bcheck = 1;
-            break;
-#endif
         case TOK_SECTION1:
         case TOK_SECTION2:
             skip('(');
@@ -4038,17 +3425,6 @@ static void struct_layout(CType *type, AttributeDef *ad)
 	if (align > maxalign)
 	    maxalign = align;
 
-#ifdef BF_DEBUG
-	printf("set field %s offset %-2d size %-2d align %-2d",
-	       get_tok_str(f->v & ~SYM_FIELD, NULL), offset, size, align);
-	if (f->type.t & VT_BITFIELD) {
-	    printf(" pos %-2d bits %-2d",
-                    BIT_POS(f->type.t),
-                    BIT_SIZE(f->type.t)
-                    );
-	}
-	printf("\n");
-#endif
 
         f->c = offset;
 	f->r = 0;
@@ -4072,9 +3448,6 @@ static void struct_layout(CType *type, AttributeDef *ad)
     c = (c + a - 1) & -a;
     type->ref->c = c;
 
-#ifdef BF_DEBUG
-    printf("struct size %-2d align %-2d\n\n", c, a), fflush(stdout);
-#endif
 
     /* check whether we can access bitfields by their type */
     for (f = type->ref->next; f; f = f->next) {
@@ -4124,19 +3497,9 @@ static void struct_layout(CType *type, AttributeDef *ad)
 		        | (bit_pos << VT_STRUCT_SHIFT);
             if (s != size)
                 f->auxtype = t.t;
-#ifdef BF_DEBUG
-            printf("FIX field %s offset %-2d size %-2d align %-2d "
-                "pos %-2d bits %-2d\n",
-                get_tok_str(f->v & ~SYM_FIELD, NULL),
-                cx, s, align, px, bit_size);
-#endif
         } else {
             /* fall back to load/store single-byte wise */
             f->auxtype = VT_STRUCT;
-#ifdef BF_DEBUG
-            printf("FIX field %s : load byte-wise\n",
-                 get_tok_str(f->v & ~SYM_FIELD, NULL));
-#endif
         }
     }
 }
@@ -4645,9 +4008,6 @@ static int asm_label_instr(void)
     next();
     parse_asm_str(&astr);
     skip(')');
-#ifdef ASM_DEBUG
-    printf("asm_alias: \"%s\"\n", (char *)astr.data);
-#endif
     v = tok_alloc(astr.data, astr.size - 1)->tok;
     cstr_free(&astr);
     return v;
@@ -4911,10 +4271,6 @@ ST_FUNC void indir(void)
         && (vtop->type.t & VT_BTYPE) != VT_FUNC) {
         vtop->r |= VT_LVAL;
         /* if bound checking, the referenced pointer must be checked */
-#ifdef CONFIG_TCC_BCHECK
-        if (tcc_state->do_bounds_check)
-            vtop->r |= VT_MUSTBOUND;
-#endif
     }
 }
 
@@ -5040,10 +4396,6 @@ ST_FUNC void unary(void)
     CType type;
     Sym *s;
     AttributeDef ad;
-
-    /* generate line number info */
-    if (tcc_state->do_debug)
-        tcc_debug_line(tcc_state);
 
     sizeof_caller = in_sizeof;
     in_sizeof = 0;
@@ -5622,26 +4974,6 @@ special_math_val:
         if (t < TOK_UIDENT)
             expect("identifier");
         s = sym_find(t);
-#ifdef CONFIG_TCC_BCHECK
-        /* HACK to undo alias definition in tccpp.c
-           if function has no bound checking */
-        if (tcc_state->do_bounds_check == 0 && s &&
-            (s->type.t & VT_BTYPE) == VT_FUNC && (s->asm_label & SYM_FIELD)) {
-            const char *name = get_tok_str(s->asm_label & ~SYM_FIELD, NULL);
-
-            if (name && strncmp (name, "__bound_", strlen("__bound_")) == 0) {
-                char str[100];
-                int v = s->v;
-
-                sprintf (str, "!%s", name); /* illegal name */
-                t = tok_alloc(str, strlen(str))->tok;
-                s = sym_find(t);
-                if (s == NULL)
-                    s = external_global_sym(t, &func_old_type);
-                s->asm_label = v | SYM_FIELD; /* use old name as alias */
-            }
-        }
-#endif
         if (!s || IS_ASM_SYM(s)) {
             const char *name = get_tok_str(t, NULL);
             if (tok != '(')
@@ -5708,11 +5040,6 @@ special_math_val:
             /* an array is never an lvalue */
             if (!(vtop->type.t & VT_ARRAY)) {
                 vtop->r |= VT_LVAL;
-#ifdef CONFIG_TCC_BCHECK
-                /* if bound checking, the referenced pointer must be checked */
-                if (tcc_state->do_bounds_check)
-                    vtop->r |= VT_MUSTBOUND;
-#endif
             }
             next();
         } else if (tok == '[') {
@@ -6402,9 +5729,6 @@ void new_scope(struct scope *o)
     o->llstk = local_label_stack;
 
     ++local_scope;
-
-    if (tcc_state->do_debug)
-        tcc_debug_stabn(N_LBRAC, ind - func_ind);
 }
 
 void prev_scope(struct scope *o, int is_expr)
@@ -6429,9 +5753,6 @@ void prev_scope(struct scope *o, int is_expr)
     pop_local_syms(&local_stack, o->lstk, is_expr, 0);
     cur_scope = o->prev;
     --local_scope;
-
-    if (tcc_state->do_debug)
-        tcc_debug_stabn(N_RBRAC, ind - func_ind);
 }
 
 /* leave a scope via break/continue(/goto) */
@@ -7399,9 +6720,6 @@ static void decl_initializer_alloc(CType *type, AttributeDef *ad, int r,
     Sym *flexible_array;
     Sym *sym = NULL;
     int saved_nocode_wanted = nocode_wanted;
-#ifdef CONFIG_TCC_BCHECK
-    int bcheck = tcc_state->do_bounds_check && !NODATA_WANTED;
-#endif
 
     /* Always allocate static or global variables */
     if (v && (r & VT_VALMASK) == VT_CONST)
@@ -7476,20 +6794,8 @@ static void decl_initializer_alloc(CType *type, AttributeDef *ad, int r,
 
     if ((r & VT_VALMASK) == VT_LOCAL) {
         sec = NULL;
-#ifdef CONFIG_TCC_BCHECK
-        if (bcheck && v) {
-            /* add padding between stack variables for bound checking */
-            loc--;
-        }
-#endif
         loc = (loc - size) & -align;
         addr = loc;
-#ifdef CONFIG_TCC_BCHECK
-        if (bcheck && v) {
-            /* add padding between stack variables for bound checking */
-            loc--;
-        }
-#endif
         if (v) {
             /* local variable */
 #ifdef CONFIG_TCC_ASM
@@ -7537,11 +6843,6 @@ static void decl_initializer_alloc(CType *type, AttributeDef *ad, int r,
 
         if (sec) {
 	    addr = section_add(sec, size, align);
-#ifdef CONFIG_TCC_BCHECK
-            /* add padding if bound check */
-            if (bcheck)
-                section_add(sec, 1, 1);
-#endif
         } else {
             addr = align; /* SHN_COMMON is special, symbol value is align */
 	    sec = common_section;
@@ -7561,19 +6862,6 @@ static void decl_initializer_alloc(CType *type, AttributeDef *ad, int r,
 	    vtop->r |= r;
         }
 
-#ifdef CONFIG_TCC_BCHECK
-        /* handles bounds now because the symbol must be defined
-           before for the relocation */
-        if (bcheck) {
-            addr_t *bounds_ptr;
-
-            greloca(bounds_section, sym, bounds_section->data_offset, R_DATA_PTR, 0);
-            /* then add global bound info */
-            bounds_ptr = section_ptr_add(bounds_section, 2 * sizeof(addr_t));
-            bounds_ptr[0] = 0; /* relocated */
-            bounds_ptr[1] = size;
-        }
-#endif
     }
 
     if (type->t & VT_VLA) {
@@ -7623,12 +6911,6 @@ static void gen_function(Sym *sym)
 {
     /* Initialize VLA state */
     struct scope f = { 0 };
-#ifdef CONFIG_TCC_BCHECK
-    unsigned char save_bcheck = tcc_state->do_bounds_check;
-
-    if (sym->type.ref->f.no_bcheck)
-        tcc_state->do_bounds_check = 0;
-#endif
     cur_scope = root_scope = &f;
     nocode_wanted = 0;
     ind = cur_text_section->data_offset;
@@ -7649,8 +6931,6 @@ static void gen_function(Sym *sym)
     func_vt = sym->type.ref->type;
     func_var = sym->type.ref->f.func_type == FUNC_ELLIPSIS;
 
-    /* put debug symbol */
-    tcc_debug_funcstart(tcc_state, sym);
     /* push a dummy symbol to enable local sym storage */
     sym_push2(&local_stack, SYM_FIELD, 0, 0);
     local_scope = 1; /* for function parameters */
@@ -7671,7 +6951,6 @@ static void gen_function(Sym *sym)
     /* patch symbol size */
     elfsym(sym)->st_size = ind - func_ind;
     /* end of function */
-    tcc_debug_funcend(tcc_state, ind - func_ind);
     /* It's better to crash than to generate wrong code */
     cur_text_section = NULL;
     funcname = ""; /* for safety */
@@ -7682,9 +6961,6 @@ static void gen_function(Sym *sym)
     check_vstack();
     /* do this after funcend debug info */
     next();
-#ifdef CONFIG_TCC_BCHECK
-    tcc_state->do_bounds_check = save_bcheck;
-#endif
 }
 
 static void gen_inline_functions(TCCState *s)
@@ -7704,7 +6980,10 @@ static void gen_inline_functions(TCCState *s)
                 /* the function was used or forced (and then not internal):
                    generate its code and convert it to a normal function */
                 fn->sym = NULL;
-                tcc_debug_putfile(s, fn->filename);
+                /* restore the defining file's name so any error raised while
+                 * generating this deferred inline function points at the right
+                 * file -- see tcc_set_cur_filename()'s own comment. */
+                tcc_set_cur_filename(fn->filename);
                 begin_macro(fn->func_str, 1);
                 next();
                 cur_text_section = text_section;

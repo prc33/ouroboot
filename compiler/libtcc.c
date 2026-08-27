@@ -461,17 +461,16 @@ no_file:
     else
         strcat_printf(buf, sizeof(buf), "error: ");
     strcat_vprintf(buf, sizeof(buf), fmt, ap);
-    if (!s1 || !s1->error_func) {
-        /* default case: stderr */
-        if (s1 && s1->output_type == TCC_OUTPUT_PREPROCESS && s1->ppfp == stdout)
-            /* print a newline during tcc -E */
-            printf("\n"), fflush(stdout);
-        fflush(stdout); /* flush -v output */
-        fprintf(stderr, "%s\n", buf);
-        fflush(stderr);
-    } else {
-        s1->error_func(s1->error_opaque, buf);
-    }
+    /* Always stderr. Upstream TCC also supports a caller-installed
+     * error callback here, for embedders using TCC as a library --
+     * dropped along with the rest of the unused libtcc API, since
+     * this project only ever runs the tcc binary. */
+    if (s1 && s1->output_type == TCC_OUTPUT_PREPROCESS && s1->ppfp == stdout)
+        /* print a newline during tcc -E */
+        printf("\n"), fflush(stdout);
+    fflush(stdout); /* flush -v output */
+    fprintf(stderr, "%s\n", buf);
+    fflush(stderr);
     if (s1) {
         if (mode != ERROR_WARN)
             s1->nb_errors++;
@@ -481,22 +480,6 @@ no_file:
             longjmp(s1->error_jmp_buf, 1);
     }
     exit(1);
-}
-
-LIBTCCAPI void tcc_set_error_func(TCCState *s, void *error_opaque, TCCErrorFunc error_func)
-{
-    s->error_opaque = error_opaque;
-    s->error_func = error_func;
-}
-
-LIBTCCAPI TCCErrorFunc tcc_get_error_func(TCCState *s)
-{
-    return s->error_func;
-}
-
-LIBTCCAPI void *tcc_get_error_opaque(TCCState *s)
-{
-    return s->error_opaque;
 }
 
 /* error without aborting current compilation */
@@ -631,10 +614,6 @@ static int tcc_compile(TCCState *s1, int filetype, const char *str, int fd)
     return s1->nb_errors != 0 ? -1 : 0;
 }
 
-LIBTCCAPI int tcc_compile_string(TCCState *s, const char *str)
-{
-    return tcc_compile(s, s->filetype, str, -1);
-}
 
 /* define a preprocessor symbol. value can be NULL, sym can be "sym=val" */
 LIBTCCAPI void tcc_define_symbol(TCCState *s1, const char *sym, const char *value)
@@ -822,7 +801,6 @@ LIBTCCAPI void tcc_delete(TCCState *s1)
     dynarray_reset(&s1->sysinclude_paths, &s1->nb_sysinclude_paths);
 
     tcc_free(s1->tcc_lib_path);
-    tcc_free(s1->soname);
     tcc_free(s1->rpath);
     tcc_free(s1->init_symbol);
     tcc_free(s1->fini_symbol);
@@ -877,25 +855,12 @@ LIBTCCAPI int tcc_set_output_type(TCCState *s, int output_type)
         tcc_add_sysinclude_path(s, CONFIG_TCC_SYSINCLUDEPATHS);
     }
 
-#ifdef CONFIG_TCC_BCHECK
-    if (s->do_bounds_check) {
-        /* if bound checking, then add corresponding sections */
-        tccelf_bounds_new(s);
-        /* define symbol */
-        tcc_define_symbol(s, "__BOUNDS_CHECKING_ON", NULL);
-    }
-#endif
-    if (s->do_debug) {
-        /* add debug sections */
-        tccelf_stab_new(s);
-    }
-
     tcc_add_library_path(s, CONFIG_TCC_LIBPATHS);
 
     /* paths for crt objects */
     tcc_split_path(s, &s->crt_paths, &s->nb_crt_paths, CONFIG_TCC_CRTPREFIX);
     /* add libc crt1/crti objects */
-    if ((output_type == TCC_OUTPUT_EXE || output_type == TCC_OUTPUT_DLL) &&
+    if (output_type == TCC_OUTPUT_EXE &&
         !s->nostdlib) {
         /* Mach-O with LC_MAIN doesn't need any crt startup code.  */
         if (output_type != TCC_OUTPUT_DLL)
@@ -942,19 +907,17 @@ ST_FUNC int tcc_add_file_internal(TCCState *s1, const char *filename, int flags)
         case AFF_BINTYPE_REL:
             ret = tcc_load_object_file(s1, fd, 0);
             break;
-        case AFF_BINTYPE_DYN:
-            ret = tcc_load_dll(s1, fd, filename,
-                               (flags & AFF_REFERENCED_DLL) != 0);
-            break;
         case AFF_BINTYPE_AR:
             ret = tcc_load_archive(s1, fd, !(flags & AFF_WHOLE_ARCHIVE));
             break;
         default:
-            /* as GNU ld, consider it is an ld script if not recognized */
-            ret = tcc_load_ldscript(s1, fd);
-            if (ret < 0)
-                tcc_error_noabort("%s: unrecognized file type %d", filename,
-                                  obj_type);
+            /* Upstream also accepts shared objects here (tcc_load_dll) and
+             * falls back to treating anything else as a GNU ld script.
+             * Both are gone -- this project links -static only. An honest
+             * error beats silently mis-parsing something. */
+            ret = -1;
+            tcc_error_noabort("%s: unrecognized file type %d", filename,
+                              obj_type);
             break;
         }
         close(fd);
@@ -1057,17 +1020,6 @@ ST_FUNC void tcc_add_pragma_libs(TCCState *s1)
         tcc_add_library_err(s1, s1->pragma_libs[i]);
 }
 
-LIBTCCAPI int tcc_add_symbol(TCCState *s1, const char *name, const void *val)
-{
-    char buf[256];
-    if (s1->leading_underscore) {
-        buf[0] = '_';
-        pstrcpy(buf + 1, sizeof(buf) - 1, name);
-        name = buf;
-    }
-    set_global_sym(s1, name, NULL, (addr_t)(uintptr_t)val); /* NULL: SHN_ABS */
-    return 0;
-}
 
 LIBTCCAPI void tcc_set_lib_path(TCCState *s, const char *path)
 {
@@ -1239,9 +1191,9 @@ static int tcc_set_linker(TCCState *s, const char *option)
         } else if (link_option(option, "O", &p)) {
             ignoring = 1;
         } else if (link_option(option, "export-all-symbols", &p)) {
-            s->rdynamic = 1;
+            ignoring = 1;   /* dynamic export: -static only, nothing to export to */
         } else if (link_option(option, "export-dynamic", &p)) {
-            s->rdynamic = 1;
+            ignoring = 1;
         } else if (link_option(option, "rpath=", &p)) {
             copy_linker_arg(&s->rpath, p, ':');
         } else if (link_option(option, "enable-new-dtags", &p)) {
@@ -1249,7 +1201,7 @@ static int tcc_set_linker(TCCState *s, const char *option)
         } else if (link_option(option, "section-alignment=", &p)) {
             s->section_align = strtoul(p, &end, 16);
         } else if (link_option(option, "soname=", &p)) {
-            copy_linker_arg(&s->soname, p, 0);
+            ignoring = 1;   /* DT_SONAME: shared-library only */
         } else if (ret = link_option(option, "?whole-archive", &p), ret) {
             if (ret > 0)
                 s->filetype |= AFF_WHOLE_ARCHIVE;
@@ -1289,14 +1241,11 @@ enum {
     TCC_OPTION_l,
     TCC_OPTION_bench,
     TCC_OPTION_b,
-    TCC_OPTION_g,
     TCC_OPTION_c,
     TCC_OPTION_dumpversion,
     TCC_OPTION_d,
     TCC_OPTION_static,
     TCC_OPTION_std,
-    TCC_OPTION_shared,
-    TCC_OPTION_soname,
     TCC_OPTION_o,
     TCC_OPTION_r,
     TCC_OPTION_s,
@@ -1314,7 +1263,6 @@ enum {
     TCC_OPTION_nostdinc,
     TCC_OPTION_nostdlib,
     TCC_OPTION_print_search_dirs,
-    TCC_OPTION_rdynamic,
     TCC_OPTION_param,
     TCC_OPTION_pedantic,
     TCC_OPTION_pthread,
@@ -1346,22 +1294,15 @@ static const TCCOption tcc_options[] = {
     { "B", TCC_OPTION_B, TCC_OPTION_HAS_ARG },
     { "l", TCC_OPTION_l, TCC_OPTION_HAS_ARG },
     { "bench", TCC_OPTION_bench, 0 },
-#ifdef CONFIG_TCC_BCHECK
-    { "b", TCC_OPTION_b, 0 },
-#endif
-    { "g", TCC_OPTION_g, TCC_OPTION_HAS_ARG | TCC_OPTION_NOSEP },
     { "c", TCC_OPTION_c, 0 },
     { "dumpversion", TCC_OPTION_dumpversion, 0},
     { "d", TCC_OPTION_d, TCC_OPTION_HAS_ARG | TCC_OPTION_NOSEP },
     { "static", TCC_OPTION_static, 0 },
     { "std", TCC_OPTION_std, TCC_OPTION_HAS_ARG | TCC_OPTION_NOSEP },
-    { "shared", TCC_OPTION_shared, 0 },
-    { "soname", TCC_OPTION_soname, TCC_OPTION_HAS_ARG },
     { "o", TCC_OPTION_o, TCC_OPTION_HAS_ARG },
     { "-param", TCC_OPTION_param, TCC_OPTION_HAS_ARG },
     { "pedantic", TCC_OPTION_pedantic, 0},
     { "pthread", TCC_OPTION_pthread, 0},
-    { "rdynamic", TCC_OPTION_rdynamic, 0 },
     { "r", TCC_OPTION_r, 0 },
     { "s", TCC_OPTION_s, 0 },
     { "traditional", TCC_OPTION_traditional, 0 },
@@ -1569,15 +1510,6 @@ reparse:
         case TCC_OPTION_bench:
             s->do_bench = 1;
             break;
-#ifdef CONFIG_TCC_BCHECK
-        case TCC_OPTION_b:
-            s->do_bounds_check = 1;
-            s->do_debug = 1;
-            break;
-#endif
-        case TCC_OPTION_g:
-            s->do_debug = 1;
-            break;
         case TCC_OPTION_c:
             x = TCC_OUTPUT_OBJ;
         set_output_type:
@@ -1603,12 +1535,6 @@ reparse:
         case TCC_OPTION_std:
             if (strcmp(optarg, "=c11") == 0)
                 s->cversion = 201112;
-            break;
-        case TCC_OPTION_shared:
-            x = TCC_OUTPUT_DLL;
-            goto set_output_type;
-        case TCC_OPTION_soname:
-            s->soname = tcc_strdup(optarg);
             break;
         case TCC_OPTION_o:
             if (s->outfile) {
@@ -1654,9 +1580,6 @@ reparse:
             break;
         case TCC_OPTION_w:
             s->warn_none = 1;
-            break;
-        case TCC_OPTION_rdynamic:
-            s->rdynamic = 1;
             break;
         case TCC_OPTION_Wl:
             if (linker_arg.size)

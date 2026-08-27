@@ -18,7 +18,6 @@ mkdir -p "$stage/tcc-src/include" "$stage/tcc-src/i386" \
 cp "$root/kernel/user_test/busybox_i386.elf" "$stage/busybox"
 
 cp "$root"/compiler/*.c "$root"/compiler/*.h "$stage/tcc-src/"
-cp "$root"/compiler/*.def "$stage/tcc-src/"
 cp "$root"/compiler/i386/*.c "$root"/compiler/i386/*.h \
     "$root"/compiler/i386/*.S "$stage/tcc-src/i386/"
 # riscv64 has no integrated assembler for real instructions (see

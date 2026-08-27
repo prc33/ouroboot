@@ -984,14 +984,12 @@ static int tcc_assemble_internal(TCCState *s1, int do_preprocess, int global)
 ST_FUNC int tcc_assemble(TCCState *s1, int do_preprocess)
 {
     int ret;
-    tcc_debug_start(s1);
     /* default section is text */
     cur_text_section = text_section;
     ind = cur_text_section->data_offset;
     nocode_wanted = 0;
     ret = tcc_assemble_internal(s1, do_preprocess, 1);
     cur_text_section->data_offset = ind;
-    tcc_debug_end(s1);
     return ret;
 }
 
@@ -1224,18 +1222,12 @@ ST_FUNC void asm_instr(void)
 
     /* substitute the operands in the asm string. No substitution is
        done if no operands (GCC behaviour) */
-#ifdef ASM_DEBUG
-    printf("asm: \"%s\"\n", (char *)astr.data);
-#endif
     if (must_subst) {
         subst_asm_operands(operands, nb_operands, &astr1, &astr);
         cstr_free(&astr);
     } else {
         astr1 = astr;
     }
-#ifdef ASM_DEBUG
-    printf("subst_asm: \"%s\"\n", (char *)astr1.data);
-#endif
 
     /* generate loads */
     asm_gen_code(operands, nb_operands, nb_outputs, 0, 
@@ -1283,9 +1275,6 @@ ST_FUNC void asm_global_instr(void)
     if (tok != ';')
         expect("';'");
     
-#ifdef ASM_DEBUG
-    printf("asm_global: \"%s\"\n", (char *)astr.data);
-#endif
     cur_text_section = text_section;
     ind = cur_text_section->data_offset;
 

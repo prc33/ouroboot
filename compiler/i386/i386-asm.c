@@ -753,9 +753,6 @@ again:
             if (op_type[i] & (OP_REG | OP_MMX | OP_SSE | OP_INDIR))
                 goto modrm_found;
         }
-#ifdef ASM_DEBUG
-        tcc_error("bad op table");
-#endif
     modrm_found:
         modrm_index = i;
         /* if a register is used in another operand then it is
@@ -1202,20 +1199,6 @@ ST_FUNC void asm_compute_constraints(ASMOperand *operands,
     }
 
     /* print sorted constraints */
-#ifdef ASM_DEBUG
-    for(i=0;i<nb_operands;i++) {
-        j = sorted_op[i];
-        op = &operands[j];
-        printf("%%%d [%s]: \"%s\" r=0x%04x reg=%d\n",
-               j,
-               op->id ? get_tok_str(op->id, NULL) : "",
-               op->constraint,
-               op->vt->r,
-               op->reg);
-    }
-    if (*pout_reg >= 0)
-        printf("out_reg=%d\n", *pout_reg);
-#endif
 }
 
 ST_FUNC void subst_asm_operand(CString *add_str,

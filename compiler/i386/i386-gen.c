@@ -94,13 +94,6 @@ ST_DATA const int reg_classes[NB_REGS] = {
 
 static unsigned long func_sub_sp_offset;
 static int func_ret_sub;
-#ifdef CONFIG_TCC_BCHECK
-static addr_t func_bound_offset;
-static unsigned long func_bound_ind;
-ST_DATA int func_bound_add_epilog;
-static void gen_bounds_prolog(void);
-static void gen_bounds_epilog(void);
-#endif
 
 /* XXX: make it faster ? */
 ST_FUNC void g(int c)
@@ -332,16 +325,6 @@ static void gadd_sp(int val)
     }
 }
 
-#if defined CONFIG_TCC_BCHECK
-static void gen_static_call(int v)
-{
-    Sym *sym;
-
-    sym = external_global_sym(v, &func_old_type);
-    oad(0xe8, -4);
-    greloc(cur_text_section, sym, ind-4, R_386_PC32);
-}
-#endif
 
 /* 'is_jmp' is '1' if it is a jump */
 static void gcall_or_jmp(int is_jmp)
@@ -378,10 +361,6 @@ ST_FUNC void gfunc_call(int nb_args)
     int size, align, r, args_size, i, func_call;
     Sym *func_sym;
     
-#ifdef CONFIG_TCC_BCHECK
-    if (tcc_state->do_bounds_check)
-        gbound_args(nb_args);
-#endif
 
     args_size = 0;
     for(i = 0;i < nb_args; i++) {
@@ -535,10 +514,6 @@ ST_FUNC void gfunc_prolog(Sym *func_sym)
     else if (func_vc)
         func_ret_sub = 4;
 
-#ifdef CONFIG_TCC_BCHECK
-    if (tcc_state->do_bounds_check)
-        gen_bounds_prolog();
-#endif
 }
 
 /* generate function epilog */
@@ -546,10 +521,6 @@ ST_FUNC void gfunc_epilog(void)
 {
     addr_t v, saved_ind;
 
-#ifdef CONFIG_TCC_BCHECK
-    if (tcc_state->do_bounds_check)
-        gen_bounds_epilog();
-#endif
 
     /* align local size to word & save local variables */
     v = (-loc + 3) & -4;
@@ -948,53 +919,6 @@ ST_FUNC void ggoto(void)
 }
 
 /* bound check support functions */
-#ifdef CONFIG_TCC_BCHECK
-
-static void gen_bounds_prolog(void)
-{
-    /* leave some room for bound checking code */
-    func_bound_offset = lbounds_section->data_offset;
-    func_bound_ind = ind;
-    func_bound_add_epilog = 0;
-    oad(0xb8, 0); /* lbound section pointer */
-    oad(0xb8, 0); /* call to function */
-}
-
-static void gen_bounds_epilog(void)
-{
-    addr_t saved_ind;
-    addr_t *bounds_ptr;
-    Sym *sym_data;
-    int offset_modified = func_bound_offset != lbounds_section->data_offset;
-
-    if (!offset_modified && !func_bound_add_epilog)
-        return;
-
-    /* add end of table info */
-    bounds_ptr = section_ptr_add(lbounds_section, sizeof(addr_t));
-    *bounds_ptr = 0;
-
-    sym_data = get_sym_ref(&char_pointer_type, lbounds_section,
-                           func_bound_offset, lbounds_section->data_offset);
-
-    /* generate bound local allocation */
-    if (offset_modified) {
-        saved_ind = ind;
-        ind = func_bound_ind;
-        greloc(cur_text_section, sym_data, ind + 1, R_386_32);
-        ind = ind + 5;
-        gen_static_call(TOK___bound_local_new);
-        ind = saved_ind;
-    }
-
-    /* generate bound check local freeing */
-    o(0x5250); /* save returned value, if any */
-    greloc(cur_text_section, sym_data, ind + 1, R_386_32);
-    oad(0xb8, 0); /* mov %eax, xxx */
-    gen_static_call(TOK___bound_local_delete);
-    o(0x585a); /* restore returned value, if any */
-}
-#endif
 
 /* Save the stack pointer onto the stack */
 ST_FUNC void gen_vla_sp_save(int addr) {
@@ -1013,9 +937,6 @@ ST_FUNC void gen_vla_sp_restore(int addr) {
 ST_FUNC void gen_vla_alloc(CType *type, int align) {
     int use_call = 0;
 
-#if defined(CONFIG_TCC_BCHECK)
-    use_call = tcc_state->do_bounds_check;
-#endif
     if (use_call)
     {
         vpush_global_sym(&func_old_type, TOK_alloca);
