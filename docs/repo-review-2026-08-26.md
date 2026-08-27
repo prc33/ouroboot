@@ -17,13 +17,15 @@ i386 `test`/`test-initrd`/`test-busybox`/`test-selfhost`, riscv64
 it claims. Everything below is about *how much machinery* it takes to do it,
 plus one correctness problem found along the way.
 
-**Update, 2026-08-27: sections 2, 3, 4, and half of 6 are done.** Each is
-marked `DONE` inline with its commit. Net: **8,756 lines removed** across
-three commits (`b9cbabd`, `1f9adbe`, `cb1ee23`), with no loss of function —
-every test target above was re-run after each change and still passes. §1
-(the i386 fragility) was deliberately *not* attempted as part of this work —
-see its own section for why proceeding with §2/§4 anyway, and what came of
-it, given the review's own original advice was to root-cause §1 first.
+**Update, 2026-08-27: sections 2, 3, 4, 5, and most of 6 are done.** Each is
+marked `DONE` inline with its commit. Net: **8,813 lines removed** across
+five commits (`b9cbabd`, `1f9adbe`, `cb1ee23`, `aa1f235`, `29ed371`), with no
+loss of function — every test target above was re-run after each change and
+still passes. §1 (the i386 fragility) was deliberately *not* attempted as
+part of this work — see its own section for why proceeding with §2/§4/§5
+anyway, and what came of it, given the review's own original advice was to
+root-cause §1 first. §6's larger open item (unifying the two BusyBox patches)
+remains undone by design — see its own section.
 
 ---
 
@@ -226,8 +228,7 @@ architectures describable by one sentence instead of two.
 
 ## 5. `kernel/`: duplication introduced by the arch split
 
-Small individually, but each is a "fix it in N places" hazard, and some of it
-is a day old:
+**DONE (`aa1f235`).** All four items below unified:
 
 - **Path canonicaliser, three copies** — `syscall_posix.c`, `arch/i386/syscall.c`
   (`resolve_i386_path`), `arch/risc/riscv64_syscall.c` (`resolve_path`). The
@@ -235,16 +236,37 @@ is a day old:
   shared copy is `static`. Export it once (~50 lines saved, and one place to
   fix a path bug instead of three). Worth noting that a *missing* cwd
   resolution in exactly this area was a real i386 bug fixed in `4a4dfd0`.
+  → `copy_path_from_user`/`resolve_path`/`resolve_user_path`/`PATH_MAX_LOCAL`
+  now live once in `syscall_posix.c`, exposed via `syscall_common.h`;
+  `resolve_i386_path` and riscv64's private copies deleted.
 - **`stat` lookup, two copies** — the `is_dir → dynamic → fixed` lookup order
   is identical in both arches' `syscall.c`; only `fill_stat`'s byte offsets
   genuinely differ (i386 96-byte `kstat`, riscv64 128-byte). Share the lookup,
   keep the layout per-arch (~20 lines).
+  → `stat_lookup()` in `syscall_posix.c`, taking a `fill` function pointer
+  (both arches' `fill_stat` already share the signature); i386's `stat_path()`
+  and riscv64's `sys_newfstatat()` now delegate to it.
 - **`struct fd_entry` copied by hand in five places** — `process_fork()` twice,
   `process_fd_set()`, `process_stdio_set()`, `sys_fcntl()`. Each is ~8 field
   assignments plus a 128-byte path loop. One `fd_entry_copy()` removes ~40
   lines and, more importantly, the risk that a sixth field gets added to the
   struct and missed in one of the five.
+  → `fd_entry_copy()` in `sched/process.c`, deliberately not touching `used`
+  (each call site has genuinely different semantics for that one field). Fixed
+  a real latent gap as a byproduct: `sys_fcntl`'s old hand-rolled copy never
+  copied `path[]` (harmless in practice — F_DUPFD is only ever used on regular
+  files — but now correct regardless).
 - **`copy_regs()`, two copies** differing only in word width.
+  → shared `copy_regs_bytes(void *, const void *, unsigned long)` in
+  `sched/process.c` (a plain byte loop — no `memmove()` in this freestanding
+  kernel); each arch's `copy_regs()` reduced to a one-line wrapper.
+  `struct regs` itself stays genuinely per-arch — this shares the loop, not
+  the type.
+
+Verified: `make ARCH=i386 test`/`test-initrd`/`test-busybox`/`test-selfhost`
+(the last run 3x, given §1) and `make ARCH=riscv64`
+`test`/`test-initrd`/`test-selfhost`/`test-wasm`, both compiler targets
+rebuilt clean first, all passing.
 
 ## 6. `demo/`: whole-file-deletion patch hunks, and the two BusyBox patches
 
@@ -272,10 +294,19 @@ lines) and `patches/busybox-riscv64-tcc-compat.patch` (1,295) differ in only
 difference is a `build.sh` embedded inside the i386 patch that duplicates the
 real `demo/build-busybox-i386.sh`, plus index hashes and timestamps.
 
-Deleting the embedded `build.sh` hunk is unambiguous. Unifying the rest into
-one patch plus a small arch delta would remove ~1,200 duplicated lines, but
-patches are brittle and the payoff is maintenance-only; worth doing only if
-these are expected to change again.
+**Embedded `build.sh` hunk DONE (`29ed371`).** Confirmed dead via
+`demo/build-busybox-i386.sh`'s own comment disclaiming it ("assumes busybox
+sits as a sibling of tcc/musl... doesn't match this script's layout") and
+removed: 1,373 → 1,327 lines. Verified with a full real
+`demo/build-busybox-i386.sh` run (fresh upstream busybox 1.36.1 clone, patch
+apply, build, its own internal smoke test all passing) and the resulting
+binary passing `make ARCH=i386 test-busybox` (interactive ash session), run
+4x to rule out flakiness.
+
+**Unifying the two patches into one plus an arch delta remains undone.** It
+would remove ~1,200 duplicated lines, but patches are brittle and the payoff
+is maintenance-only; worth doing only if these are expected to change again —
+left as-is per the review's own original recommendation.
 
 The **build scripts themselves are not duplicated** — `build-musl-i386.sh` vs
 `build-musl-riscv64.sh` differ on 111 of 116 lines, and the BusyBox pair on
@@ -342,22 +373,22 @@ architectures. All eight QEMU test targets pass with the fix.
 
 ## Remaining, in suggested order
 
-1. **Root-cause §1**, now that §2 and §4 have actually exercised its risk
-   twice more (and survived, so far) rather than just theorized about it. The
-   padding-based regression harness described there has still never been run.
-2. **§5, the split's duplication.** Cheap, and it is the category that has
-   already produced one real bug.
-3. **§6's second half**, the BusyBox patch overlap — lower priority, patches
-   are brittle and this is maintenance-only payoff.
-4. **§7, docs.** Cheap, and the README currently understates what the project
+1. **Root-cause §1**, now that §2, §4, and §5 have actually exercised its risk
+   several times more (and survived, so far) rather than just theorized about
+   it. The padding-based regression harness described there has still never
+   been run.
+2. **§6's second half**, unifying the two BusyBox patches — lower priority,
+   patches are brittle and this is maintenance-only payoff.
+3. **§7, docs.** Cheap, and the README currently understates what the project
    does — including, now, that i386 self-hosts too.
-5. **§8, minor** — `.gitignore` gaps, `kernel/Makefile`'s naming asymmetry
+4. **§8, minor** — `.gitignore` gaps, `kernel/Makefile`'s naming asymmetry
    between arch branches.
 
-**Done so far: 8,756 lines removed** (`b9cbabd` −4,680, `1f9adbe` −3,579,
-`cb1ee23` −497), with no loss of function — the compiler still targets
-i386/riscv64/wasm32 and builds musl, BusyBox, both kernels and itself; both
-kernels still self-host TCC; all eleven QEMU/wasm test targets still pass.
+**Done so far: 8,813 lines removed** (`b9cbabd` −4,680, `1f9adbe` −3,579,
+`cb1ee23` −497, `aa1f235` −11, `29ed371` −46), with no loss of function — the
+compiler still targets i386/riscv64/wasm32 and builds musl, BusyBox, both
+kernels and itself; both kernels still self-host TCC; all eleven QEMU/wasm
+test targets still pass.
 
 ## What not to simplify
 
