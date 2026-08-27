@@ -600,7 +600,6 @@ ST_FUNC void gfunc_call(int nb_args)
             sop = wasm_emit_op(WASM_OP_STORE_I32);
         if (sop) {
             sop->r0 = r;
-            sop->r2 = VT_CONST;
             sop->flags = WASM_ADDR_FP;
             sop->imm = slot;
         }

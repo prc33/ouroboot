@@ -85,7 +85,6 @@ typedef struct WasmOp {
     unsigned short flags;
     int r0;
     int r1;
-    int r2;
     int imm;
     int64_t i64;
     int op;
