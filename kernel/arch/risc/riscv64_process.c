@@ -28,15 +28,11 @@
 
 extern void riscv64_trap_return(void); /* arch/risc/riscv64_trap_entry.S */
 
-/* struct assignment would ask TCC's codegen for memmove(), which this
- * freestanding kernel has never linked (every other byte copy in it,
- * e.g. arch/risc/riscv64_paging.c's COW handler, is a plain word/byte loop
- * for the same reason) -- copy by hand instead. */
+/* sched/process.c's own copy_regs_bytes() (checkpoint 21) does the
+ * actual copy now, shared with arch/i386/process.c's own equivalent
+ * wrapper -- see process.h's comment on it. */
 static void copy_regs(struct regs *dst, const struct regs *src) {
-	const unsigned long *s = (const unsigned long *)src;
-	unsigned long *d = (unsigned long *)dst;
-	for (unsigned int i = 0; i < sizeof(struct regs) / sizeof(unsigned long); i++)
-		d[i] = s[i];
+	copy_regs_bytes(dst, src, sizeof(struct regs));
 }
 
 /* Snapshots the live global trapframe into p->user_regs -- called on

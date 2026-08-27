@@ -150,69 +150,30 @@ static void fill_stat(unsigned char *sb, unsigned int mode, unsigned long size) 
  * sys_stat/sys_lstat/sys_newfstatat below (all take a path; sys_fstat
  * looks up an already-open fd instead, a genuinely different kind of
  * lookup, kept separate). Returns 0 on success, -ENOENT if nothing by
- * that name exists. */
+ * that name exists. The lookup order itself is syscall_common.h's own
+ * shared stat_lookup() (checkpoint 21) -- only fill_stat's byte
+ * offsets are genuinely i386-specific. */
 static int stat_path(const char *ramfs_path, unsigned char *sb) {
-	if (ramfs_is_dir(ramfs_path)) {
-		fill_stat(sb, S_IFDIR | 0755, 0);
-		return 0;
-	}
-	struct ramfs_dynamic_file *dyn = ramfs_dynamic_lookup(ramfs_path);
-	if (dyn) {
-		fill_stat(sb, S_IFREG | 0755, dyn->size);
-		return 0;
-	}
-	const struct ramfs_file *file = ramfs_lookup(ramfs_path);
-	if (!file) return -ENOENT;
-	fill_stat(sb, S_IFREG | 0755, file->size);
-	return 0;
-}
-
-/* Canonicalizes a user-supplied path against `base` (cwd, or a dirfd's
- * own stored path) into the ramfs key form (no leading slash, '.'/'..'
- * resolved) -- shared by sys_stat/sys_lstat/sys_newfstatat below. Real
- * bug this fixes, found running real busybox ash's own `ls` for the
- * first time: sys_stat used to skip this entirely ("every real caller
- * passes an absolute path"), true of every one-shot P4/P5 test but not
- * of real coreutils -- `ls` calls stat(".") directly, no fstatat/
- * dirfd involved at all, and "." with no cwd resolution isn't a path
- * this ramfs has any entry for. */
-static void resolve_i386_path(char *out, const char *user_path, const char *base) {
-	char path[128];
-	int i = 0;
-	while (user_path[i] && i < 127) { path[i] = user_path[i]; i++; }
-	path[i] = 0;
-
-	unsigned int n = 0, j = 0;
-	if (path[0] != '/') {
-		const char *b = base[0] == '/' ? base + 1 : base;
-		while (b[n] && n < 127) { out[n] = b[n]; n++; }
-	}
-	while (path[j]) {
-		while (path[j] == '/') j++;
-		unsigned int start = j;
-		while (path[j] && path[j] != '/') j++;
-		unsigned int len = j - start;
-		if (!len || (len == 1 && path[start] == '.')) continue;
-		if (len == 2 && path[start] == '.' && path[start + 1] == '.') {
-			while (n && out[n - 1] != '/') n--;
-			if (n) n--;
-			continue;
-		}
-		if (n && n < 127) out[n++] = '/';
-		for (unsigned int k = 0; k < len && n < 127; k++) out[n++] = path[start + k];
-	}
-	out[n] = 0;
+	return stat_lookup(ramfs_path, fill_stat, sb);
 }
 
 /* arg0=path, arg1=statbuf -- SYS_stat (stat64), i386's own preferred
  * real syscall for a plain absolute/cwd-relative stat() (see this
  * file's own header comment on why i386 needs this at all, unlike
- * riscv64). */
+ * riscv64). Real bug this cwd resolution fixes, found running real
+ * busybox ash's own `ls` for the first time: this used to skip it
+ * entirely ("every real caller passes an absolute path"), true of
+ * every one-shot P4/P5 test but not of real coreutils -- `ls` calls
+ * stat(".") directly, no fstatat/dirfd involved at all, and "." with
+ * no cwd resolution isn't a path this ramfs has any entry for. Uses
+ * syscall_common.h's shared resolve_user_path() (checkpoint 21) --
+ * used to be a private resolve_i386_path() here, byte-for-byte the
+ * same logic as syscall_posix.c's own. */
 static void sys_stat(struct regs *r) {
-	char path[128];
+	char path[PATH_MAX_LOCAL];
 	unsigned char *sb = (unsigned char *)sys_arg(r, 1);
 	paging_ensure_writable((unsigned long)sb, ST_STRUCT_SIZE);
-	resolve_i386_path(path, (const char *)sys_arg(r, 0), process_current_cwd());
+	resolve_user_path(path, (const char *)sys_arg(r, 0));
 	int ret = stat_path(path, sb);
 	sys_ret(r, ret < 0 ? (unsigned long)ret : 0);
 }
@@ -328,8 +289,9 @@ static void sys_newfstatat(struct regs *r) {
 		if (!df || !df->is_dir) { sys_ret(r, (unsigned long)-9 /* EBADF */); return; }
 		base = df->path;
 	}
-	char resolved[128];
-	resolve_i386_path(resolved, user_path, base);
+	char input[PATH_MAX_LOCAL], resolved[PATH_MAX_LOCAL];
+	copy_path_from_user(input, user_path);
+	resolve_path(resolved, input, base);
 	int ret = stat_path(resolved, sb);
 	sys_ret(r, ret < 0 ? (unsigned long)ret : 0);
 }

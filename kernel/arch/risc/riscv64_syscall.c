@@ -37,7 +37,6 @@
 #include "riscv64_trap.h"
 #include "mm/pmm.h"
 #include "mm/paging.h"
-#include "mm/ramfs.h"
 #include "sched/process.h"
 #include "syscall_common.h"
 
@@ -78,7 +77,6 @@
 #define SYS_faccessat                                                                                          48
 
 #define ENOSYS  38
-#define ENOENT   2
 
 /* --- register accessors syscall_posix.c calls through --- */
 unsigned long sys_arg(struct regs *r, int n) {
@@ -96,8 +94,6 @@ unsigned long sys_arg(struct regs *r, int n) {
 void sys_ret(struct regs *r, unsigned long val) {
 	r->a0 = val;
 }
-
-#define PATH_MAX_LOCAL 128
 
 /* checkpoint 9: busybox ash's own startup needs this -- see this
  * file's own git history for the real strace this was derived from (a
@@ -121,8 +117,6 @@ void sys_ret(struct regs *r, unsigned long val) {
  * sys_newfstatat. */
 #define ST_MODE_OFF 16
 #define ST_SIZE_OFF 48
-#define S_IFDIR 0040000
-#define S_IFREG 0100000
 
 static void fill_stat(unsigned char *sb, unsigned int mode, unsigned long size) {
 	for (int i = 0; i < 128; i++)
@@ -135,50 +129,15 @@ static void fill_stat(unsigned char *sb, unsigned int mode, unsigned long size) 
 	*(long *)(sb + 56) = 512;        /* st_blksize */
 }
 
-static int copy_path_from_user(char *dst, const char *user_src) {
-	int i = 0;
-	while (user_src[i] && i < PATH_MAX_LOCAL - 1) {
-		dst[i] = user_src[i];
-		i++;
-	}
-	dst[i] = 0;
-	return i;
-}
+/* copy_path_from_user()/resolve_path()/resolve_user_path()/PATH_MAX_LOCAL
+ * used to each have a private copy here -- see syscall_common.h's own
+ * comment (checkpoint 21); this file just uses the shared ones now. */
 
-/* Canonicalize absolute or cwd-relative paths into the ramfs key form
- * -- same logic as syscall_posix.c's own (private, static) version,
- * duplicated rather than shared for the same reason arch/i386/syscall.c's
- * own sys_newfstatat duplicates it: this is the one place in this
- * file that needs it. */
-static void resolve_path(char *out, const char *input, const char *base) {
-	unsigned int n = 0, i = 0;
-	if (input[0] != '/') {
-		if (base[0] == '/') base++;
-		while (base[n] && n < PATH_MAX_LOCAL - 1) { out[n] = base[n]; n++; }
-	}
-	while (input[i]) {
-		while (input[i] == '/') i++;
-		unsigned int start = i;
-		while (input[i] && input[i] != '/') i++;
-		unsigned int len = i - start;
-		if (!len || (len == 1 && input[start] == '.')) continue;
-		if (len == 2 && input[start] == '.' && input[start + 1] == '.') {
-			while (n && out[n - 1] != '/') n--;
-			if (n) n--;
-			continue;
-		}
-		if (n && n < PATH_MAX_LOCAL - 1) out[n++] = '/';
-		for (unsigned int j = 0; j < len && n < PATH_MAX_LOCAL - 1; j++) out[n++] = input[start + j];
-	}
-	out[n] = 0;
-}
-
-static void resolve_user_path(char *out, const char *user_path) {
-	char input[PATH_MAX_LOCAL];
-	copy_path_from_user(input, user_path);
-	resolve_path(out, input, process_current_cwd());
-}
-
+/* checkpoint 21: the is_dir -> dynamic -> fixed lookup order itself is
+ * syscall_common.h's own shared stat_lookup() now (identical to
+ * arch/i386/syscall.c's own equivalent, once compared side by side --
+ * see that header's own comment); only fill_stat's byte offsets above
+ * are genuinely riscv64-specific. */
 static void sys_newfstatat(struct regs *r) {
 	/* a0=dirfd, a1=path, a2=statbuf, a3=flags. */
 	char path[PATH_MAX_LOCAL];
@@ -186,30 +145,8 @@ static void sys_newfstatat(struct regs *r) {
 	unsigned char *sb = (unsigned char *)sys_arg(r, 2);
 	paging_ensure_writable((unsigned long)sb, 128); /* sizeof(struct stat) -- see fill_stat()'s own comment for the layout */
 
-	if (ramfs_is_dir(path)) {
-		fill_stat(sb, S_IFDIR | 0755, 0);
-		sys_ret(r, 0);
-		return;
-	}
-
-	/* checkpoint 12: dynamic files take priority over the fixed table,
-	 * same reasoning as sys_openat's own lookup order -- a freshly
-	 * written file should stat() as itself, not (if it happens to
-	 * share a name) whatever fixed entry existed first. */
-	struct ramfs_dynamic_file *dyn = ramfs_dynamic_lookup(path);
-	if (dyn) {
-		fill_stat(sb, S_IFREG | 0755, dyn->size);
-		sys_ret(r, 0);
-		return;
-	}
-
-	const struct ramfs_file *file = ramfs_lookup(path);
-	if (!file) {
-		sys_ret(r, (unsigned long)-ENOENT);
-		return;
-	}
-	fill_stat(sb, S_IFREG | 0755, file->size);
-	sys_ret(r, 0);
+	int ret = stat_lookup(path, fill_stat, sb);
+	sys_ret(r, ret < 0 ? (unsigned long)ret : 0);
 }
 
 static void syscall_dispatch(struct regs *r) {

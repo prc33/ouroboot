@@ -78,6 +78,49 @@ int syscall_grow_pages(unsigned long old_top, unsigned long new_top);
  * silently ignored" semantics. */
 void syscall_munmap_pages(unsigned long addr, unsigned long len);
 
+/* checkpoint 21 (docs/repo-review-2026-08-26.md section 5): path
+ * canonicalisation used to be three separate copies -- syscall_posix.c's
+ * own (already shared between the two arches' *at()-style syscalls),
+ * plus a private one each in arch/risc/riscv64_syscall.c (needed by
+ * its own sys_newfstatat, kept arch-local since struct stat's layout
+ * is) and arch/i386/syscall.c (same reason, fused into one function
+ * instead of two). All three were byte-for-byte identical logic; only
+ * the wrapping differed. Exposed here instead, so there's one copy to
+ * fix a path bug in, not three.
+ *
+ * bumped from 64 -- the tar-loaded initrd's real musl-header/TCC-
+ * source paths (mm/ramfs.h's now-full-path-matched dynamic files) top
+ * out in the 30s ("musl/arch/riscv64/bits/alltypes.h.in"), so 128 is
+ * real headroom, not a tight fit driven by a specific path. */
+#define PATH_MAX_LOCAL 128
+
+/* Copies a NUL-terminated user-space string into kernel memory,
+ * truncated to PATH_MAX_LOCAL-1 bytes if longer. Returns the copied
+ * length (excluding the NUL). */
+int copy_path_from_user(char *dst, const char *user_src);
+
+/* Canonicalizes `input` (already kernel-resident -- see
+ * copy_path_from_user() above) against `base` (a cwd, or a dirfd's own
+ * stored path) into the ramfs key form: no leading slash, with '.' and
+ * '..' resolved. `base` is only consulted when `input` isn't already
+ * absolute. */
+void resolve_path(char *out, const char *input, const char *base);
+
+/* copy_path_from_user() + resolve_path() against the *current
+ * process's* own cwd -- the common case (every syscall here except the
+ * dirfd-relative *at() forms and i386's own legacy non-dirfd stat()
+ * variants, which call the two steps above directly to supply a
+ * different base). */
+void resolve_user_path(char *out, const char *user_path);
+
+/* The is_dir -> dynamic -> fixed ramfs lookup order behind sys_stat/
+ * sys_lstat/sys_newfstatat -- identical in both arches, only the
+ * struct-stat-shaped `fill` callback genuinely differs (each arch's
+ * own real on-the-wire layout -- see this header's own comment on why
+ * sys_newfstatat itself stays per-arch). Returns 0 on success, -ENOENT
+ * if nothing by that name exists. */
+int stat_lookup(const char *ramfs_path, void (*fill)(unsigned char *sb, unsigned int mode, unsigned long size), unsigned char *sb);
+
 /* --- syscall_posix.c (checkpoint 18, docs/kernel-arch-split-plan.md's
  * "genericize rather than write afresh" instruction, taken all the way
  * this time) ---

@@ -33,15 +33,11 @@
 extern void i386_trap_return(struct regs *r); /* arch/i386/i386_process_return.S */
 extern void tss_set_kernel_stack(unsigned int esp0); /* arch/i386/gdt.c */
 
-/* struct assignment would ask TCC's codegen for memmove(), which this
- * freestanding kernel has never linked -- copy by hand instead, same
- * reason and same technique as arch/risc/riscv64_process.c's own
- * copy_regs(). */
+/* sched/process.c's own copy_regs_bytes() (checkpoint 21) does the
+ * actual copy now, shared with arch/risc/riscv64_process.c's own
+ * equivalent wrapper -- see process.h's comment on it. */
 static void copy_regs(struct regs *dst, const struct regs *src) {
-	const unsigned int *s = (const unsigned int *)src;
-	unsigned int *d = (unsigned int *)dst;
-	for (unsigned int i = 0; i < sizeof(struct regs) / sizeof(unsigned int); i++)
-		d[i] = s[i];
+	copy_regs_bytes(dst, src, sizeof(struct regs));
 }
 
 /* Snapshots the live trapframe into p->user_regs -- called on a

@@ -70,6 +70,14 @@ struct process *process_get_current(void) {
 	return current_process;
 }
 
+/* see process.h's own comment. */
+void copy_regs_bytes(void *dst, const void *src, unsigned long n) {
+	unsigned char *d = (unsigned char *)dst;
+	const unsigned char *s = (const unsigned char *)src;
+	for (unsigned long i = 0; i < n; i++)
+		d[i] = s[i];
+}
+
 static struct process *alloc_slot(void) {
 	for (int i = 0; i < MAX_PROCESSES; i++)
 		if (processes[i].state == PROC_UNUSED)
@@ -481,17 +489,8 @@ int process_fork(struct regs *r) {
 	 * tests needs that, and this ramfs has no real inode table to hang
 	 * a shared object off yet anyway. */
 	for (int fd = 0; fd < MAX_FDS; fd++) {
-		/* field-by-field, not a struct assignment -- TCC's codegen
-		 * would ask for memmove() for that, which this freestanding
-		 * kernel has never linked (same reason as
-		 * arch/risc/riscv64_process.c's own copy_regs()). */
-		child->fds[fd].used = parent->fds[fd].used;
-		child->fds[fd].data = parent->fds[fd].data;
-		child->fds[fd].size = parent->fds[fd].size;
-		child->fds[fd].pos = parent->fds[fd].pos;
-		child->fds[fd].is_dir = parent->fds[fd].is_dir;
-		child->fds[fd].dynfile = parent->fds[fd].dynfile;
-		for (int i = 0; i < 128; i++) child->fds[fd].path[i] = parent->fds[fd].path[i];
+		fd_entry_copy(&child->fds[fd], &parent->fds[fd]);
+		child->fds[fd].used = parent->fds[fd].used; /* see fd_entry_copy's own comment on why this one field is always the caller's own */
 	}
 	/* checkpoint 12: any active stdio redirection (dup3() onto fd
 	 * 0/1/2 -- struct process's own stdio_override comment) survives
@@ -501,13 +500,8 @@ int process_fork(struct regs *r) {
 	 * an already-redirected `> file` block needs to keep writing to
 	 * that file, not suddenly see the console again). */
 	for (int fd = 0; fd < 3; fd++) {
+		fd_entry_copy(&child->stdio_override[fd], &parent->stdio_override[fd]);
 		child->stdio_override[fd].used = parent->stdio_override[fd].used;
-		child->stdio_override[fd].data = parent->stdio_override[fd].data;
-		child->stdio_override[fd].size = parent->stdio_override[fd].size;
-		child->stdio_override[fd].pos = parent->stdio_override[fd].pos;
-		child->stdio_override[fd].is_dir = parent->stdio_override[fd].is_dir;
-		child->stdio_override[fd].dynfile = parent->stdio_override[fd].dynfile;
-		for (int i = 0; i < 128; i++) child->stdio_override[fd].path[i] = parent->stdio_override[fd].path[i];
 	}
 
 	/* Child resumes exactly where the parent's fork() call returns,
@@ -562,6 +556,17 @@ long process_wait4(int pid, int *status_out, int options) {
 	}
 }
 
+/* see process.h's own comment on why `used` is deliberately not
+ * touched here. */
+void fd_entry_copy(struct fd_entry *dst, const struct fd_entry *src) {
+	dst->data = src->data;
+	dst->size = src->size;
+	dst->pos = src->pos;
+	dst->is_dir = src->is_dir;
+	dst->dynfile = src->dynfile;
+	for (int i = 0; i < 128; i++) dst->path[i] = src->path[i];
+}
+
 int process_fd_alloc(void) {
 	for (int i = 0; i < MAX_FDS; i++)
 		if (!current_process->fds[i].used) {
@@ -589,14 +594,8 @@ void process_fd_close(int index) {
 void process_fd_set(int index, const struct fd_entry *src) {
 	if (index < 0 || index >= MAX_FDS)
 		return;
-	struct fd_entry *dst = &current_process->fds[index];
-	dst->data = src->data;
-	dst->size = src->size;
-	dst->pos = src->pos;
-	dst->is_dir = src->is_dir;
-	dst->dynfile = src->dynfile;
-	for (int i = 0; i < 128; i++) dst->path[i] = src->path[i];
-	dst->used = 1;
+	fd_entry_copy(&current_process->fds[index], src);
+	current_process->fds[index].used = 1;
 }
 
 /* checkpoint 12: real dup2()/dup3() onto fd 0/1/2 -- see process.h's
@@ -626,16 +625,8 @@ struct fd_entry *process_stdio_get(int fd) {
 void process_stdio_set(int fd, const struct fd_entry *src) {
 	if (!current_process || fd < 0 || fd > 2)
 		return;
-	/* field-by-field, not a struct assignment -- see process_fork's
-	 * own comment on why. */
-	struct fd_entry *dst = &current_process->stdio_override[fd];
-	dst->data = src->data;
-	dst->size = src->size;
-	dst->pos = src->pos;
-	dst->is_dir = src->is_dir;
-	dst->dynfile = src->dynfile;
-	for (int i = 0; i < 128; i++) dst->path[i] = src->path[i];
-	dst->used = 1;
+	fd_entry_copy(&current_process->stdio_override[fd], src);
+	current_process->stdio_override[fd].used = 1;
 }
 
 void process_stdio_clear(int fd) {
