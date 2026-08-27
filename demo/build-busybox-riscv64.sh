@@ -1,7 +1,8 @@
 #!/bin/bash
-# Clones real upstream busybox, applies
-# patches/busybox-riscv64-tcc-compat.patch, builds with our
-# riscv64-targeting TCC. Needs build-musl-riscv64.sh to have run first.
+# Clones real upstream busybox, applies patches/busybox-tcc-compat.patch
+# (arch-independent -- see that patch's own history for why it's not
+# per-arch), builds with our riscv64-targeting TCC. Needs
+# build-musl-riscv64.sh to have run first.
 set -e
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -29,13 +30,13 @@ cd "$BB_DIR"
 echo "HEAD: $(git rev-parse HEAD)"
 
 echo ""
-echo "=== applying patches/busybox-riscv64-tcc-compat.patch ==="
-git apply "$HERE/patches/busybox-riscv64-tcc-compat.patch"
+echo "=== applying patches/busybox-tcc-compat.patch ==="
+git apply "$HERE/patches/busybox-tcc-compat.patch"
 
 TCCDIR="$(dirname "$TCC")"
-# Consumed by patches/busybox-riscv64-tcc-compat.patch's scripts/trylink
-# hunk, which needs musl's/libtcc1.a's startfiles but has no other way
-# to learn where they live -- see that patch for why.
+# Consumed by patches/busybox-tcc-compat.patch's scripts/trylink hunk,
+# which needs musl's/libtcc1.a's startfiles but has no other way to
+# learn where they live -- see that patch for why.
 export MUSL_LIBDIR="$MUSL/lib"
 export TCC_LIBDIR="$TCCDIR"
 cat > /tmp/bb-wrapper-riscv64.sh << WRAPEOF
@@ -50,6 +51,10 @@ chmod +x /tmp/bb-wrapper-riscv64.sh
 
 echo ""
 echo "=== building ==="
+# .config isn't part of the patch (never was, for this arch): minimal
+# applet set + CONFIG_LFS=y (musl always uses 64-bit off_t, matching a
+# check busybox's own libbb.h already makes), generated fresh here the
+# same way build-busybox-i386.sh's own minimal_config() does.
 make allnoconfig >/dev/null 2>&1
 for opt in ASH GUNZIP GZIP TAR BASENAME CAT CHMOD CHOWN CP CUT DIRNAME \
            ECHO ENV EXPR FALSE HEAD LN LS MKDIR MV PRINTF PWD RM RMDIR \
