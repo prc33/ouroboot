@@ -543,13 +543,28 @@ static int wasm_op_first_input(WasmOp *op, int local_i0, int local_f0)
     }
 }
 
-static void wasm_emit_case(WasmBuf *b, WasmFuncIR *f, WasmOp *op,
+/* Everything wasm_emit_case() needs that is fixed for the whole function.
+ * These used to be positional parameters -- nineteen in total, thirteen of
+ * them loop-invariant. */
+typedef struct WasmEmitCtx {
+    WasmFuncIR *f;
+    int pc, fp, cmp, carry, i0, f0, tmp64;  /* wasm local indices */
+    int *op_to_block;   /* NULL when emitting structured control flow */
+    int nb_blocks;
+} WasmEmitCtx;
+
+static void wasm_emit_case(const WasmEmitCtx *c, WasmBuf *b, WasmOp *op,
                            int case_index, int loop_depth, int cur_block,
-                           int local_pc, int local_fp, int local_cmp, int local_carry,
-                           int local_i0, int local_f0, int local_tmp64,
-                           int *op_to_block, int nb_blocks, int emit_dispatch,
-                           int stack_reg, int next_first_input, int *p_stack_out)
+                           int emit_dispatch, int stack_reg,
+                           int next_first_input, int *p_stack_out)
 {
+    /* Unpacked under the original names so the emitter body reads unchanged. */
+    WasmFuncIR *f = c->f;
+    const int local_pc = c->pc, local_fp = c->fp, local_cmp = c->cmp;
+    const int local_carry = c->carry, local_i0 = c->i0, local_f0 = c->f0;
+    const int local_tmp64 = c->tmp64;
+    int *const op_to_block = c->op_to_block;
+    const int nb_blocks = c->nb_blocks;
     int next_index = case_index + 1;
     int dst, src, target_index;
 
@@ -1096,11 +1111,33 @@ static void wasm_emit_case(WasmBuf *b, WasmFuncIR *f, WasmOp *op,
 #undef WB_GET_OR_SKIP
 }
 
+/* One basic block of a function's CFG. Was eleven parallel tcc_mallocz'd int
+ * arrays indexed by block number; one struct means one allocation instead of
+ * eleven and no way to update some arrays but not others. Two of them
+ * (terminator kind and flags) were written and freed but never read -- gone. */
+typedef struct WasmBlock {
+    int start, end;         /* op index range [start, end) */
+    int succ0, succ1;       /* successors; -1 none, nb_blocks means "exits" */
+    int is_loop_header;     /* some later block branches back to here */
+    int loop_end;           /* last block belonging to this block's loop */
+    int innermost_loop;     /* header of the tightest loop containing this, or -1 */
+    int needs_fwd_scope;    /* a forward branch targets this block */
+    int fwd_scope_open;     /* block at which that forward scope opens */
+} WasmBlock;
+
+/* One entry of the structured-control-flow scope stack: a wasm `block` we
+ * branch forward out of, or a `loop` we branch backward into. */
+typedef struct WasmScope {
+    int type;               /* 'B' = block (forward), 'L' = loop (backward) */
+    int target;             /* block index this scope refers to */
+} WasmScope;
+
 static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
 {
     WasmBuf body;
     int i;
     int local_pc, local_fp, local_cmp, local_carry, local_i0, local_f0, local_tmp64;
+    WasmEmitCtx ctx_structured, ctx_dispatch;
 
     memset(&body, 0, sizeof(body));
 
@@ -1118,6 +1155,18 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
     local_i0 = local_carry + 1;
     local_f0 = local_i0 + 4;
     local_tmp64 = local_f0 + 8;
+
+    /* Two emitter contexts, differing only in whether a block map is needed:
+     * the structured path emits real wasm block/loop/br, the br_table
+     * dispatch path indexes op_to_block. */
+    ctx_structured.f = f;
+    ctx_structured.pc = local_pc; ctx_structured.fp = local_fp;
+    ctx_structured.cmp = local_cmp; ctx_structured.carry = local_carry;
+    ctx_structured.i0 = local_i0; ctx_structured.f0 = local_f0;
+    ctx_structured.tmp64 = local_tmp64;
+    ctx_structured.op_to_block = NULL;
+    ctx_structured.nb_blocks = 0;
+    ctx_dispatch = ctx_structured;
 
     /* Prolog: keep fp at the caller-visible stack top. The wasm backend
      * addresses frame slots using negative offsets, so fp must point to the
@@ -1162,8 +1211,7 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
          * ops into single br_table cases to reduce dispatch overhead. */
         int *is_leader = tcc_mallocz(f->nb_ops * sizeof(int));
         int *op_to_block = tcc_mallocz(f->nb_ops * sizeof(int));
-        int *block_start; /* first op index of each block */
-        int *block_end;   /* one past last op index of each block */
+        WasmBlock *blk;
         int nb_blocks = 0, b_idx;
 
         /* 1. Identify basic block leaders */
@@ -1188,15 +1236,16 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
             op_to_block[i] = nb_blocks - 1;
         }
 
-        block_start = tcc_mallocz(nb_blocks * sizeof(int));
-        block_end = tcc_mallocz(nb_blocks * sizeof(int));
+        blk = tcc_mallocz(nb_blocks * sizeof(*blk));
+        ctx_dispatch.op_to_block = op_to_block;
+        ctx_dispatch.nb_blocks = nb_blocks;
         b_idx = -1;
         for (i = 0; i < f->nb_ops; i++) {
             if (is_leader[i]) {
                 b_idx++;
-                block_start[b_idx] = i;
+                blk[b_idx].start = i;
             }
-            block_end[b_idx] = i + 1;
+            blk[b_idx].end = i + 1;
         }
 
         tcc_free(is_leader);
@@ -1218,68 +1267,60 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
          */
 
         /* Determine terminator kind and successors for each block */
-        int *blk_succ0 = tcc_mallocz(nb_blocks * sizeof(int));  /* primary successor */
-        int *blk_succ1 = tcc_mallocz(nb_blocks * sizeof(int));  /* secondary (JMP_CMP fallthrough) */
-        int *blk_term  = tcc_mallocz(nb_blocks * sizeof(int));  /* terminator kind */
-        int *blk_term_flags = tcc_mallocz(nb_blocks * sizeof(int));  /* terminator op flags */
 
         for (b_idx = 0; b_idx < nb_blocks; b_idx++) {
-            int last_op_idx = block_end[b_idx] - 1;
+            int last_op_idx = blk[b_idx].end - 1;
             WasmOp *last_op = &f->ops[last_op_idx];
-            blk_succ0[b_idx] = -1;
-            blk_succ1[b_idx] = -1;
-            blk_term[b_idx] = last_op->kind;
-            blk_term_flags[b_idx] = last_op->flags;
+            blk[b_idx].succ0 = -1;
+            blk[b_idx].succ1 = -1;
 
             if (last_op->kind == WASM_OP_JMP) {
                 int ti = wasm_pc_to_index(f, last_op->target_pc);
-                blk_succ0[b_idx] = (ti < f->nb_ops) ? op_to_block[ti] : nb_blocks;
+                blk[b_idx].succ0 = (ti < f->nb_ops) ? op_to_block[ti] : nb_blocks;
             } else if (last_op->kind == WASM_OP_JMP_CMP) {
                 int ti = wasm_pc_to_index(f, last_op->target_pc);
                 int ni = last_op_idx + 1;
-                blk_succ0[b_idx] = (ti < f->nb_ops) ? op_to_block[ti] : nb_blocks;
-                blk_succ1[b_idx] = (ni < f->nb_ops) ? op_to_block[ni] : nb_blocks;
+                blk[b_idx].succ0 = (ti < f->nb_ops) ? op_to_block[ti] : nb_blocks;
+                blk[b_idx].succ1 = (ni < f->nb_ops) ? op_to_block[ni] : nb_blocks;
             } else if (last_op->kind == WASM_OP_RET) {
-                blk_succ0[b_idx] = nb_blocks; /* halt */
+                blk[b_idx].succ0 = nb_blocks; /* halt */
             } else {
                 /* Non-control-flow: falls through to next block */
-                blk_succ0[b_idx] = (b_idx + 1 < nb_blocks) ? b_idx + 1 : nb_blocks;
+                blk[b_idx].succ0 = (b_idx + 1 < nb_blocks) ? b_idx + 1 : nb_blocks;
             }
         }
 
         /* Identify loop headers: a block is a loop header if any block with
          * a higher index jumps to it (backward edge).
-         * Also compute loop_end[h] = the last block that has a back-edge to h. */
-        int *is_loop_header = tcc_mallocz(nb_blocks * sizeof(int));
-        int *loop_end = tcc_mallocz(nb_blocks * sizeof(int));
+         * Also compute blk[h].loop_end = the last block that has a back-edge to h. */
         for (b_idx = 0; b_idx < nb_blocks; b_idx++) {
-            if (blk_succ0[b_idx] >= 0 && blk_succ0[b_idx] < nb_blocks
-                && blk_succ0[b_idx] <= b_idx) {
-                is_loop_header[blk_succ0[b_idx]] = 1;
-                if (b_idx > loop_end[blk_succ0[b_idx]])
-                    loop_end[blk_succ0[b_idx]] = b_idx;
+            if (blk[b_idx].succ0 >= 0 && blk[b_idx].succ0 < nb_blocks
+                && blk[b_idx].succ0 <= b_idx) {
+                blk[blk[b_idx].succ0].is_loop_header = 1;
+                if (b_idx > blk[blk[b_idx].succ0].loop_end)
+                    blk[blk[b_idx].succ0].loop_end = b_idx;
             }
-            if (blk_succ1[b_idx] >= 0 && blk_succ1[b_idx] < nb_blocks
-                && blk_succ1[b_idx] <= b_idx) {
-                is_loop_header[blk_succ1[b_idx]] = 1;
-                if (b_idx > loop_end[blk_succ1[b_idx]])
-                    loop_end[blk_succ1[b_idx]] = b_idx;
+            if (blk[b_idx].succ1 >= 0 && blk[b_idx].succ1 < nb_blocks
+                && blk[b_idx].succ1 <= b_idx) {
+                blk[blk[b_idx].succ1].is_loop_header = 1;
+                if (b_idx > blk[blk[b_idx].succ1].loop_end)
+                    blk[blk[b_idx].succ1].loop_end = b_idx;
             }
         }
         /* Extend loop_end to cover nested loops: if inner loop header h2 is
-         * inside outer loop h1 (h1 <= h2 <= loop_end[h1]), then outer loop
-         * must extend to at least loop_end[h2]. Iterate until stable. */
+         * inside outer loop h1 (h1 <= h2 <= blk[h1].loop_end), then outer loop
+         * must extend to at least blk[h2].loop_end. Iterate until stable. */
         {
             int changed;
             do {
                 changed = 0;
                 int h1, h2;
                 for (h1 = 0; h1 < nb_blocks; h1++) {
-                    if (!is_loop_header[h1]) continue;
-                    for (h2 = h1 + 1; h2 <= loop_end[h1]; h2++) {
-                        if (!is_loop_header[h2]) continue;
-                        if (loop_end[h2] > loop_end[h1]) {
-                            loop_end[h1] = loop_end[h2];
+                    if (!blk[h1].is_loop_header) continue;
+                    for (h2 = h1 + 1; h2 <= blk[h1].loop_end; h2++) {
+                        if (!blk[h2].is_loop_header) continue;
+                        if (blk[h2].loop_end > blk[h1].loop_end) {
+                            blk[h1].loop_end = blk[h2].loop_end;
                             changed = 1;
                         }
                     }
@@ -1288,22 +1329,22 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
         }
 
         /* Detect "jump into loop" patterns: a forward edge from block b
-         * to block t where some loop header h has b < h <= t <= loop_end[h].
+         * to block t where some loop header h has b < h <= t <= blk[h].loop_end.
          * This pattern (common in TCC's for-loop layout) cannot be directly
          * expressed in wasm structured control flow.  Fall back to the
          * switch-loop dispatch for such functions. */
         int use_structured = 1;
         for (b_idx = 0; b_idx < nb_blocks && use_structured; b_idx++) {
             int succs[2], ns2 = 0;
-            if (blk_succ0[b_idx] > b_idx && blk_succ0[b_idx] < nb_blocks)
-                succs[ns2++] = blk_succ0[b_idx];
-            if (blk_succ1[b_idx] > b_idx && blk_succ1[b_idx] < nb_blocks)
-                succs[ns2++] = blk_succ1[b_idx];
+            if (blk[b_idx].succ0 > b_idx && blk[b_idx].succ0 < nb_blocks)
+                succs[ns2++] = blk[b_idx].succ0;
+            if (blk[b_idx].succ1 > b_idx && blk[b_idx].succ1 < nb_blocks)
+                succs[ns2++] = blk[b_idx].succ1;
             for (i = 0; i < ns2; i++) {
                 int target = succs[i];
                 int h;
                 for (h = b_idx + 1; h < target; h++) {
-                    if (is_loop_header[h] && target <= loop_end[h]) {
+                    if (blk[h].is_loop_header && target <= blk[h].loop_end) {
                         use_structured = 0;
                         break;
                     }
@@ -1315,7 +1356,7 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
 
         /* For each forward-branch target, find where to open its block scope.
          *
-         * fwd_scope_open[t] = block index where the scope for target t opens.
+         * blk[t].fwd_scope_open = block index where the scope for target t opens.
          * The scope closes (end instruction) just before block t's code.
          *
          * Key constraint: if a forward branch crosses a loop boundary (source
@@ -1323,33 +1364,30 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
          * the loop (at or before the loop header), not inside the loop body.
          * Otherwise the scope would cross the loop boundary, violating nesting.
          */
-        int *fwd_scope_open = tcc_mallocz(nb_blocks * sizeof(int));
-        int *needs_fwd_scope = tcc_mallocz(nb_blocks * sizeof(int));
 
-        /* Compute innermost_loop[b] = loop header containing b, or -1 */
-        int *innermost_loop = tcc_mallocz(nb_blocks * sizeof(int));
+        /* Compute blk[b].innermost_loop = loop header containing b, or -1 */
         {
             int h;
             for (i = 0; i < nb_blocks; i++)
-                innermost_loop[i] = -1;
-            /* For each loop header h, mark blocks h..loop_end[h] */
+                blk[i].innermost_loop = -1;
+            /* For each loop header h, mark blocks h..blk[h].loop_end */
             for (h = 0; h < nb_blocks; h++) {
-                if (!is_loop_header[h]) continue;
-                for (i = h; i <= loop_end[h]; i++) {
+                if (!blk[h].is_loop_header) continue;
+                for (i = h; i <= blk[h].loop_end; i++) {
                     /* Keep the innermost (most recently opened) loop.
                      * Since we iterate h in ascending order, later h
                      * overwrites earlier h for nested loops. */
-                    if (innermost_loop[i] < h)
-                        innermost_loop[i] = h;
+                    if (blk[i].innermost_loop < h)
+                        blk[i].innermost_loop = h;
                 }
             }
         }
 
         for (i = 0; i < nb_blocks; i++)
-            fwd_scope_open[i] = nb_blocks; /* sentinel */
+            blk[i].fwd_scope_open = nb_blocks; /* sentinel */
 
         for (b_idx = 0; b_idx < nb_blocks; b_idx++) {
-            int s0 = blk_succ0[b_idx], s1 = blk_succ1[b_idx];
+            int s0 = blk[b_idx].succ0, s1 = blk[b_idx].succ1;
             int succs[2], ns = 0;
             if (s0 > b_idx && s0 < nb_blocks) succs[ns++] = s0;
             if (s1 > b_idx && s1 < nb_blocks) succs[ns++] = s1;
@@ -1360,7 +1398,7 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
                 if (target == b_idx + 1)
                     continue;
 
-                needs_fwd_scope[target] = 1;
+                blk[target].needs_fwd_scope = 1;
 
                 /* Determine where to open the scope.  Start at source block,
                  * then adjust outward past any loop boundaries. */
@@ -1369,17 +1407,17 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
                     /* If target is outside any loop containing b_idx,
                      * push open_at to before that loop's header. */
                     int cur = b_idx;
-                    while (innermost_loop[cur] >= 0) {
-                        int h = innermost_loop[cur];
-                        if (target > loop_end[h]) {
+                    while (blk[cur].innermost_loop >= 0) {
+                        int h = blk[cur].innermost_loop;
+                        if (target > blk[h].loop_end) {
                             /* Target is outside this loop — scope must
                              * open at or before the loop header */
                             if (h < open_at)
                                 open_at = h;
                             /* Check if the loop header is itself inside
                              * an outer loop */
-                            if (h > 0 && innermost_loop[h - 1] >= 0
-                                && innermost_loop[h - 1] < h)
+                            if (h > 0 && blk[h - 1].innermost_loop >= 0
+                                && blk[h - 1].innermost_loop < h)
                                 cur = h - 1;
                             else
                                 break;
@@ -1388,8 +1426,8 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
                         }
                     }
                 }
-                if (open_at < fwd_scope_open[target])
-                    fwd_scope_open[target] = open_at;
+                if (open_at < blk[target].fwd_scope_open)
+                    blk[target].fwd_scope_open = open_at;
             }
         }
 
@@ -1407,18 +1445,18 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
                 changed2 = 0;
                 for (i = 0; i < nb_blocks; i++) {
                     int t2;
-                    if (!needs_fwd_scope[i]) continue;
-                    /* scope for target i: opens at fwd_scope_open[i], closes at i */
+                    if (!blk[i].needs_fwd_scope) continue;
+                    /* scope for target i: opens at blk[i].fwd_scope_open, closes at i */
                     for (t2 = i + 1; t2 < nb_blocks; t2++) {
-                        if (!needs_fwd_scope[t2]) continue;
-                        /* scope for target t2: opens at fwd_scope_open[t2], closes at t2 */
-                        if (fwd_scope_open[t2] >= fwd_scope_open[i]
-                            && fwd_scope_open[t2] < i
+                        if (!blk[t2].needs_fwd_scope) continue;
+                        /* scope for target t2: opens at blk[t2].fwd_scope_open, closes at t2 */
+                        if (blk[t2].fwd_scope_open >= blk[i].fwd_scope_open
+                            && blk[t2].fwd_scope_open < i
                             && t2 > i) {
                             /* t2 opens inside scope i but closes after i.
                              * Move t2's open to before scope i's open. */
-                            if (fwd_scope_open[i] < fwd_scope_open[t2]) {
-                                fwd_scope_open[t2] = fwd_scope_open[i];
+                            if (blk[i].fwd_scope_open < blk[t2].fwd_scope_open) {
+                                blk[t2].fwd_scope_open = blk[i].fwd_scope_open;
                                 changed2 = 1;
                             }
                         }
@@ -1440,14 +1478,13 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
 
         /* Scope stack */
         int scope_cap = nb_blocks * 2 + 4;
-        int *scope_type = tcc_mallocz(scope_cap * sizeof(int));   /* 'B' or 'L' */
-        int *scope_target = tcc_mallocz(scope_cap * sizeof(int)); /* block index */
+        WasmScope *scope = tcc_mallocz(scope_cap * sizeof(*scope));
         int scope_depth = 0;
 
         /* Push halt block scope */
         wb_u8(&body, 0x02), wb_u8(&body, 0x40); /* block (halt) */
-        scope_type[scope_depth] = 'B';
-        scope_target[scope_depth] = nb_blocks; /* halt */
+        scope[scope_depth].type = 'B';
+        scope[scope_depth].target = nb_blocks; /* halt */
         scope_depth++;
 
         for (b_idx = 0; b_idx < nb_blocks; b_idx++) {
@@ -1456,7 +1493,7 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
             /* Close scopes that end before this block */
             while (scope_depth > 0) {
                 int top = scope_depth - 1;
-                if (scope_type[top] == 'B' && scope_target[top] == b_idx) {
+                if (scope[top].type == 'B' && scope[top].target == b_idx) {
                     wb_u8(&body, 0x0b); /* end */
                     scope_depth--;
                 } else {
@@ -1473,11 +1510,11 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
                 int targets_outer[64], n_outer = 0;
                 int targets_inner[64], n_inner = 0;
                 int t;
-                int le = is_loop_header[b_idx] ? loop_end[b_idx] : -1;
+                int le = blk[b_idx].is_loop_header ? blk[b_idx].loop_end : -1;
 
                 for (t = b_idx + 1; t < nb_blocks; t++) {
-                    if (needs_fwd_scope[t] && fwd_scope_open[t] == b_idx) {
-                        if (is_loop_header[b_idx] && t <= le && n_inner < 64)
+                    if (blk[t].needs_fwd_scope && blk[t].fwd_scope_open == b_idx) {
+                        if (blk[b_idx].is_loop_header && t <= le && n_inner < 64)
                             targets_inner[n_inner++] = t;
                         else if (n_outer < 64)
                             targets_outer[n_outer++] = t;
@@ -1487,32 +1524,32 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
                 /* Open outer scopes (outside loop): furthest first */
                 for (j = n_outer - 1; j >= 0; j--) {
                     wb_u8(&body, 0x02), wb_u8(&body, 0x40);
-                    scope_type[scope_depth] = 'B';
-                    scope_target[scope_depth] = targets_outer[j];
+                    scope[scope_depth].type = 'B';
+                    scope[scope_depth].target = targets_outer[j];
                     scope_depth++;
                 }
 
                 /* Open loop scope */
-                if (is_loop_header[b_idx]) {
+                if (blk[b_idx].is_loop_header) {
                     wb_u8(&body, 0x03), wb_u8(&body, 0x40);
-                    scope_type[scope_depth] = 'L';
-                    scope_target[scope_depth] = b_idx;
+                    scope[scope_depth].type = 'L';
+                    scope[scope_depth].target = b_idx;
                     scope_depth++;
                 }
 
                 /* Open inner scopes (inside loop): furthest first */
                 for (j = n_inner - 1; j >= 0; j--) {
                     wb_u8(&body, 0x02), wb_u8(&body, 0x40);
-                    scope_type[scope_depth] = 'B';
-                    scope_target[scope_depth] = targets_inner[j];
+                    scope[scope_depth].type = 'B';
+                    scope[scope_depth].target = targets_inner[j];
                     scope_depth++;
                 }
             }
 
             /* Emit non-terminal ops of this block */
-            for (j = block_start[b_idx]; j < block_end[b_idx]; ++j) {
+            for (j = blk[b_idx].start; j < blk[b_idx].end; ++j) {
                 WasmOp *op = &f->ops[j];
-                int is_terminal = (j == block_end[b_idx] - 1) &&
+                int is_terminal = (j == blk[b_idx].end - 1) &&
                     (op->kind == WASM_OP_JMP || op->kind == WASM_OP_JMP_CMP ||
                      op->kind == WASM_OP_RET);
 
@@ -1522,13 +1559,13 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
                         /* Find halt scope depth */
                         int d;
                         for (d = scope_depth - 1; d >= 0; d--) {
-                            if (scope_type[d] == 'B' && scope_target[d] == nb_blocks)
+                            if (scope[d].type == 'B' && scope[d].target == nb_blocks)
                                 break;
                         }
                         wb_u8(&body, 0x0c);
                         wb_uleb(&body, scope_depth - 1 - d);
                     } else if (op->kind == WASM_OP_JMP) {
-                        int target_bi = blk_succ0[b_idx];
+                        int target_bi = blk[b_idx].succ0;
                         if (target_bi == b_idx + 1) {
                             /* JMP to next block: natural fallthrough */
                         } else {
@@ -1536,13 +1573,13 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
                             if (target_bi <= b_idx && target_bi < nb_blocks) {
                                 /* Backward: find loop scope */
                                 for (d = scope_depth - 1; d >= 0; d--) {
-                                    if (scope_type[d] == 'L' && scope_target[d] == target_bi)
+                                    if (scope[d].type == 'L' && scope[d].target == target_bi)
                                         break;
                                 }
                             } else {
                                 /* Forward: find block scope */
                                 for (d = scope_depth - 1; d >= 0; d--) {
-                                    if (scope_type[d] == 'B' && scope_target[d] == target_bi)
+                                    if (scope[d].type == 'B' && scope[d].target == target_bi)
                                         break;
                                 }
                             }
@@ -1552,7 +1589,7 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
                             wb_uleb(&body, scope_depth - 1 - d);
                         }
                     } else { /* WASM_OP_JMP_CMP */
-                        int taken_bi = blk_succ0[b_idx];
+                        int taken_bi = blk[b_idx].succ0;
                         /* fall_bi is always b_idx + 1 (next sequential block) */
                         int d;
 
@@ -1564,10 +1601,10 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
                         /* Find scope for taken target */
                         if (taken_bi <= b_idx && taken_bi < nb_blocks) {
                             for (d = scope_depth - 1; d >= 0; d--)
-                                if (scope_type[d] == 'L' && scope_target[d] == taken_bi) break;
+                                if (scope[d].type == 'L' && scope[d].target == taken_bi) break;
                         } else {
                             for (d = scope_depth - 1; d >= 0; d--)
-                                if (scope_type[d] == 'B' && scope_target[d] == taken_bi) break;
+                                if (scope[d].type == 'B' && scope[d].target == taken_bi) break;
                         }
                         if (d < 0)
                             tcc_error("wasm32 structured: no scope for JMP_CMP taken block %d from block %d", taken_bi, b_idx);
@@ -1577,18 +1614,15 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
                     }
                 } else {
                     /* Non-terminal op: emit normally */
-                    int is_last_in_block = (j == block_end[b_idx] - 1);
+                    int is_last_in_block = (j == blk[b_idx].end - 1);
                     int next_fi = -1;
                     int stack_out = -1;
-                    if (!is_last_in_block && j + 1 < block_end[b_idx])
+                    if (!is_last_in_block && j + 1 < blk[b_idx].end)
                         next_fi = wasm_op_first_input(&f->ops[j + 1], local_i0, local_f0);
                     /* Pass op_to_block=NULL, emit_dispatch=0 to suppress
                      * all control flow emission in wasm_emit_case */
-                    wasm_emit_case(&body, f, op, j, 0, 0,
-                                   local_pc, local_fp, local_cmp, local_carry,
-                                   local_i0, local_f0, local_tmp64,
-                                   NULL, 0, 0,
-                                   stack_reg, next_fi, &stack_out);
+                    wasm_emit_case(&ctx_structured, &body, op, j, 0, 0,
+                                   0, stack_reg, next_fi, &stack_out);
                     stack_reg = stack_out;
                     if (s1->nb_errors) break;
                 }
@@ -1603,7 +1637,7 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
              * Close from the top of the stack (innermost first). */
             while (scope_depth > 0) {
                 int top = scope_depth - 1;
-                if (scope_type[top] == 'L' && loop_end[scope_target[top]] == b_idx) {
+                if (scope[top].type == 'L' && blk[scope[top].target].loop_end == b_idx) {
                     wb_u8(&body, 0x0b); /* end loop */
                     scope_depth--;
                 } else {
@@ -1618,11 +1652,7 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
             scope_depth--;
         }
 
-        tcc_free(scope_type);
-        tcc_free(scope_target);
-        tcc_free(innermost_loop);
-        tcc_free(fwd_scope_open);
-        tcc_free(needs_fwd_scope);
+        tcc_free(scope);
 
         } else {
             /* --- Fallback: switch-loop dispatch with coalescing ---
@@ -1647,16 +1677,14 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
             for (b_idx = nb_blocks - 1; b_idx >= 0; --b_idx) {
                 int j, stack_reg = -1;
                 wb_u8(&body, 0x0b); /* end block */
-                for (j = block_start[b_idx]; j < block_end[b_idx]; ++j) {
-                    int is_last = (j == block_end[b_idx] - 1);
+                for (j = blk[b_idx].start; j < blk[b_idx].end; ++j) {
+                    int is_last = (j == blk[b_idx].end - 1);
                     int next_fi = -1;
                     int stack_out = -1;
-                    if (!is_last && j + 1 < block_end[b_idx])
+                    if (!is_last && j + 1 < blk[b_idx].end)
                         next_fi = wasm_op_first_input(&f->ops[j + 1], local_i0, local_f0);
-                    wasm_emit_case(&body, f, &f->ops[j], j, b_idx + 1, b_idx,
-                                   local_pc, local_fp, local_cmp, local_carry,
-                                   local_i0, local_f0, local_tmp64,
-                                   op_to_block, nb_blocks, is_last,
+                    wasm_emit_case(&ctx_dispatch, &body, &f->ops[j], j,
+                                   b_idx + 1, b_idx, is_last,
                                    stack_reg, next_fi, &stack_out);
                     stack_reg = stack_out;
                     if (s1->nb_errors) break;
@@ -1668,15 +1696,8 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
             wb_u8(&body, 0x0b); /* end loop */
         }
 
-        tcc_free(blk_succ0);
-        tcc_free(blk_succ1);
-        tcc_free(blk_term);
-        tcc_free(blk_term_flags);
-        tcc_free(is_loop_header);
-        tcc_free(loop_end);
         tcc_free(op_to_block);
-        tcc_free(block_start);
-        tcc_free(block_end);
+        tcc_free(blk);
     }
 
     if (s1->nb_errors) {
