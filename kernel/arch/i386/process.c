@@ -33,15 +33,11 @@
 extern void i386_trap_return(struct regs *r); /* arch/i386/i386_process_return.S */
 extern void tss_set_kernel_stack(unsigned int esp0); /* arch/i386/gdt.c */
 
-/* struct assignment would ask TCC's codegen for memmove(), which this
- * freestanding kernel has never linked -- copy by hand instead, same
- * reason and same technique as arch/risc/riscv64_process.c's own
- * copy_regs(). */
+/* sched/process.c's own copy_regs_bytes() (checkpoint 21) does the
+ * actual copy now, shared with arch/risc/riscv64_process.c's own
+ * equivalent wrapper -- see process.h's comment on it. */
 static void copy_regs(struct regs *dst, const struct regs *src) {
-	const unsigned int *s = (const unsigned int *)src;
-	unsigned int *d = (unsigned int *)dst;
-	for (unsigned int i = 0; i < sizeof(struct regs) / sizeof(unsigned int); i++)
-		d[i] = s[i];
+	copy_regs_bytes(dst, src, sizeof(struct regs));
 }
 
 /* Snapshots the live trapframe into p->user_regs -- called on a
@@ -64,10 +60,24 @@ void process_arch_save_trapframe(struct process *p) {
  * needed whether p is resuming its own frozen call stack (process_schedule())
  * or is about to be entered fresh via i386_trap_return (process_arch_trampoline(),
  * below). Doesn't touch the trapframe itself -- see this file's own
- * header comment for why i386 doesn't need to. */
+ * header comment for why i386 doesn't need to.
+ *
+ * Re-installs p's own TLS descriptor too -- real bug, found running
+ * real self-hosted TCC for the first time: unlike everything else
+ * here, GDT slot 6 (arch/i386/gdt.c's gdt_set_tls_entry(), what
+ * SYS_set_thread_area installs into) is a single global, CPU-wide
+ * resource, not per-process state a trapframe save/restore touches at
+ * all. Without this, whichever process last called set_thread_area()
+ * (i.e. whichever real binary started up most recently) "won" the
+ * slot for everyone -- any other process resuming afterward read its
+ * own TLS pointer (%gs:0, e.g. musl's own pthread_self()/errno)
+ * through a descriptor pointing at a *different* process's TLS block
+ * entirely, faulting the instant it dereferenced anything through it.
+ * See struct process's own tls_base comment for the full story. */
 void process_arch_activate_and_restore(struct process *p) {
 	paging_activate(p->root_table);
 	tss_set_kernel_stack((unsigned int)(unsigned long)&p->kernel_stack[PROC_KSTACK_WORDS]);
+	gdt_set_tls_entry(6, (unsigned int)p->tls_base);
 }
 
 /* ra target for a process's hand-built initial kernel stack frame --

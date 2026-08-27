@@ -444,14 +444,14 @@ void sys_getpid(struct regs *r) {
 /* Real open()+read()+close() against the initrd-populated ramfs. fd
  * numbers 3.. (0/1/2 stay the UART console, unaffected) --
  * sched/process.h's process_fd_alloc/get/close index by the raw fds[]
- * slot, this file applies the +3 offset. */
-/* checkpoint 14: bumped from 64 -- the tar-loaded initrd's real
- * musl-header/TCC-source paths (mm/ramfs.h's now-full-path-matched
- * dynamic files) top out in the 30s ("musl/arch/riscv64/bits/alltypes.h.in"),
- * so 128 is real headroom, not a tight fit driven by a specific path. */
-#define PATH_MAX_LOCAL 128
+ * slot, this file applies the +3 offset.
+ *
+ * copy_path_from_user()/resolve_path()/resolve_user_path()/PATH_MAX_LOCAL
+ * themselves moved to syscall_common.h (checkpoint 21) -- see that
+ * header's own comment; this is still their one real implementation,
+ * just no longer `static` to this file. */
 
-static int copy_path_from_user(char *dst, const char *user_src) {
+int copy_path_from_user(char *dst, const char *user_src) {
 	int i = 0;
 	while (user_src[i] && i < PATH_MAX_LOCAL - 1) {
 		dst[i] = user_src[i];
@@ -461,9 +461,7 @@ static int copy_path_from_user(char *dst, const char *user_src) {
 	return i;
 }
 
-/* Canonicalize absolute or cwd-relative paths into the ramfs key form: no
- * leading slash, with '.' and '..' resolved. */
-static void resolve_path(char *out, const char *input, const char *base) {
+void resolve_path(char *out, const char *input, const char *base) {
 	unsigned int n = 0, i = 0;
 	if (input[0] != '/') {
 		if (base[0] == '/') base++;
@@ -486,10 +484,43 @@ static void resolve_path(char *out, const char *input, const char *base) {
 	out[n] = 0;
 }
 
-static void resolve_user_path(char *out, const char *user_path) {
+void resolve_user_path(char *out, const char *user_path) {
 	char input[PATH_MAX_LOCAL];
 	copy_path_from_user(input, user_path);
 	resolve_path(out, input, process_current_cwd());
+}
+
+/* checkpoint 21 (docs/repo-review-2026-08-26.md section 5): the
+ * is_dir -> dynamic -> fixed ramfs lookup order behind sys_stat/
+ * sys_lstat/sys_newfstatat used to be duplicated verbatim in both
+ * arches' own syscall.c (each with its own private `fill_stat`, since
+ * that part genuinely can't be shared -- struct stat's real on-the-
+ * wire layout differs, see syscall_common.h's own comment on why
+ * sys_newfstatat itself stays per-arch). Both arches' `fill_stat`
+ * already happen to share one signature
+ * (`void fill_stat(unsigned char *sb, unsigned int mode, unsigned long
+ * size)`), so the lookup can call whichever one the caller passes in
+ * instead of needing to know which arch it's running on. Returns 0 on
+ * success, -ENOENT if nothing by that name exists -- callers hand this
+ * straight to sys_ret() (or their own equivalent). */
+#define S_IFDIR 0040000
+#define S_IFREG 0100000
+
+int stat_lookup(const char *ramfs_path, void (*fill)(unsigned char *sb, unsigned int mode, unsigned long size), unsigned char *sb) {
+	if (ramfs_is_dir(ramfs_path)) {
+		fill(sb, S_IFDIR | 0755, 0);
+		return 0;
+	}
+	struct ramfs_dynamic_file *dyn = ramfs_dynamic_lookup(ramfs_path);
+	if (dyn) {
+		fill(sb, S_IFREG | 0755, dyn->size);
+		return 0;
+	}
+	const struct ramfs_file *file = ramfs_lookup(ramfs_path);
+	if (!file)
+		return -ENOENT;
+	fill(sb, S_IFREG | 0755, file->size);
+	return 0;
 }
 
 /* Shared core of sys_openat() and (i386 only) sys_open() -- see that
@@ -662,6 +693,18 @@ void sys_close(struct regs *r) {
 static unsigned long read_from_fd_entry(struct fd_entry *entry, unsigned char *buf, unsigned long count) {
 	const unsigned char *src = entry->dynfile ? entry->dynfile->data : entry->data;
 	unsigned long src_size = entry->dynfile ? entry->dynfile->size : entry->size;
+	/* Seeking past EOF is ordinary, POSIX-legal behaviour (sys_lseek
+	 * deliberately allows it), and a read from there must report EOF.
+	 * Without this check `src_size - entry->pos` underflows -- these
+	 * are unsigned -- to a huge `remaining`, so the copy loop below
+	 * runs for the caller's full `count`, reading straight off the end
+	 * of the file's backing store into whatever kernel memory follows
+	 * it and reporting those bytes as file contents. Found by probing
+	 * a real `lseek(fd, 10000, SEEK_SET); read(fd, buf, 8)` against a
+	 * 15-byte initrd file: the read returned 8 (not 0) and the buffer
+	 * came back holding kernel heap bytes. */
+	if (entry->pos >= src_size)
+		return 0;
 	unsigned long remaining = src_size - entry->pos;
 	unsigned long n = count < remaining ? count : remaining;
 	paging_ensure_writable((unsigned long)buf, n);
@@ -972,12 +1015,15 @@ void sys_fcntl(struct regs *r) {
 			sys_ret(r, (unsigned long)-ENOMEM);
 			return;
 		}
-		struct fd_entry *nf = process_fd_get(idx);
-		nf->data = old->data;
-		nf->size = old->size;
-		nf->pos = old->pos;
-		nf->is_dir = old->is_dir;
-		nf->dynfile = old->dynfile;
+		/* used already set by process_fd_alloc() above -- see
+		 * process.h's own comment on fd_entry_copy() for why that field
+		 * is never this helper's own job. Also now copies `path` (it
+		 * didn't before this used a shared helper) -- harmless for
+		 * every real caller here (F_DUPFD is only ever used on ash's
+		 * own regular-file script fd, never a directory fd, so `path`
+		 * was never actually read back either way), but correct now
+		 * regardless. */
+		fd_entry_copy(process_fd_get(idx), old);
 		sys_ret(r, (unsigned long)(idx + 3));
 		return;
 	}

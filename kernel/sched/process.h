@@ -68,6 +68,26 @@ struct process {
 	unsigned long user_stack_limit;    /* lowest address to which it may grow */
 	unsigned long user_brk;
 	unsigned long user_mmap_next;
+	/* checkpoint 19: i386 only in practice (riscv64's own TLS is just
+	 * the `tp` GPR, part of the ordinary trapframe process_arch_save_trapframe/
+	 * process_arch_activate_and_restore already save/restore -- no
+	 * separate field needed there). i386's TLS is a GDT descriptor
+	 * (GDT slot 6, arch/i386/gdt.c's gdt_set_tls_entry()) -- a single
+	 * global, CPU-wide resource, not something a trapframe save/
+	 * restore touches at all. Real bug, found running real self-hosted
+	 * TCC for the first time (this checkpoint's own closure test, the
+	 * first real multi-fork-then-exec i386 workload): every process
+	 * that calls set_thread_area() (musl's own _start, on every real
+	 * binary) overwrote the *same* global slot, so whichever process
+	 * ran last "won" -- any other process resuming afterward read its
+	 * TLS pointer (%gs:0, e.g. errno/pthread_self()) through a
+	 * descriptor now pointing at a *different* process's TLS block,
+	 * landing on garbage the instant it dereferenced anything through
+	 * it. arch/i386/process.c's process_arch_activate_and_restore()
+	 * now re-installs *this* field on every switch, restoring the
+	 * illusion of "your own private TLS" the same way real per-CPU
+	 * hardware TLS state would. */
+	unsigned long tls_base;
 	unsigned long kernel_sp;           /* switch_context()-managed, see arch/risc/riscv64_switch_context.S */
 	unsigned long kernel_stack[PROC_KSTACK_WORDS];
 	struct regs user_regs;             /* saved U-mode context when this process isn't the one currently running */
@@ -229,6 +249,20 @@ struct fd_entry *process_fd_get(int index); /* 0 if out of range or not currentl
 void process_fd_close(int index);           /* no-op if already unused/out of range */
 void process_fd_set(int index, const struct fd_entry *src); /* checkpoint 12: dup3()'s target-by-number half */
 
+/* checkpoint 21 (docs/repo-review-2026-08-26.md section 5): the field-
+ * by-field copy every one of the above (plus process_fork(),
+ * process_stdio_set(), and syscall_posix.c's own sys_fcntl()) needed
+ * -- struct assignment would ask TCC's codegen for memmove(), which
+ * this freestanding kernel has never linked (same reason as
+ * arch/i386/process.c's/arch/risc/riscv64_process.c's own copy_regs()).
+ * Deliberately doesn't touch `used`: process_fork() copies it as-is
+ * (an unused slot must stay unused in the child), while
+ * process_fd_set()/process_stdio_set() force it to 1 regardless of
+ * `src->used` (their whole point is "make this slot valid") -- the one
+ * field every caller's own semantics genuinely differ on, so it stays
+ * each caller's own explicit assignment either side of this call. */
+void fd_entry_copy(struct fd_entry *dst, const struct fd_entry *src);
+
 /* checkpoint 12: real dup2()/dup3() onto fd 0/1/2 -- see struct
  * process's own stdio_override comment for why these exist. */
 struct fd_entry *process_stdio_get(int fd);              /* fd must be 0/1/2; 0 if not currently overridden */
@@ -274,6 +308,22 @@ int process_execve(struct regs *r, const char *path, char **argv, char **envp);
  * which is reached via a bare `ret` (switch_context()'s restore
  * sequence) and so can't take a parameter. */
 struct process *process_get_current(void);
+
+/* checkpoint 21 (docs/repo-review-2026-08-26.md section 5): the actual
+ * copy loop behind both arch/i386/process.c's and
+ * arch/risc/riscv64_process.c's own copy_regs() -- struct regs itself
+ * has to stay a genuinely per-arch type (a real different register set
+ * and word width, not just a different name for the same layout), so
+ * there's no way to share one function taking `struct regs *`, but the
+ * copy itself never needed to know the word width to begin with: a
+ * plain byte loop over sizeof(struct regs) does the same job as
+ * word-at-a-time, and works unchanged for i386's 32-bit fields and
+ * riscv64's 64-bit ones. Each arch's own copy_regs(dst, src) is now a
+ * one-line wrapper: copy_regs_bytes(dst, src, sizeof(struct regs)).
+ * Struct assignment would ask TCC's codegen for memmove(), which this
+ * freestanding kernel has never linked -- same reason this was a loop
+ * to begin with. */
+void copy_regs_bytes(void *dst, const void *src, unsigned long n);
 
 void process_arch_trampoline(void);                                   /* ra target for a freshly-scheduled process's first run */
 void process_arch_save_trapframe(struct process *p);                  /* live trapframe -> p->user_regs */

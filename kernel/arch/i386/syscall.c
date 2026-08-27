@@ -49,24 +49,26 @@
 #define SYS_getpid                                 20
 #define SYS_access                                    33
 #define SYS_brk                                          45
-#define SYS_getegid                                        50 /* getegid32, see this file's own header comment */
 #define SYS_ioctl                                             54
-#define SYS_fcntl                                               55 /* fcntl64, see this file's own header comment */
 #define SYS_dup2                                                  63
 #define SYS_getppid                                                  64
 #define SYS_munmap                                                      91
 #define SYS_wait4                                                          114
-#define SYS_writev                                                            146
+#define SYS__llseek                                                           140 /* real bug, found running real self-hosted TCC for the first time -- see sys_llseek's own comment: musl-i386's own lseek() always uses this instead of plain SYS_lseek above */
+#define SYS_writev                                                              146
 #define SYS_sched_yield                                                          158
 #define SYS_mremap                                                                  163
 #define SYS_getcwd                                                                     183
 #define SYS_mmap2                                                                         192
 #define SYS_stat                                                                             195 /* stat64, see this file's own header comment */
+#define SYS_lstat                                                                             196 /* lstat64 */
 #define SYS_fstat                                                                               197 /* fstat64 */
 #define SYS_getuid                                                                                 199 /* getuid32 */
 #define SYS_getgid                                                                                    200 /* getgid32 */
 #define SYS_geteuid                                                                                      201 /* geteuid32 */
+#define SYS_getegid                                                                                        202 /* getegid32 -- real bug, found running real busybox ash for the first time: was mistakenly 50 (a stray leftover), a real command's very first PATH lookup hit ash's own getegid() call and got a loud "unimplemented syscall" for a syscall that was actually dispatched, just to the wrong number */
 #define SYS_getdents64                                                                                      220
+#define SYS_fcntl                                                                                              221 /* fcntl64 -- real bug, found running real busybox ash's own `ls`: was mistakenly the legacy single-number 55 (never actually reached, same mistake as SYS_getegid above), so real fcntl()s (F_DUPFD_CLOEXEC on ash's own script fd, same as riscv64's own checkpoint 9) hit the loud default case instead */
 #define SYS_gettid                                                                                             224
 #define SYS_set_thread_area                                                                                       243
 #define SYS_exit_group                                                                                       252
@@ -75,6 +77,10 @@
 #define SYS_newfstatat                                                                                               300 /* fstatat64 */
 #define SYS_faccessat                                                                                                        307
 #define SYS_dup3                                                                                                                330
+/* Not dispatched to a handler at all -- see the default case's own
+ * comment on why this one specific unimplemented number is silenced
+ * rather than a real gap. */
+#define SYS_statx                                                                                                                   383
 /* SYS_clone, SYS_rt_sigprocmask, SYS_rt_sigaction: real numbers, but
  * musl-i386's own preferences (SYS_fork/legacy signal syscalls -- see
  * this file's header comment) mean these two are dispatched only as a
@@ -86,6 +92,8 @@
 
 #define ENOSYS  38
 #define ENOENT   2
+#define EBADF    9
+#define EINVAL  22
 
 /* --- register accessors syscall_posix.c calls through --- */
 unsigned long sys_arg(struct regs *r, int n) {
@@ -139,38 +147,95 @@ static void fill_stat(unsigned char *sb, unsigned int mode, unsigned long size) 
 }
 
 /* Looks a ramfs path up and fills `sb` -- the actual logic shared by
- * sys_stat/sys_newfstatat below (both take a path; sys_fstat looks up
- * an already-open fd instead, a genuinely different kind of lookup,
- * kept separate). Returns 0 on success, -ENOENT if nothing by that
- * name exists. */
+ * sys_stat/sys_lstat/sys_newfstatat below (all take a path; sys_fstat
+ * looks up an already-open fd instead, a genuinely different kind of
+ * lookup, kept separate). Returns 0 on success, -ENOENT if nothing by
+ * that name exists. The lookup order itself is syscall_common.h's own
+ * shared stat_lookup() (checkpoint 21) -- only fill_stat's byte
+ * offsets are genuinely i386-specific. */
 static int stat_path(const char *ramfs_path, unsigned char *sb) {
-	if (ramfs_is_dir(ramfs_path)) {
-		fill_stat(sb, S_IFDIR | 0755, 0);
-		return 0;
-	}
-	struct ramfs_dynamic_file *dyn = ramfs_dynamic_lookup(ramfs_path);
-	if (dyn) {
-		fill_stat(sb, S_IFREG | 0755, dyn->size);
-		return 0;
-	}
-	const struct ramfs_file *file = ramfs_lookup(ramfs_path);
-	if (!file) return -ENOENT;
-	fill_stat(sb, S_IFREG | 0755, file->size);
-	return 0;
+	return stat_lookup(ramfs_path, fill_stat, sb);
 }
 
 /* arg0=path, arg1=statbuf -- SYS_stat (stat64), i386's own preferred
  * real syscall for a plain absolute/cwd-relative stat() (see this
- * file's own header comment). No cwd-relative resolution here (unlike
- * syscall_posix.c's own resolve_user_path): every real caller in this
- * kernel's tests passes an absolute path to this specific syscall. */
+ * file's own header comment on why i386 needs this at all, unlike
+ * riscv64). Real bug this cwd resolution fixes, found running real
+ * busybox ash's own `ls` for the first time: this used to skip it
+ * entirely ("every real caller passes an absolute path"), true of
+ * every one-shot P4/P5 test but not of real coreutils -- `ls` calls
+ * stat(".") directly, no fstatat/dirfd involved at all, and "." with
+ * no cwd resolution isn't a path this ramfs has any entry for. Uses
+ * syscall_common.h's shared resolve_user_path() (checkpoint 21) --
+ * used to be a private resolve_i386_path() here, byte-for-byte the
+ * same logic as syscall_posix.c's own. */
 static void sys_stat(struct regs *r) {
-	const char *path = (const char *)sys_arg(r, 0);
+	char path[PATH_MAX_LOCAL];
 	unsigned char *sb = (unsigned char *)sys_arg(r, 1);
 	paging_ensure_writable((unsigned long)sb, ST_STRUCT_SIZE);
-	const char *ramfs_path = path[0] == '/' ? path + 1 : path;
-	int ret = stat_path(ramfs_path, sb);
+	resolve_user_path(path, (const char *)sys_arg(r, 0));
+	int ret = stat_path(path, sb);
 	sys_ret(r, ret < 0 ? (unsigned long)ret : 0);
+}
+
+/* arg0=path, arg1=statbuf -- SYS_lstat (lstat64), musl-i386's own
+ * preferred real syscall for a plain (non-fd-relative) lstat(), same
+ * "legacy single-number form i386 still has" reasoning as sys_stat.
+ * This ramfs has no real symlink *targets* to resolve differently from
+ * a plain stat() (mm/ramfs.h's own dir-entry synthesis just marks a
+ * name DT_LNK for display -- see syscall_posix.c's own
+ * sys_getdents64()), so lstat() and stat() are honestly the same
+ * lookup here. */
+static void sys_lstat(struct regs *r) {
+	sys_stat(r);
+}
+
+/* arg0=fd, arg1=offset_high, arg2=offset_low, arg3=result (a real
+ * user pointer to an 8-byte off_t, written on success), arg4=whence
+ * -- SYS__llseek, real bug found running real self-hosted TCC for the
+ * first time (checkpoint 19's own closure test): musl-i386's own
+ * src/unistd/lseek.c *always* prefers this over plain SYS_lseek
+ * whenever it's defined for the target arch, which it is for i386 (a
+ * legacy 32-bit-off_t-vs-real-64-bit-off_t compatibility syscall, not
+ * something riscv64 -- 64-bit off_t natively, no such split -- has any
+ * equivalent of), so sys_lseek (syscall_posix.c, shared, and correct
+ * on its own terms) was simply never reached by anything real. Not
+ * shared with syscall_posix.c's own sys_lseek: the argument shape
+ * (offset split across two registers, the result handed back through
+ * a pointer instead of the return register) is different enough that
+ * sharing would mean *this* function reassembling the split offset
+ * and re-deriving syscall_posix.c's return convention right back out
+ * again -- there isn't a meaningful "generic body" left once that's
+ * accounted for, just this. */
+static void sys_llseek(struct regs *r) {
+	unsigned long fd = sys_arg(r, 0);
+	unsigned int offset_high = (unsigned int)sys_arg(r, 1);
+	unsigned int offset_low = (unsigned int)sys_arg(r, 2);
+	unsigned long long *result = (unsigned long long *)sys_arg(r, 3);
+	unsigned long whence = sys_arg(r, 4);
+
+	struct fd_entry *entry = fd >= 3 ? process_fd_get((int)fd - 3) : 0;
+	if (!entry) {
+		sys_ret(r, (unsigned long)-EBADF);
+		return;
+	}
+	unsigned long long size = entry->dynfile ? entry->dynfile->size : entry->size;
+	long long offset = ((long long)offset_high << 32) | (long long)offset_low;
+	long long new_pos;
+	switch (whence) {
+		case 0: new_pos = offset; break;                          /* SEEK_SET */
+		case 1: new_pos = (long long)entry->pos + offset; break;  /* SEEK_CUR */
+		case 2: new_pos = (long long)size + offset; break;        /* SEEK_END */
+		default: sys_ret(r, (unsigned long)-EINVAL); return;
+	}
+	if (new_pos < 0) {
+		sys_ret(r, (unsigned long)-EINVAL);
+		return;
+	}
+	entry->pos = (unsigned long)new_pos;
+	paging_ensure_writable((unsigned long)result, sizeof(*result));
+	*result = (unsigned long long)new_pos;
+	sys_ret(r, 0);
 }
 
 /* arg0=fd, arg1=statbuf -- SYS_fstat (fstat64), reached via musl's
@@ -213,47 +278,20 @@ static void sys_fstat(struct regs *r) {
  * genuinely needed here, unlike sys_stat/sys_fstat above, since a
  * caller reaching this specific syscall might be doing exactly that. */
 static void sys_newfstatat(struct regs *r) {
-	char path[128];
-	int i = 0;
 	const char *user_path = (const char *)sys_arg(r, 1);
-	while (user_path[i] && i < 127) { path[i] = user_path[i]; i++; }
-	path[i] = 0;
 	unsigned char *sb = (unsigned char *)sys_arg(r, 2);
 	paging_ensure_writable((unsigned long)sb, ST_STRUCT_SIZE);
 
 	const char *base = process_current_cwd();
 	long dirfd = (long)sys_arg(r, 0);
-	if (path[0] != '/' && dirfd != -100 /* AT_FDCWD */) {
+	if (user_path[0] != '/' && dirfd != -100 /* AT_FDCWD */) {
 		struct fd_entry *df = dirfd >= 3 ? process_fd_get((int)dirfd - 3) : 0;
 		if (!df || !df->is_dir) { sys_ret(r, (unsigned long)-9 /* EBADF */); return; }
 		base = df->path;
 	}
-	/* cwd-relative resolution, same shape as syscall_posix.c's own
-	 * resolve_path (duplicated rather than shared: that one is
-	 * `static` to this file's sibling, and this is the one place in
-	 * arch/i386/syscall.c that needs it). */
-	char resolved[128];
-	unsigned int n = 0, j = 0;
-	if (path[0] != '/') {
-		const char *b = base[0] == '/' ? base + 1 : base;
-		while (b[n] && n < sizeof(resolved) - 1) { resolved[n] = b[n]; n++; }
-	}
-	while (path[j]) {
-		while (path[j] == '/') j++;
-		unsigned int start = j;
-		while (path[j] && path[j] != '/') j++;
-		unsigned int len = j - start;
-		if (!len || (len == 1 && path[start] == '.')) continue;
-		if (len == 2 && path[start] == '.' && path[start + 1] == '.') {
-			while (n && resolved[n - 1] != '/') n--;
-			if (n) n--;
-			continue;
-		}
-		if (n && n < sizeof(resolved) - 1) resolved[n++] = '/';
-		for (unsigned int k = 0; k < len && n < sizeof(resolved) - 1; k++) resolved[n++] = path[start + k];
-	}
-	resolved[n] = 0;
-
+	char input[PATH_MAX_LOCAL], resolved[PATH_MAX_LOCAL];
+	copy_path_from_user(input, user_path);
+	resolve_path(resolved, input, base);
 	int ret = stat_path(resolved, sb);
 	sys_ret(r, ret < 0 ? (unsigned long)ret : 0);
 }
@@ -276,15 +314,26 @@ static void sys_set_thread_area(struct regs *r) {
 	 * that specific relocation 3 bytes short of the real target
 	 * (confirmed directly: linked a minimal reproduction, checked the
 	 * actual .data address against the relocated immediate by hand).
-	 * The value musl reads back is garbage as a result. Since this
-	 * kernel only ever supports one TLS user at a time anyway and
-	 * always hands out slot 6 regardless of what was requested, the
-	 * simplest correct fix is to just not require entry_number to be
-	 * meaningful -- every real call only cares that base_addr is
-	 * right, which it is. */
+	 * The value musl reads back is garbage as a result. Since every
+	 * real caller only ever gets handed slot 6 anyway (checkpoint 19's
+	 * own struct process.tls_base comment: only one slot is real, per
+	 * process now, not globally), the simplest correct fix is to just
+	 * not require entry_number to be meaningful -- every real call
+	 * only cares that base_addr is right, which it is. */
 	int slot = 6;
 	gdt_set_tls_entry(slot, base_addr);
 	desc[0] = (unsigned int)slot; /* kernel writes the allocated slot back */
+
+	/* checkpoint 19: remember it against *this* process -- see struct
+	 * process's own tls_base comment for the real bug this fixes.
+	 * process_get_current() is 0 for the original one-shot P4/P5
+	 * ring3 test (predates process_init() entirely, same as every
+	 * other process_get_current()-checking call site in this kernel),
+	 * which never needed more than one live TLS user to begin with. */
+	struct process *p = process_get_current();
+	if (p)
+		p->tls_base = base_addr;
+
 	sys_ret(r, 0);
 }
 
@@ -319,11 +368,13 @@ static void syscall_dispatch(struct regs *r) {
 	case SYS_close:                                                                            sys_close(r); return;
 	case SYS_read:                                                                                sys_read(r); return;
 	case SYS_lseek:                                                                                  sys_lseek(r); return;
+	case SYS__llseek:                                                                                 sys_llseek(r); return;
 	case SYS_unlink:                                                                                    sys_unlink(r); return;
 	case SYS_execve:                                                                                       sys_execve(r); return;
 	case SYS_getcwd:                                                                                          sys_getcwd(r); return;
 	case SYS_chdir:                                                                                             sys_chdir(r); return;
 	case SYS_stat:                                                                                                 sys_stat(r); return;
+	case SYS_lstat:                                                                                                sys_lstat(r); return;
 	case SYS_fstat:                                                                                                   sys_fstat(r); return;
 	case SYS_newfstatat:                                                                                              sys_newfstatat(r); return;
 	case SYS_getdents64:                                                                                                 sys_getdents64(r); return;
@@ -332,6 +383,25 @@ static void syscall_dispatch(struct regs *r) {
 	case SYS_dup3:                                                                                                                sys_dup3(r); return;
 	case SYS_access:                                                                                                                 sys_access(r); return;
 	case SYS_faccessat:                                                                                                                 sys_faccessat(r); return;
+	/* Real bug, found running real busybox ash for the first time:
+	 * musl's own src/stat/fstatat.c always tries SYS_statx *first*
+	 * (unconditionally on every real stat()/fstat()/fstatat() call --
+	 * confirmed by reading it, this file's own header comment already
+	 * covers why), and only falls back to SYS_stat/SYS_fstat/
+	 * SYS_newfstatat (all implemented above, and already proven
+	 * correct on their own) once statx itself reports -ENOSYS. Every
+	 * ash PATH lookup calls this at least once, so leaving it to fall
+	 * through to the loud default case below would print "FATAL:" on
+	 * every single command typed -- alarming, and would fail this
+	 * kernel's own --must-not-contain "FATAL" test convention, for a
+	 * syscall whose *correct* answer really is "not implemented, try
+	 * something else" (implementing statx for real would mean a whole
+	 * second struct-stat-shaped layout, `struct statx`, for something
+	 * every real caller here already gets an equally correct answer
+	 * from one syscall later). */
+	case SYS_statx:
+		r->eax = (unsigned int)-ENOSYS;
+		return;
 	default:
 		kprintf("FATAL: unimplemented syscall %u\n", r->eax);
 		r->eax = (unsigned int)-ENOSYS;

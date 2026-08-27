@@ -28,6 +28,7 @@
 #include "idt.h"
 #include "mm/pmm.h"
 #include "mm/paging.h"
+#include "sched/process.h"
 
 #define ENTRIES 1024
 
@@ -278,7 +279,8 @@ static void page_fault_handler(struct regs *r) {
 		present ? "present" : "not-present",
 		is_write ? "write" : "read",
 		from_user ? "user" : "kernel");
-	kprintf("FATAL: unhandled page fault, eip=%p\n", (void *)(unsigned long)r->eip);
+	kprintf("FATAL: unhandled page fault, eip=%p pid=%d esp=%p\n", (void *)(unsigned long)r->eip,
+		process_current_pid(), (void *)(unsigned long)r->useresp);
 	for (;;) __asm__ volatile ("cli\n hlt");
 }
 

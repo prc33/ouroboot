@@ -2,8 +2,9 @@
 # Clones the real upstream busybox (not a vendored copy) at the exact
 # version this project tested against, tries building it under our
 # TCC completely unpatched first -- which fails in two different ways
-# -- then applies patches/busybox-i386-tcc-compat.patch and adds the one
-# fix that ISN'T a source patch (a compiler-flag spoof, explained
+# -- then applies patches/busybox-tcc-compat.patch (arch-independent --
+# see that patch's own history for why it's not per-arch) and adds the
+# one fix that ISN'T a source patch (a compiler-flag spoof, explained
 # below) to build successfully. See docs/busybox-findings.md for the
 # full narrative; this script is the reproducible, minimal proof.
 #
@@ -35,9 +36,9 @@ cd "$HERE/busybox"
 echo "HEAD: $(git rev-parse HEAD)"
 
 TCCDIR="$(dirname "$TCC")"
-# Consumed by patches/busybox-i386-tcc-compat.patch's scripts/trylink
-# hunk, which needs musl's/libtcc1.a's startfiles but has no other way
-# to learn where they live -- see that patch for why.
+# Consumed by patches/busybox-tcc-compat.patch's scripts/trylink hunk,
+# which needs musl's/libtcc1.a's startfiles but has no other way to
+# learn where they live -- see that patch for why.
 export MUSL_LIBDIR="$MUSL/lib"
 export TCC_LIBDIR="$TCCDIR"
 plain_wrapper() {
@@ -113,16 +114,22 @@ fi
 git checkout -q -- scripts/Makefile.lib scripts/Makefile.host
 
 echo ""
-echo "=== applying patches/busybox-i386-tcc-compat.patch ==="
+echo "=== applying patches/busybox-tcc-compat.patch ==="
 git checkout -q -- . 2>/dev/null || true
 git clean -qfdx 2>/dev/null || true
-git apply "$HERE/patches/busybox-i386-tcc-compat.patch"
-echo "    applied: .config (minimal applet set + CONFIG_LFS=y -- musl always"
-echo "    uses 64-bit off_t, matching a check busybox's own libbb.h already"
-echo "    makes), the -Wp,-MD fix, and three TCC linker-limitation fixes in"
-echo "    scripts/trylink (no --start-group support, an EXTRA_LDFLAGS leak"
-echo "    into intermediate partial-link steps, and unsupported diagnostic-"
-echo "    only linker flags). Full detail: docs/busybox-findings.md."
+git apply "$HERE/patches/busybox-tcc-compat.patch"
+echo "    applied: the -Wp,-MD fix, and three TCC linker-limitation fixes"
+echo "    in scripts/trylink (no --start-group support, an EXTRA_LDFLAGS"
+echo "    leak into intermediate partial-link steps, and unsupported"
+echo "    diagnostic-only linker flags). Full detail: docs/busybox-findings.md."
+echo "    (.config isn't part of the patch -- minimal_config() regenerates"
+echo "    the same minimal applet set + CONFIG_LFS=y used for attempt 1"
+echo "    above; musl always uses 64-bit off_t, matching a check busybox's"
+echo "    own libbb.h already makes. Verified byte-for-byte equivalent to"
+echo "    the .config this patch used to carry as a checked-in file, minus"
+echo "    one stale CONFIG_PLATFORM_LINUX line that isn't even a real"
+echo "    busybox 1.36.1 Kconfig symbol -- inert either way.)"
+minimal_config
 
 echo ""
 echo "=== attempt 2: patched busybox + GCC-version-spoofed TCC ==="
@@ -132,11 +139,6 @@ echo "     satisfy __GNUC_PREREQ(2,7) and unlock __attribute__, but below"
 echo "     __GNUC_PREREQ(3,0) and (4,1), which gate regparm/stdcall and a"
 echo "     GCC visibility pragma TCC confirmed it does NOT support)"
 patched_wrapper
-# Not using the patch's own build.sh here: it assumes busybox sits as
-# a sibling of tcc/musl, which is a fine assumption for someone using
-# the patched tree standalone (see its own comments) but doesn't match
-# this script's layout (busybox cloned *under* demo-tcc-gaps/). Same
-# build command either way, just with this script's own path vars.
 if make CC=/tmp/bb-wrapper-patched.sh AR=ar STRIP=strip SKIP_STRIP=y \
 	EXTRA_LDFLAGS="-static -nostdlib" -j1 \
 	> /tmp/busybox-patched-build.log 2>&1; then

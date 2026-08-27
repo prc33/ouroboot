@@ -46,11 +46,24 @@ CFLAGS  := -B$(TCCDIR) -I$(TCCINC) -I. -Wall -nostdinc -fno-stack-protector -ffr
 
 ifeq ($(ARCH),i386)
 LDFLAGS := -B$(TCCDIR) -nostdlib -static -Wl,-Ttext=0x100000
+# checkpoint 20 (docs/repo-review-2026-08-26.md section 4): arch/i386/pit.o
+# (the PIT-driven timer, only ever used to pace the superseded P4
+# fixed-2-task scheduler demo), arch/i386/usermode.o (enter_usermode(),
+# only ever used to enter ring3 directly, outside the process table --
+# superseded by arch/i386/process.c's i386_trap_return()), and
+# arch/i386/task.o (that same P4 scheduler's own struct task/task_yield
+# API, superseded by sched/process.c from checkpoint 17 onward) are
+# deliberately *not* here -- the product kernel never calls any of
+# them. All three are added back for I386_CHECKPOINT_OBJS below, which
+# the historical P4/P5 regression chain (test/i386_checkpoints.c) still
+# exercises. arch/i386/switch_context.o stays: it's the generic
+# coroutine primitive both the old P4 scheduler *and* the real process
+# table (sched/process.c, via arch/i386/process.c) build on.
 OBJS := arch/i386/boot.o arch/i386/kmain.o arch/i386/serial.o drivers/kprintf.o \
-        arch/i386/gdt.o arch/i386/idt.o arch/i386/isr_stubs.o arch/i386/pic.o arch/i386/pit.o \
-        arch/i386/usermode.o arch/i386/syscall_stub.o arch/i386/syscall.o syscall_common.o syscall_posix.o \
-        mm/pmm.o arch/i386/paging.o mm/paging_common.o mm/elf.o mm/ramfs.o \
-        arch/i386/task.o arch/i386/switch_context.o \
+        arch/i386/gdt.o arch/i386/idt.o arch/i386/isr_stubs.o arch/i386/pic.o \
+        arch/i386/syscall_stub.o arch/i386/syscall.o syscall_common.o syscall_posix.o \
+        mm/pmm.o arch/i386/paging.o mm/paging_common.o mm/elf.o mm/ramfs.o mm/tar.o \
+        arch/i386/switch_context.o \
         arch/i386/process.o arch/i386/i386_process_return.o sched/process.o \
         arch/i386/kend.o
 else ifeq ($(ARCH),riscv64)
@@ -96,7 +109,8 @@ $(error unknown ARCH '$(ARCH)' -- expected i386 or riscv64)
 endif
 
 .PHONY: all test test-wasm shell-wasm test-initrd test-initrd-wasm \
-	test-selfhost tcc-initrd selfhost-initrd clean
+	test-selfhost tcc-initrd selfhost-initrd selfhost-initrd-i386 \
+	test-busybox clean
 
 all: kernel.elf
 
@@ -127,9 +141,51 @@ $(RISCV64_USER_ELFS): user_test/%_riscv64.elf: user_test/%_riscv64.c
 user_test/user_test_riscv64.elf: user_test/user_test_riscv64.c
 	$(TCC) -B$(TCCDIR) -nostdinc -nostdlib -static -Wl,-Ttext=0x800000 -o $@ $<
 
+# i386 counterpart of the riscv64 rule above -- same shape, different
+# musl tree (checkpoint 19, docs/kernel-arch-split-plan.md). $(TCC)
+# itself must already be built TARGET=i386 for this to link correctly
+# (same "rebuild the compiler for the ARCH you're about to build"
+# discipline the rest of this Makefile's own comments describe).
+MUSL_DIR_I386 := ../musl-i386
+user_test/%_i386.elf: user_test/%_i386.c
+	$(TCC) -B$(TCCDIR) -I$(TCCINC) -I$(MUSL_DIR_I386)/obj/include \
+		-I$(MUSL_DIR_I386)/include -I$(MUSL_DIR_I386)/arch/i386 \
+		-I$(MUSL_DIR_I386)/arch/generic -nostdinc -static -nostdlib -o $@ \
+		$(MUSL_DIR_I386)/lib/crt1.o $(MUSL_DIR_I386)/lib/crti.o $< \
+		$(MUSL_DIR_I386)/lib/libc.a $(TCCDIR)/libtcc1.a $(MUSL_DIR_I386)/lib/crtn.o
+
 ifeq ($(ARCH),i386)
-test: kernel.elf
-	python3 test/boot_test.py kernel.elf \
+# kernel.elf itself is the product boot (arch/i386/kmain.c's kmain(),
+# built with the default OBJS above) -- `test` needs the separate
+# historical-checkpoint-chain variant below instead, mirroring
+# riscv64's own RISCV64_CHECKPOINT_OBJS exactly (checkpoint 20,
+# docs/repo-review-2026-08-26.md section 4): arch/i386/task.o/pit.o/
+# usermode.o are added back here since only the checkpoint chain
+# (test/i386_checkpoints.c) still uses them, and
+# arch/i386/kmain_checkpoints.o (this same kmain.c, compiled with
+# -DKERNEL_CHECKPOINTS so its own kmain() calls run_checkpoint_boot()
+# instead of booting straight to BusyBox) replaces the product
+# arch/i386/kmain.o.
+I386_CHECKPOINT_OBJS := $(patsubst arch/i386/kmain.o,arch/i386/kmain_checkpoints.o,$(OBJS)) \
+	arch/i386/task.o arch/i386/pit.o arch/i386/usermode.o test/i386_checkpoints.o
+
+arch/i386/kmain_checkpoints.o: arch/i386/kmain.c kernel.h
+	$(TCC) $(CFLAGS) -DKERNEL_CHECKPOINTS -c -o $@ $<
+
+kernel-checkpoints.elf: $(I386_CHECKPOINT_OBJS)
+	$(TCC) $(LDFLAGS) -o $@ $(I386_CHECKPOINT_OBJS)
+
+# P5 checkpoint 2's real musl+TCC binary (user_test/hello_i386.c,
+# checkpoint 20) is now a real initrd file instead of an embedded hex
+# dump -- see test/i386_checkpoints.c's own header comment. This is
+# the checkpoint chain's *own* small initrd, distinct from
+# test-initrd's/test-busybox's product-boot ones below.
+test: kernel-checkpoints.elf user_test/hello_i386.elf
+	rm -rf /tmp/initrd-i386-cp-stage && mkdir -p /tmp/initrd-i386-cp-stage
+	cp user_test/hello_i386.elf /tmp/initrd-i386-cp-stage/hello
+	tar cf initrd-i386-checkpoints.tar -C /tmp/initrd-i386-cp-stage hello
+	python3 test/boot_test.py kernel-checkpoints.elf \
+		--qemu-arg=-initrd --qemu-arg=initrd-i386-checkpoints.tar \
 		--must-contain "multiboot magic OK" \
 		--must-contain "mem_lower" \
 		--must-contain "gdt: loaded" \
@@ -138,6 +194,7 @@ test: kernel.elf
 		--must-contain "breakpoint: int3 handled and resumed OK" \
 		--must-contain "pmm:" \
 		--must-contain "paging: identity-mapped" \
+		--must-contain "initrd: 1 file(s) loaded from tar" \
 		--must-contain "COW test: parent=1 child=2 OK" \
 		--must-contain "pit: channel 0" \
 		--must-contain "TASK A" \
@@ -157,6 +214,99 @@ test: kernel.elf
 		--must-contain "P5 checkpoint 2 OK" \
 		--must-not-contain "FATAL" \
 		--must-not-contain "UNHANDLED EXCEPTION" \
+		--must-not-contain "PAGE FAULT"
+
+# checkpoint 19: real process table + real fork()/wait4()/COW, driven
+# by a genuine Multiboot module -- QEMU's own `-initrd` flag, unlike
+# riscv64's `-device loader,addr=...` (i386 has no fixed physical
+# initrd address the way arch/risc/riscv64_memmap.h's RV64_INITRD_BASE
+# is; a Multiboot module's address is whatever the loader picks,
+# discovered at runtime via kmain.c's own multiboot_info parsing).
+# Packaged under the name "busybox" -- deliberately, even though this
+# specific target still uses the smaller, deterministic fork/wait4/COW
+# test payload rather than a real BusyBox (test-busybox below is that
+# one): it's the exact same filename the product boot path
+# (kmain()'s own #else branch, arch/i386/kmain.c) actually loads, so
+# this target keeps exercising process_create_from_elf_argv()'s own real
+# code path, not a parallel one.
+test-initrd: kernel.elf user_test/proc_fork_test_i386.elf
+	rm -rf /tmp/initrd-i386-stage && mkdir -p /tmp/initrd-i386-stage
+	cp user_test/proc_fork_test_i386.elf /tmp/initrd-i386-stage/busybox
+	tar cf initrd-i386.tar -C /tmp/initrd-i386-stage busybox
+	python3 test/boot_test.py kernel.elf \
+		--qemu-arg=-initrd --qemu-arg=initrd-i386.tar \
+		--must-contain "multiboot: initrd module at" \
+		--must-contain "initrd: 1 file(s) loaded from tar" \
+		--must-contain "process: init process created" \
+		--must-contain "child counter=42" \
+		--must-contain "parent counter=1 reaped_pid_ok=1 child_status=7" \
+		--must-contain "process: all processes exited" \
+		--must-not-contain "FATAL" \
+		--must-not-contain "UNHANDLED EXCEPTION" \
+		--must-not-contain "PAGE FAULT"
+
+# checkpoint 19: a real upstream BusyBox (demo/build-busybox-i386.sh --
+# see docs/busybox-findings.md for how it's built and made to link
+# under our own stripped TCC), interactively driving real ash, real
+# fork()/exec() (`expr` is BusyBox's own separate applet dispatch, not
+# a shell builtin), and the writable ramfs (`echo ... > file`) -- the
+# fullest exercise of this whole i386 self-hosting phase's syscall
+# surface short of actually self-hosting TCC itself (that's
+# test-selfhost's own job, riscv64-only so far).
+#
+# user_test/busybox_i386.elf isn't built by this Makefile (same as
+# user_test/busybox_riscv64.elf never has been -- see .gitignore, both
+# are real ~500KB+ binaries, deliberately not committed): run
+# `demo/build-busybox-i386.sh` (needs `../compiler/tcc` already built
+# TARGET=i386 and ../musl-i386 already built) and copy the resulting
+# demo/busybox/busybox_unstripped here first.
+test-busybox: kernel.elf user_test/busybox_i386.elf
+	rm -rf /tmp/initrd-i386-bb-stage && mkdir -p /tmp/initrd-i386-bb-stage
+	cp user_test/busybox_i386.elf /tmp/initrd-i386-bb-stage/busybox
+	tar cf initrd-i386-bb.tar -C /tmp/initrd-i386-bb-stage busybox
+	python3 test/boot_test.py kernel.elf \
+		--qemu-arg=-initrd --qemu-arg=initrd-i386-bb.tar \
+		--stdin-input "\r\recho hello ash\rexpr 6 \\* 7\recho writable-fs-works > wtest\rcat wtest\rls\rexit 7\r" \
+		--must-contain "BusyBox v1.36.1" \
+		--must-contain "hello ash" \
+		--must-contain "42" \
+		--must-contain "writable-fs-works" \
+		--must-contain "wtest" \
+		--must-contain "process: all processes exited" \
+		--must-not-contain "FATAL" \
+		--must-not-contain "UNHANDLED EXCEPTION" \
+		--must-not-contain "PAGE FAULT"
+
+# checkpoint 19's closure: the same "TCC compiles TCC, inside our
+# kernel" proof riscv64's own test-selfhost has had since checkpoint
+# 14, now for i386 -- see that target's own comment (below, in the
+# riscv64 branch) for what each piece is and why. Mirrors it file for
+# file: test/build-selfhost-initrd-i386.sh in place of
+# test/build-selfhost-initrd.sh, compiler/stage1/tcc built TARGET=i386
+# instead of TARGET=riscv64, musl-i386 instead of musl-riscv64.
+selfhost-initrd-i386: user_test/busybox_i386.elf
+	$(MAKE) -C ../compiler clean
+	$(MAKE) -C ../compiler TARGET=i386 stage1
+	sh test/build-selfhost-initrd-i386.sh .. $@.tar
+
+I386_SELFHOST_INPUT := \r\rls\rls tcc-src\rcd tcc-src\rpwd\rcd /\rash /selfhost.sh\rexit 7\r
+
+test-selfhost: kernel.elf
+	$(MAKE) selfhost-initrd-i386
+	python3 test/boot_test.py kernel.elf \
+		--qemu-arg=-initrd --qemu-arg=selfhost-initrd-i386.tar \
+		--mem 128 --timeout 60 \
+		--stdin-input "$(I386_SELFHOST_INPUT)" \
+		--must-contain "SELFHOST: stage1 compiling TCC" \
+		--must-contain "tcc-src" \
+		--must-contain "musl" \
+		--must-contain "/tcc-src" \
+		--must-contain "SELFHOST: stage2 runs" \
+		--must-contain "tcc version 0.9.27-rv64min (i386 Linux)" \
+		--must-contain "hello from stage2 tcc" \
+		--must-contain "SELFHOST: complete" \
+		--must-contain "process: all processes exited" \
+		--must-not-contain "FATAL" \
 		--must-not-contain "PAGE FAULT"
 else
 # Shared between `test` (QEMU) and `test-wasm` (our C/Wasm emulator --
@@ -423,4 +573,8 @@ clean:
 	rm -f kernel.elf kernel-checkpoints.elf arch/risc/riscv64_kmain_checkpoints.o \
 		arch/risc/riscv64_task.o test/riscv64_checkpoints.o initrd.tar \
 		tcc-initrd.tar selfhost-initrd.tar $(RISCV64_USER_ELFS) \
-		user_test/user_test_riscv64.elf $(OBJS)
+		user_test/user_test_riscv64.elf \
+		arch/i386/kmain_checkpoints.o test/i386_checkpoints.o \
+		initrd-i386-checkpoints.tar initrd-i386.tar initrd-i386-bb.tar \
+		selfhost-initrd-i386.tar user_test/hello_i386.elf \
+		user_test/proc_fork_test_i386.elf $(OBJS)

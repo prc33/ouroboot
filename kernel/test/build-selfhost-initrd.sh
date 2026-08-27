@@ -26,7 +26,12 @@ cp "$root"/compiler/*.c "$root"/compiler/*.h "$stage/tcc-src/"
 cp "$root"/compiler/*.def "$stage/tcc-src/"
 cp "$root"/compiler/i386/*.c "$root"/compiler/i386/*.h \
     "$root"/compiler/i386/*.S "$stage/tcc-src/i386/"
-cp "$root"/compiler/risc/*.c "$root"/compiler/risc/*.S "$stage/tcc-src/risc/"
+# riscv64 has no integrated assembler for real instructions (see
+# compiler/Makefile's own header comment) and, since
+# risc/fetch_and_add_riscv64.S was deleted as dead weight (unused by
+# any target's build -- docs/repo-review-2026-08-26.md section 3),
+# no .S file at all: an unmatched *.S glob here would fail outright.
+cp "$root"/compiler/risc/*.c "$stage/tcc-src/risc/"
 cp "$root"/compiler/wasm/*.c "$root"/compiler/wasm/*.h "$stage/tcc-src/wasm/"
 cp "$root"/compiler/include/*.h "$stage/tcc-src/include/"
 cp "$root"/compiler/libtcc1.a "$stage/tcc-src/"
