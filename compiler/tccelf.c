@@ -839,8 +839,6 @@ ST_FUNC void relocate_section(TCCState *s1, Section *s)
     unsigned char *ptr;
     addr_t tgt, addr;
 
-    qrel = (ElfW_Rel *)sr->data;
-
     for_each_elem(sr, 0, rel, ElfW_Rel) {
         ptr = s->data + rel->r_offset;
         sym_index = ELFW(R_SYM)(rel->r_info);
@@ -856,9 +854,6 @@ ST_FUNC void relocate_section(TCCState *s1, Section *s)
     /* if the relocation is allocated, we change its symbol table */
     if (sr->sh_flags & SHF_ALLOC) {
         sr->link = s1->dynsym;
-        if (s1->output_type == TCC_OUTPUT_DLL) {
-            sr->data_offset = sr->sh_size = (uint8_t*)qrel - sr->data;
-        }
     }
 }
 
@@ -872,52 +867,6 @@ static void relocate_rel(TCCState *s1, Section *sr)
     s = s1->sections[sr->sh_info];
     for_each_elem(sr, 0, rel, ElfW_Rel)
         rel->r_offset += s->sh_addr;
-}
-
-/* count the number of dynamic relocations so that we can reserve
-   their space */
-static int prepare_dynamic_rel(TCCState *s1, Section *sr)
-{
-    int count = 0;
-#if defined(TCC_TARGET_I386) || defined(TCC_TARGET_RISCV64)
-    ElfW_Rel *rel;
-    for_each_elem(sr, 0, rel, ElfW_Rel) {
-        int sym_index = ELFW(R_SYM)(rel->r_info);
-        int type = ELFW(R_TYPE)(rel->r_info);
-        switch(type) {
-#if defined(TCC_TARGET_I386)
-#if defined(TCC_TARGET_I386)
-        case R_386_32:
-            if (!get_sym_attr(s1, sym_index, 0)->dyn_index
-                && ((ElfW(Sym)*)symtab_section->data + sym_index)->st_shndx == SHN_UNDEF) {
-                /* don't fixup unresolved (weak) symbols */
-                rel->r_info = ELFW(R_INFO)(sym_index, R_386_RELATIVE);
-                break;
-            }
-#elif defined(TCC_TARGET_RISCV64)
-        case R_RISCV_32:
-        case R_RISCV_64:
-#endif
-            count++;
-            break;
-#if defined(TCC_TARGET_I386)
-        case R_386_PC32:
-#endif
-            if (get_sym_attr(s1, sym_index, 0)->dyn_index)
-                count++;
-            break;
-#endif
-        default:
-            break;
-        }
-    }
-    if (count) {
-        /* allocate the section */
-        sr->sh_flags |= SHF_ALLOC;
-        sr->sh_size = count * sizeof(ElfW_Rel);
-    }
-#endif
-    return count;
 }
 #endif
 
@@ -1061,8 +1010,6 @@ ST_FUNC void build_got_entries(TCCState *s1)
                 if (sym->st_shndx == SHN_UNDEF) {
                     ElfW(Sym) *esym;
 		    int dynindex;
-                    if (s1->output_type == TCC_OUTPUT_DLL && ! PCRELATIVE_DLLPLT)
-                        continue;
 		    /* Relocations for UNDEF symbols would normally need
 		       to be transferred into the executable or shared object.
 		       If that were done AUTO_GOTPLT_ENTRY wouldn't exist.
@@ -1166,14 +1113,6 @@ ST_FUNC void tcc_add_runtime(TCCState *s1)
         if (s1->option_pthread)
             tcc_add_library_err(s1, "pthread");
         tcc_add_library_err(s1, "c");
-#ifdef TCC_LIBGCC
-        if (!s1->static_link) {
-            if (TCC_LIBGCC[0] == '/')
-                tcc_add_file(s1, TCC_LIBGCC);
-            else
-                tcc_add_dll(s1, TCC_LIBGCC, 0);
-        }
-#endif
         tcc_add_support(s1, TCC_LIBTCC1);
         tcc_add_crt(s1, "crtn.o");
     }
@@ -1456,18 +1395,6 @@ static int alloc_sec_names(TCCState *s1, int file_type, Section *strsec)
     /* Allocate strings for section names */
     for(i = 1; i < s1->nb_sections; i++) {
         s = s1->sections[i];
-        /* when generating a DLL, we include relocations but we may
-           patch them */
-#ifndef ELF_OBJ_ONLY
-        if (file_type == TCC_OUTPUT_DLL &&
-            s->sh_type == SHT_RELX &&
-            !(s->sh_flags & SHF_ALLOC) &&
-            (s1->sections[s->sh_info]->sh_flags & SHF_ALLOC) &&
-            prepare_dynamic_rel(s1, s)) {
-            if (!(s1->sections[s->sh_info]->sh_flags & SHF_WRITE))
-                textrel = 1;
-        } else
-#endif
         if (file_type == TCC_OUTPUT_OBJ ||
             (s->sh_flags & SHF_ALLOC) ||
 	    i == (s1->nb_sections - 1)
@@ -1528,10 +1455,7 @@ static int layout_sections(TCCState *s1, ElfW(Phdr) *phdr, int phnum,
                 a_offset += s_align;
             file_offset += (a_offset - p_offset);
         } else {
-            if (file_type == TCC_OUTPUT_DLL)
-                addr = 0;
-            else
-                addr = ELF_START_ADDR;
+            addr = ELF_START_ADDR;
             /* compute address after headers */
             addr += (file_offset & (s_align - 1));
         }
@@ -2050,9 +1974,6 @@ static int elf_output_file(TCCState *s1, const char *filename)
                 if (s1->nb_errors)
                     goto the_end;
                 bind_libs_dynsyms(s1);
-            } else {
-                /* shared library case: simply export all global symbols */
-                export_global_syms(s1);
             }
         }
         build_got_entries(s1);
@@ -2128,8 +2049,7 @@ static int elf_output_file(TCCState *s1, const char *filename)
 
             /* put in GOT the dynamic section address and relocate PLT */
             write32le(s1->got->data, dynamic->sh_addr);
-            if (file_type == TCC_OUTPUT_EXE
-                || (RELOCATE_DLLPLT && file_type == TCC_OUTPUT_DLL))
+            if (file_type == TCC_OUTPUT_EXE)
                 relocate_plt(s1);
 
             /* relocate symbols in .dynsym now that final addresses are known */
@@ -2141,8 +2061,7 @@ static int elf_output_file(TCCState *s1, const char *filename)
             }
         }
 
-        /* if building executable or DLL, then relocate each section
-           except the GOT which is already relocated */
+        /* Relocate each section except the GOT, which is already relocated. */
         ret = final_sections_reloc(s1);
         if (ret)
             goto the_end;
@@ -2641,10 +2560,3 @@ ST_FUNC int tcc_load_archive(TCCState *s1, int fd, int alacarte)
         file_offset += size;
     }
 }
-
-/* Upstream TCC continues here with DLL loading (tcc_load_dll), ELF
- * symbol-version parsing (set_ver_to_ver/set_sym_version/store_version)
- * and GNU-ld-script parsing (ld_next/ld_add_file_list/tcc_load_ldscript).
- * All removed: this project links -static only, never opens a .so, and
- * has never been handed a linker script. See
- * docs/compiler-file-review-2026-08-27.md section D. */

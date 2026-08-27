@@ -918,8 +918,6 @@ ST_FUNC void ggoto(void)
     vtop--;
 }
 
-/* bound check support functions */
-
 /* Save the stack pointer onto the stack */
 ST_FUNC void gen_vla_sp_save(int addr) {
     /* mov %esp,addr(%ebp)*/

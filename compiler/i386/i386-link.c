@@ -86,11 +86,7 @@ ST_FUNC unsigned create_plt_entry(TCCState *s1, unsigned got_offset, struct sym_
     int modrm;
     unsigned plt_offset, relofs;
 
-    /* on i386 if we build a DLL, we add a %ebx offset */
-    if (s1->output_type == TCC_OUTPUT_DLL)
-        modrm = 0xa3;
-    else
-        modrm = 0x25;
+    modrm = 0x25;
 
     /* empty PLT: create PLT0 entry that pushes the library identifier
        (GOT + PTR_SIZE) and jumps to ld.so resolution routine
@@ -149,37 +145,15 @@ ST_FUNC void relocate_plt(TCCState *s1)
 
 void relocate(TCCState *s1, ElfW_Rel *rel, int type, unsigned char *ptr, addr_t addr, addr_t val)
 {
-    int sym_index, esym_index;
+    int sym_index;
 
     sym_index = ELFW(R_SYM)(rel->r_info);
 
     switch (type) {
         case R_386_32:
-            if (s1->output_type == TCC_OUTPUT_DLL) {
-                esym_index = get_sym_attr(s1, sym_index, 0)->dyn_index;
-                qrel->r_offset = rel->r_offset;
-                if (esym_index) {
-                    qrel->r_info = ELFW(R_INFO)(esym_index, R_386_32);
-                    qrel++;
-                    return;
-                } else {
-                    qrel->r_info = ELFW(R_INFO)(0, R_386_RELATIVE);
-                    qrel++;
-                }
-            }
             add32le(ptr, val);
             return;
         case R_386_PC32:
-            if (s1->output_type == TCC_OUTPUT_DLL) {
-                /* DLL relocation */
-                esym_index = get_sym_attr(s1, sym_index, 0)->dyn_index;
-                if (esym_index) {
-                    qrel->r_offset = rel->r_offset;
-                    qrel->r_info = ELFW(R_INFO)(esym_index, R_386_PC32);
-                    qrel++;
-                    return;
-                }
-            }
             add32le(ptr, val - addr);
             return;
         case R_386_PLT32:

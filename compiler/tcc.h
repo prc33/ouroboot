@@ -327,11 +327,8 @@ struct SymAttr {
     packed      : 1,
     weak        : 1,
     visibility  : 2,
-    dllexport   : 1,
-    nodecorate  : 1,
-    dllimport   : 1,
     addrtaken   : 1,
-    xxxx        : 3; /* not used */
+    xxxx        : 6; /* not used */
 };
 
 /* function attributes or temporary attributes for parsing */
@@ -344,8 +341,7 @@ struct FuncAttr {
     func_dtor   : 1, /* attribute((destructor)) */
     func_args   : 8, /* PE __stdcall args */
     func_alwinl : 1, /* always_inline */
-    no_bcheck   : 1, /* no bound checking */
-    xxxx        :14;
+    xxxx        :15;
 };
 
 /* symbol management */
@@ -741,10 +737,6 @@ struct filespec {
 #define VT_SYM       0x0200  /* a symbol value is added */
 #define VT_MUSTCAST  0x0C00  /* value must be casted to be correct (used for
                                 char/short stored in integer registers) */
-#define VT_MUSTBOUND 0x4000  /* bound checking must be done before
-                                dereferencing value */
-#define VT_BOUNDED   0x8000  /* value is bounded. The address of the
-                                bounding function call point is in vc */
 /* types */
 #define VT_BTYPE       0x000f  /* mask for basic type */
 #define VT_VOID             0  /* void type */
@@ -1033,7 +1025,6 @@ ST_FUNC void tcc_close(void);
 ST_FUNC int tcc_add_file_internal(TCCState *s1, const char *filename, int flags);
 /* flags: */
 #define AFF_PRINT_ERROR     0x10 /* print error if file not found */
-#define AFF_REFERENCED_DLL  0x20 /* load a referenced dll from another dll */
 #define AFF_TYPE_BIN        0x40 /* file to add is binary */
 #define AFF_WHOLE_ARCHIVE   0x80 /* load all objects from archive */
 /* s->filetype: */
@@ -1050,7 +1041,6 @@ ST_FUNC int tcc_add_file_internal(TCCState *s1, const char *filename, int flags)
 #ifndef ELF_OBJ_ONLY
 ST_FUNC int tcc_add_crt(TCCState *s, const char *filename);
 #endif
-ST_FUNC int tcc_add_dll(TCCState *s, const char *filename, int flags);
 ST_FUNC void tcc_add_pragma_libs(TCCState *s1);
 PUB_FUNC int tcc_add_library_err(TCCState *s, const char *f);
 PUB_FUNC void tcc_print_stats(TCCState *s, unsigned total_time);
@@ -1433,8 +1423,6 @@ ST_FUNC void asm_clobber(uint8_t *clobber_regs, const char *str);
 #define bss_section         TCC_STATE_VAR(bss_section)
 #define common_section      TCC_STATE_VAR(common_section)
 #define cur_text_section    TCC_STATE_VAR(cur_text_section)
-#define bounds_section      TCC_STATE_VAR(bounds_section)
-#define lbounds_section     TCC_STATE_VAR(lbounds_section)
 #define symtab_section      TCC_STATE_VAR(symtab_section)
 #define gnu_ext             TCC_STATE_VAR(gnu_ext)
 #define tcc_error_noabort   TCC_SET_STATE(_tcc_error_noabort)

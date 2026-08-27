@@ -139,9 +139,6 @@
      DEF(TOK_MODE_SI, "__SI__")
      DEF(TOK_MODE_word, "__word__")
 
-     DEF(TOK_DLLEXPORT, "dllexport")
-     DEF(TOK_DLLIMPORT, "dllimport")
-     DEF(TOK_NODECORATE, "nodecorate")
      DEF(TOK_NORETURN1, "noreturn")
      DEF(TOK_NORETURN2, "__noreturn__")
      DEF(TOK_NORETURN3, "_Noreturn")
@@ -243,8 +240,6 @@
      DEF(TOK___gttf2, "__gttf2")
      DEF(TOK___getf2, "__getf2")
 #endif
-
-/* bound checking symbols */
 
 /* Tiny Assembler */
  DEF_ASMDIR(byte)              /* must be first directive */

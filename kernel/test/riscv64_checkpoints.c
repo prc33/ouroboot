@@ -40,7 +40,9 @@ static void run_cow_test(void) {
 	*(volatile int *)shared_phys = 0xAAAA; /* via identity map, pre-COW */
 
 	paging_map_page(VA_PARENT, shared_phys, PTE_PRESENT | PTE_COW);
+	pmm_retain_page((unsigned int)shared_phys);
 	paging_map_page(VA_CHILD, shared_phys, PTE_PRESENT | PTE_COW);
+	pmm_retain_page((unsigned int)shared_phys);
 
 	unsigned int before = pmm_free_pages();
 

@@ -985,9 +985,6 @@ static void merge_symattr(struct SymAttr *sa, struct SymAttr *sa1)
 	  vis = sa1->visibility;
 	sa->visibility = vis;
     }
-    sa->dllexport |= sa1->dllexport;
-    sa->nodecorate |= sa1->nodecorate;
-    sa->dllimport |= sa1->dllimport;
 }
 
 /* Merge function attributes.  */
@@ -1005,8 +1002,6 @@ static void merge_funcattr(struct FuncAttr *fa, struct FuncAttr *fa1)
       fa->func_ctor = 1;
     if (fa1->func_dtor)
       fa->func_dtor = 1;
-    if (fa1->no_bcheck)
-      fa->no_bcheck = 1;
 }
 
 /* Merge attributes.  */
@@ -1215,10 +1210,7 @@ ST_FUNC void save_reg_upstack(int r, int n)
             }
             /* mark that stack entry as being saved on the stack */
             if (p->r & VT_LVAL) {
-                /* also clear the bounded flag because the
-                   relocation address of the function was stored in
-                   p->c.i */
-                p->r = (p->r & ~(VT_VALMASK | VT_BOUNDED)) | VT_LLOCAL;
+                p->r = (p->r & ~VT_VALMASK) | VT_LLOCAL;
             } else {
                 p->r = VT_LVAL | VT_LOCAL;
             }
@@ -1345,7 +1337,6 @@ ST_FUNC void gaddrof(void)
 }
 
 
-/* Wrapper around sym_pop, that potentially also registers local bounds.  */
 static void pop_local_syms(Sym **ptop, Sym *b, int keep, int ellipsis)
 {
     sym_pop(ptop, b, keep);
@@ -3235,15 +3226,6 @@ redo:
             next();
             skip(')');
             break;
-        case TOK_DLLEXPORT:
-            ad->a.dllexport = 1;
-            break;
-        case TOK_NODECORATE:
-            ad->a.nodecorate = 1;
-            break;
-        case TOK_DLLIMPORT:
-            ad->a.dllimport = 1;
-            break;
         default:
             if (tcc_state->warn_unsupported)
                 tcc_warning("'%s' attribute ignored", get_tok_str(t, NULL));
@@ -4255,7 +4237,7 @@ static CType *type_decl(CType *type, AttributeDef *ad, int *v, int td)
     return ret;
 }
 
-/* indirection with full error checking and bound check */
+/* Dereference the pointer on top of the value stack. */
 ST_FUNC void indir(void)
 {
     if ((vtop->type.t & VT_BTYPE) != VT_PTR) {
@@ -4270,7 +4252,6 @@ ST_FUNC void indir(void)
     if (!(vtop->type.t & (VT_ARRAY | VT_VLA))
         && (vtop->type.t & VT_BTYPE) != VT_FUNC) {
         vtop->r |= VT_LVAL;
-        /* if bound checking, the referenced pointer must be checked */
     }
 }
 

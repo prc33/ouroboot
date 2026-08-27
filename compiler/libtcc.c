@@ -862,9 +862,7 @@ LIBTCCAPI int tcc_set_output_type(TCCState *s, int output_type)
     /* add libc crt1/crti objects */
     if (output_type == TCC_OUTPUT_EXE &&
         !s->nostdlib) {
-        /* Mach-O with LC_MAIN doesn't need any crt startup code.  */
-        if (output_type != TCC_OUTPUT_DLL)
-            tcc_add_crt(s, "crt1.o");
+        tcc_add_crt(s, "crt1.o");
         tcc_add_crt(s, "crti.o");
     }
     return 0;
@@ -911,10 +909,6 @@ ST_FUNC int tcc_add_file_internal(TCCState *s1, const char *filename, int flags)
             ret = tcc_load_archive(s1, fd, !(flags & AFF_WHOLE_ARCHIVE));
             break;
         default:
-            /* Upstream also accepts shared objects here (tcc_load_dll) and
-             * falls back to treating anything else as a GNU ld script.
-             * Both are gone -- this project links -static only. An honest
-             * error beats silently mis-parsing something. */
             ret = -1;
             tcc_error_noabort("%s: unrecognized file type %d", filename,
                               obj_type);
@@ -973,14 +967,6 @@ static int tcc_add_library_internal(TCCState *s, const char *fmt,
     return -1;
 }
 
-/* find and load a dll. Return non zero if not found */
-/* XXX: add '-rpath' option support ? */
-ST_FUNC int tcc_add_dll(TCCState *s, const char *filename, int flags)
-{
-    return tcc_add_library_internal(s, "%s/%s", filename, flags,
-        s->library_paths, s->nb_library_paths);
-}
-
 ST_FUNC int tcc_add_crt(TCCState *s1, const char *filename)
 {
     if (-1 == tcc_add_library_internal(s1, "%s/%s",
@@ -992,16 +978,9 @@ ST_FUNC int tcc_add_crt(TCCState *s1, const char *filename)
 /* the library name is the same as the argument of the '-l' option */
 LIBTCCAPI int tcc_add_library(TCCState *s, const char *libraryname)
 {
-    const char *libs[] = { "%s/lib%s.so", "%s/lib%s.a", NULL };
-    const char **pp = s->static_link ? libs + 1 : libs;
     int flags = s->filetype & AFF_WHOLE_ARCHIVE;
-    while (*pp) {
-        if (0 == tcc_add_library_internal(s, *pp,
-            libraryname, flags, s->library_paths, s->nb_library_paths))
-            return 0;
-        ++pp;
-    }
-    return -1;
+    return tcc_add_library_internal(s, "%s/lib%s.a", libraryname, flags,
+                                    s->library_paths, s->nb_library_paths);
 }
 
 PUB_FUNC int tcc_add_library_err(TCCState *s1, const char *libname)
