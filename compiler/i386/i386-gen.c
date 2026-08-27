@@ -55,6 +55,12 @@ enum {
 #define REG_IRE2 TREG_EDX /* second word return register (for long long) */
 #define REG_FRET TREG_ST0 /* float return register */
 
+#define TARGET_RETURN_REG(t) (is_float(t) ? REG_FRET : REG_IRET)
+#define TARGET_SECOND_RETURN_REG(t) (((t) & VT_BTYPE) == VT_LLONG ? REG_IRE2 : VT_CONST)
+#define TARGET_REG_CLASS(t) (is_float(t) ? RC_FLOAT : RC_INT)
+#define TARGET_RETURN_REG_CLASS(t) (reg_classes[TARGET_RETURN_REG(t)] & ~(RC_FLOAT | RC_INT))
+#define TARGET_ADJUST_REG_CLASS(t, rc) (rc)
+
 /* defined if function parameters must be evaluated in reverse order */
 #define INVERT_FUNC_PARAMS
 

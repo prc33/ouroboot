@@ -24,6 +24,13 @@
 #define REG_IRE2 (TREG_R(1)) // int 2nd return register number
 #define REG_FRET (TREG_F(0)) // float return register number
 
+#define TARGET_INT_RETURN(t) (((t) & VT_BTYPE) == VT_LLONG || ((t) & VT_BTYPE) == VT_LDOUBLE || !is_float(t))
+#define TARGET_RETURN_REG(t) (TARGET_INT_RETURN(t) ? REG_IRET : REG_FRET)
+#define TARGET_SECOND_RETURN_REG(t) (((t) & VT_BTYPE) == VT_LDOUBLE ? REG_IRE2 : VT_CONST)
+#define TARGET_REG_CLASS(t) (TARGET_INT_RETURN(t) ? RC_INT : RC_FLOAT)
+#define TARGET_RETURN_REG_CLASS(t) (reg_classes[TARGET_RETURN_REG(t)] & ~(RC_FLOAT | RC_INT | RC_I64))
+#define TARGET_ADJUST_REG_CLASS(t, rc) ((t) == VT_LDOUBLE && (rc) == RC_FLOAT ? RC_INT : (rc))
+
 #define PTR_SIZE 8
 
 #define LDOUBLE_SIZE 16

@@ -199,31 +199,13 @@ static int btype_size(int bt)
 /* returns function return register from type */
 static int R_RET(int t)
 {
-#ifdef TCC_NATIVE_I64
-    if ((t & VT_BTYPE) == VT_LLONG)
-        return REG_LRET;
-#endif
-    if (!is_float(t))
-        return REG_IRET;
-#if   defined TCC_TARGET_RISCV64
-    if ((t & VT_BTYPE) == VT_LDOUBLE)
-        return REG_IRET;
-#endif
-    return REG_FRET;
+    return TARGET_RETURN_REG(t);
 }
 
 /* returns 2nd function return register, if any */
 static int R2_RET(int t)
 {
-    t &= VT_BTYPE;
-#ifdef TCC_TARGET_I386
-    if (t == VT_LLONG)
-        return REG_IRE2;
-#elif defined TCC_TARGET_RISCV64
-    if (t == VT_LDOUBLE)
-        return REG_IRE2;
-#endif
-    return VT_CONST;
+    return TARGET_SECOND_RETURN_REG(t);
 }
 
 /* returns true for two-word types */
@@ -238,27 +220,13 @@ static void PUT_R_RET(SValue *sv, int t)
 /* returns function return register class for type t */
 static int RC_RET(int t)
 {
-    return reg_classes[R_RET(t)] & ~(RC_FLOAT | RC_INT
-#ifdef TCC_NATIVE_I64
-                                      | RC_I64
-#endif
-                                      );
+    return TARGET_RETURN_REG_CLASS(t);
 }
 
 /* returns generic register class for type t */
 static int RC_TYPE(int t)
 {
-#ifdef TCC_NATIVE_I64
-    if ((t & VT_BTYPE) == VT_LLONG)
-        return RC_I64;
-#endif
-    if (!is_float(t))
-        return RC_INT;
-#if   defined TCC_TARGET_RISCV64
-    if ((t & VT_BTYPE) == VT_LDOUBLE)
-        return RC_INT;
-#endif
-    return RC_FLOAT;
+    return TARGET_REG_CLASS(t);
 }
 
 /* returns 2nd register class corresponding to t and rc */
@@ -1495,11 +1463,7 @@ ST_FUNC int gv(int rc)
 
         bt = vtop->type.t & VT_BTYPE;
 
-#ifdef TCC_TARGET_RISCV64
-        /* XXX mega hack */
-        if (bt == VT_LDOUBLE && rc == RC_FLOAT)
-          rc = RC_INT;
-#endif
+        rc = TARGET_ADJUST_REG_CLASS(bt, rc);
         rc2 = RC2_TYPE(bt, rc);
 
         /* need to reload if:

@@ -41,6 +41,12 @@ enum {
 #define REG_FRET TREG_F0
 #define REG_FRE2 TREG_F1
 
+#define TARGET_RETURN_REG(t) (((t) & VT_BTYPE) == VT_LLONG ? REG_LRET : is_float(t) ? REG_FRET : REG_IRET)
+#define TARGET_SECOND_RETURN_REG(t) VT_CONST
+#define TARGET_REG_CLASS(t) (((t) & VT_BTYPE) == VT_LLONG ? RC_I64 : is_float(t) ? RC_FLOAT : RC_INT)
+#define TARGET_RETURN_REG_CLASS(t) (reg_classes[TARGET_RETURN_REG(t)] & ~(RC_FLOAT | RC_INT | RC_I64))
+#define TARGET_ADJUST_REG_CLASS(t, rc) (rc)
+
 #define PTR_SIZE 4
 #define LDOUBLE_SIZE 8
 #define LDOUBLE_ALIGN 8
