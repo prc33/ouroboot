@@ -186,6 +186,15 @@ static int translate(u64 va, u32 access, u64 *pa)
 static int load(u64 va, u32 size, u32 access, u64 *v)
 {
     u64 pa;
+    if ((va & 4095) + size > 4096) {
+        u64 byte;
+        *v = 0;
+        for (u32 i = 0; i < size; i++) {
+            if (!translate(va + i, access, &pa) || !physical_read(pa, 1, &byte)) return 0;
+            *v |= byte << (i * 8);
+        }
+        return 1;
+    }
     if (!translate(va, access, &pa)) return 0;
     return physical_read(pa, size, v);
 }
@@ -193,6 +202,12 @@ static int load(u64 va, u32 size, u32 access, u64 *v)
 static int store(u64 va, u32 size, u64 v)
 {
     u64 pa;
+    if ((va & 4095) + size > 4096) {
+        for (u32 i = 0; i < size; i++) {
+            if (!translate(va + i, 2, &pa) || !physical_write(pa, 1, v >> (i * 8))) return 0;
+        }
+        return 1;
+    }
     if (!translate(va, 2, &pa)) return 0;
     return physical_write(pa, size, v);
 }

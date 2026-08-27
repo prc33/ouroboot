@@ -218,6 +218,56 @@ unsigned long *paging_new_addrspace(void) {
 	return root;
 }
 
+void paging_destroy_addrspace(unsigned long *root) {
+	if (!root || root == root_table)
+		return;
+	for (unsigned int l2 = 0; l2 < ENTRIES; l2++) {
+		if (!(root[l2] & 1))
+			continue;
+		unsigned long *l1 = (unsigned long *)((root[l2] >> PPN_SHIFT) << 12);
+		unsigned long *master_l1 = 0;
+		if (root_table[l2] & 1)
+			master_l1 = (unsigned long *)((root_table[l2] >> PPN_SHIFT) << 12);
+		for (unsigned int i = 0; i < ENTRIES; i++) {
+			if (!(l1[i] & 1) || (master_l1 && l1[i] == master_l1[i]))
+				continue;
+			unsigned long *l0 = (unsigned long *)((l1[i] >> PPN_SHIFT) << 12);
+			for (unsigned int j = 0; j < ENTRIES; j++)
+				if ((l0[j] & (1 | PTE_USER)) == (1 | PTE_USER))
+					pmm_free_page((unsigned int)((l0[j] >> PPN_SHIFT) << 12));
+			pmm_free_page((unsigned int)(unsigned long)l0);
+		}
+		pmm_free_page((unsigned int)(unsigned long)l1);
+	}
+	pmm_free_page((unsigned int)(unsigned long)root);
+}
+
+void paging_fork_user(unsigned long *dst, unsigned long *src) {
+	for (unsigned int l2 = 0; l2 < ENTRIES; l2++) {
+		if (!(src[l2] & 1))
+			continue;
+		unsigned long *l1 = (unsigned long *)((src[l2] >> PPN_SHIFT) << 12);
+		for (unsigned int i = 0; i < ENTRIES; i++) {
+			if (!(l1[i] & 1))
+				continue;
+			unsigned long *l0 = (unsigned long *)((l1[i] >> PPN_SHIFT) << 12);
+			for (unsigned int j = 0; j < ENTRIES; j++) {
+				unsigned long pte = l0[j];
+				if ((pte & (1 | PTE_USER)) != (1 | PTE_USER))
+					continue;
+				unsigned long phys = (pte >> PPN_SHIFT) << 12;
+				unsigned long flags = (pte & 0x3FFUL & ~PTE_WRITABLE) | PTE_COW;
+				unsigned long va = ((unsigned long)l2 << 30) | ((unsigned long)i << 21) | ((unsigned long)j << 12);
+				l0[j] = ((phys >> 12) << PPN_SHIFT) | flags;
+				pmm_retain_page((unsigned int)phys);
+				paging_map_page_in(dst, va, phys, flags);
+			}
+		}
+	}
+	if (src == active_root)
+		paging_flush_tlb();
+}
+
 /* mm/paging_common.c's paging_fork_cow()/paging_ensure_writable()/
  * paging_handle_fault() now do the actual COW copying and fault
  * dispatch, entirely through the accessors above -- this is just the

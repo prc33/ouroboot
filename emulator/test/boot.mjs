@@ -69,10 +69,14 @@ while (instructions < maxInstructions && !expected.every(text => output.includes
     rv.rv_run(batch, 100);
     await serviceFetch();
     instructions += batch;
-    while (rv.rv_output_count()) output += String.fromCharCode(rv.rv_output());
+    let chunk = '';
+    while (rv.rv_output_count()) chunk += String.fromCharCode(rv.rv_output());
+    if (chunk) {
+        output += chunk;
+        process.stdout.write(chunk);
+    }
 }
 const seconds = (performance.now() - started) / 1000;
-process.stdout.write(output);
 console.error(`\n${instructions} instructions in ${seconds.toFixed(2)}s`);
 console.error(`pc=0x${rv.rv_pc().toString(16)}`);
 if (!expected.every(text => output.includes(text))) process.exitCode = 1;

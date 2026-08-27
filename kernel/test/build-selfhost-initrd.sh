@@ -40,6 +40,8 @@ cp "$root"/musl-riscv64/lib/crt1.o "$root"/musl-riscv64/lib/crti.o \
     "$stage/musl/lib/"
 cp "$root"/kernel/test/selfhost-hello.c "$stage/hello.c"
 cp "$root"/kernel/test/selfhost.sh "$stage/"
+cp "$root"/kernel/test/build-musl.sh "$stage/"
 cp "$root"/kernel/test/tcc-stage2.args "$stage/"
 
-tar cf "$output" -C "$stage" busybox fetch tcc tcc-src musl hello.c selfhost.sh tcc-stage2.args
+tar cf "$output" -C "$stage" busybox fetch tcc tcc-src musl hello.c \
+    selfhost.sh build-musl.sh tcc-stage2.args

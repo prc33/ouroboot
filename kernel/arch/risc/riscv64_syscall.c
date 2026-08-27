@@ -60,6 +60,7 @@
 #define SYS_openat                                        56
 #define SYS_close                                            57
 #define SYS_read                                                63
+#define SYS_readv                                               65
 #define SYS_execve                                                221
 #define SYS_getcwd                                                    17
 #define SYS_chdir                                                        49
@@ -75,6 +76,11 @@
 #define SYS_getdents64                                                                          61
 #define SYS_lseek                                                                                   62
 #define SYS_unlinkat                                                                                   35
+#define SYS_mkdirat                                                                                    34
+#define SYS_fchmodat                                                                                       53
+#define SYS_fchownat                                                                                         54
+#define SYS_utimensat                                                                                              88
+#define SYS_umask                                                                                                              166
 #define SYS_dup3                                                                                           24
 #define SYS_faccessat                                                                                          48
 #define SYS_ouro_fetch 1000
@@ -211,6 +217,27 @@ static void sys_ouro_fetch(struct regs *r) {
 	sys_ret(r, failed ? (unsigned long)-ENOMEM : length);
 }
 
+/* ramfs is single-user and stores neither ownership, permission nor timestamp
+ * metadata. Directories are inferred from the paths of their children. These
+ * Linux calls therefore have real but deliberately minimal semantics: mkdir
+ * validates its pathname, metadata changes succeed, and umask remembers and
+ * returns its previous value. This is enough for ordinary archive extractors
+ * without inventing state the filesystem never consults. */
+static void sys_mkdirat(struct regs *r) {
+	char path[PATH_MAX_LOCAL];
+	resolve_user_path(path, (const char *)sys_arg(r, 1));
+	sys_ret(r, path[0] || ramfs_is_dir(path) ? 0 : (unsigned long)-EINVAL);
+}
+
+static void sys_metadata_noop(struct regs *r) { sys_ret(r, 0); }
+
+static unsigned int file_creation_mask = 022;
+static void sys_umask(struct regs *r) {
+	unsigned int old = file_creation_mask;
+	file_creation_mask = (unsigned int)sys_arg(r, 0) & 0777;
+	sys_ret(r, old);
+}
+
 static void sys_newfstatat(struct regs *r) {
 	/* a0=dirfd, a1=path, a2=statbuf, a3=flags. */
 	char path[PATH_MAX_LOCAL];
@@ -264,6 +291,7 @@ static void syscall_dispatch(struct regs *r) {
 	case SYS_openat:                                    sys_openat(r); return;
 	case SYS_close:                                        sys_close(r); return;
 	case SYS_read:                                            sys_read(r); return;
+	case SYS_readv:                                           sys_readv(r); return;
 	case SYS_execve:                                              sys_execve(r); return;
 	case SYS_getcwd:                                                 sys_getcwd(r); return;
 	case SYS_chdir:                                                     sys_chdir(r); return;
@@ -279,6 +307,11 @@ static void syscall_dispatch(struct regs *r) {
 	case SYS_getdents64:                                                                                   sys_getdents64(r); return;
 	case SYS_lseek:                                                                                           sys_lseek(r); return;
 	case SYS_unlinkat:                                                                                           sys_unlinkat(r); return;
+	case SYS_mkdirat:                                                                                              sys_mkdirat(r); return;
+	case SYS_fchmodat:                                                                                              sys_metadata_noop(r); return;
+	case SYS_fchownat:                                                                                              sys_metadata_noop(r); return;
+	case SYS_utimensat:                                                                                             sys_metadata_noop(r); return;
+	case SYS_umask:                                                                                                 sys_umask(r); return;
 	case SYS_dup3:                                                                                                  sys_dup3(r); return;
 	case SYS_faccessat:                                                                                               sys_faccessat(r); return;
 	case SYS_ouro_fetch:                                                                                                  sys_ouro_fetch(r); return;
@@ -294,5 +327,6 @@ void syscall_init(void) {
 		"brk, mmap, mremap, munmap, ioctl, sched_yield, set_tid_address, "
 		"clone, wait4, rt_sigprocmask, gettid, openat, close, read, execve, "
 		"getcwd, chdir, newfstatat, rt_sigaction, getppid, geteuid, "
-		"getpid, fcntl, getdents64, lseek, unlinkat, dup3, faccessat, ouro_fetch)\n");
+		"getpid, fcntl, getdents64, lseek, unlinkat, mkdirat, metadata, umask, "
+		"dup3, faccessat, ouro_fetch)\n");
 }

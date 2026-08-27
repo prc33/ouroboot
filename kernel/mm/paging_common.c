@@ -45,6 +45,7 @@ static int fix_cow_page(unsigned long page) {
 	 * *again*, for a different reason the caller's COW check doesn't
 	 * recognize. */
 	paging_map_page(page, new_phys, PTE_PRESENT | PTE_WRITABLE | (flags & PTE_USER));
+	pmm_free_page((unsigned int)old_phys);
 	paging_flush_tlb();
 	return 1;
 }
@@ -113,6 +114,7 @@ void paging_fork_cow(unsigned long *dst_root, unsigned long *src_root, unsigned 
 			continue;
 		unsigned long new_flags = (flags & ~(unsigned long)PTE_WRITABLE) | PTE_COW;
 		phys &= ~0xFFFUL;
+		pmm_retain_page((unsigned int)phys);
 		paging_map_page_in(src_root, va, phys, new_flags);
 		paging_map_page_in(dst_root, va, phys, new_flags);
 	}

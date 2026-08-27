@@ -99,9 +99,9 @@ void process_init(void) {
  * before there's a process table at all, so there's no `struct
  * process` for this to write into).
  *
- * Maps and zeroes EXECVE_STACK_PAGES pages at the top of `p`'s address
- * space, records the committed range, writes `argc` NUL-terminated
- * strings from `argv` into the top STRDATA_SIZE bytes, and the
+ * Maps and zeroes enough pages for the actual argument data (with two
+ * pages as the minimum), records the committed range, writes the
+ * NUL-terminated strings followed by the
  * argc/argv/envp/auxv pointer block (envp always empty, one real
  * auxv entry -- AT_PAGESZ, which musl's __libc_start_main has no
  * fallback for) into PTRBLOCK_SIZE bytes below that. Returns the
@@ -109,14 +109,20 @@ void process_init(void) {
  * time this is called -- process_execve()'s own caller is responsible
  * for snapshotting real (user-space) argv strings first, since this
  * function runs *after* the new address space is already active. */
-#define EXECVE_MAX_ARGV 20
-#define EXECVE_ARG_MAX 128
-#define STRDATA_SIZE 2560
-#define PTRBLOCK_SIZE 512
-#define EXECVE_STACK_PAGES USER_STACK_INITIAL_PAGES
+#define EXECVE_ARG_MAX 256
 
 static unsigned long build_user_stack(struct process *p, char *const argv[], int argc) {
-	unsigned long stack_pages = EXECVE_STACK_PAGES;
+	unsigned long string_bytes = 0;
+	for (int a = 0; a < argc; a++) {
+		unsigned long len = 1;
+		while (argv[a][len - 1]) len++;
+		string_bytes += len;
+	}
+	unsigned long pointer_bytes = (unsigned long)(argc + 7) * sizeof(unsigned long);
+	unsigned long needed = string_bytes + pointer_bytes + 15;
+	unsigned long stack_pages = (needed + PAGE_SIZE - 1) / PAGE_SIZE;
+	if (stack_pages < USER_STACK_INITIAL_PAGES)
+		stack_pages = USER_STACK_INITIAL_PAGES;
 	unsigned long stack_top = USER_STACK_TOP;
 	unsigned long stack_va = stack_top - stack_pages * PAGE_SIZE;
 	for (unsigned long i = 0; i < stack_pages; i++) {
@@ -134,8 +140,8 @@ static unsigned long build_user_stack(struct process *p, char *const argv[], int
 	p->user_brk = USER_BRK_BASE;
 	p->user_mmap_next = USER_MMAP_BASE;
 
-	unsigned char *strp = (unsigned char *)(stack_top - STRDATA_SIZE);
-	unsigned long argv_ptrs[EXECVE_MAX_ARGV];
+	unsigned char *strp = (unsigned char *)(stack_top - string_bytes);
+	unsigned long argv_ptrs[PROCESS_EXEC_MAX_ARGS];
 	for (int a = 0; a < argc; a++) {
 		int len = 0;
 		while (argv[a][len])
@@ -146,7 +152,7 @@ static unsigned long build_user_stack(struct process *p, char *const argv[], int
 		strp += len + 1;
 	}
 
-	unsigned long *sp = (unsigned long *)(stack_top - STRDATA_SIZE - PTRBLOCK_SIZE);
+	unsigned long *sp = (unsigned long *)((unsigned long)(stack_top - string_bytes - pointer_bytes) & ~15UL);
 	int idx = 0;
 	sp[idx++] = argc;
 	for (int a = 0; a < argc; a++)
@@ -179,6 +185,7 @@ struct process *process_create_from_elf_argv(const unsigned char *elf_data, unsi
 	unsigned long entry = elf_load(elf_data, elf_size);
 	if (!entry) {
 		paging_activate(prev_root);
+		paging_destroy_addrspace(new_root);
 		return 0;
 	}
 
@@ -351,6 +358,11 @@ unsigned long process_take_mmap(unsigned long length) {
 	return base;
 }
 
+void process_note_mmap_end(unsigned long end) {
+	if (current_process && end > current_process->user_mmap_next)
+		current_process->user_mmap_next = end;
+}
+
 int process_handle_stack_fault(unsigned long address) {
 	if (!current_process || address < current_process->user_stack_limit ||
 	    address >= current_process->user_stack_hi)
@@ -413,11 +425,6 @@ void process_set_current_cwd(const char *path) {
  * -- true of every real program this checkpoint actually runs, but
  * not the general case, same spirit as mm/elf.c's own "no filesystem
  * yet" caveat elsewhere in this kernel. */
-#define FORK_CLONE_LO 0x0UL
-#define FORK_CLONE_HI 0x1000000UL   /* 16MB */
-#define FORK_MMAP_LO 0x60000000UL  /* arch/risc/riscv64_syscall.c's MMAP_BASE */
-#define FORK_MMAP_HI 0x60100000UL  /* 1MB -- comfortably past what any real fork()+mmap() test here actually uses */
-
 int process_fork(struct regs *r) {
 	struct process *parent = current_process;
 	struct process *child = alloc_slot();
@@ -425,9 +432,7 @@ int process_fork(struct regs *r) {
 		return -1;
 
 	unsigned long *child_root = paging_new_addrspace();
-	paging_fork_cow(child_root, parent->root_table, FORK_CLONE_LO, FORK_CLONE_HI);
-	paging_fork_cow(child_root, parent->root_table, parent->user_stack_lo, parent->user_stack_hi);
-	paging_fork_cow(child_root, parent->root_table, FORK_MMAP_LO, FORK_MMAP_HI);
+	paging_fork_user(child_root, parent->root_table);
 
 	child->root_table = child_root;
 	child->pid = next_pid++;
@@ -517,6 +522,8 @@ long process_wait4(int pid, int *status_out, int options) {
 				int reaped_pid = p->pid;
 				if (status_out)
 					*status_out = (p->exit_code & 0xff) << 8; /* WIFEXITED/WEXITSTATUS-decodable, real Linux encoding */
+				paging_destroy_addrspace(p->root_table);
+				p->root_table = 0;
 				p->state = PROC_UNUSED; /* reaped -- slot free for reuse */
 				return reaped_pid;
 			}
@@ -646,17 +653,21 @@ int process_execve(struct regs *r, const char *path, char **argv, char **envp) {
 	 * activated, `argv`/`argv[i]` (pointers into the *old* one) stop
 	 * meaning anything. Bounded: nothing this kernel execve()s needs
 	 * more than a handful of short arguments. */
-	static char argbuf[EXECVE_MAX_ARGV][EXECVE_ARG_MAX];
+	static char argbuf[PROCESS_EXEC_MAX_ARGS][EXECVE_ARG_MAX];
 	int argc = 0;
-	while (argv && argv[argc] && argc < EXECVE_MAX_ARGV) {
+	while (argv && argv[argc] && argc < PROCESS_EXEC_MAX_ARGS) {
 		int i = 0;
 		while (argv[argc][i] && i < EXECVE_ARG_MAX - 1) {
 			argbuf[argc][i] = argv[argc][i];
 			i++;
 		}
 		argbuf[argc][i] = 0;
+		if (argv[argc][i])
+			return -1;
 		argc++;
 	}
+	if (argv && argv[argc])
+		return -1;
 
 	struct process *p = current_process;
 	unsigned long *prev_root = paging_active_root(); /* == p->root_table, still valid until we succeed */
@@ -666,6 +677,7 @@ int process_execve(struct regs *r, const char *path, char **argv, char **envp) {
 	unsigned long entry = elf_load(elf_data, elf_data_size);
 	if (!entry) {
 		paging_activate(prev_root);
+		paging_destroy_addrspace(new_root);
 		return -1;
 	}
 
@@ -674,19 +686,13 @@ int process_execve(struct regs *r, const char *path, char **argv, char **envp) {
 	 * actual array of pointers to them, not the 2D array itself (whose
 	 * row stride, EXECVE_ARG_MAX, isn't the pointer-array layout it
 	 * expects). */
-	char *argv_kernel[EXECVE_MAX_ARGV];
+	char *argv_kernel[PROCESS_EXEC_MAX_ARGS];
 	for (int a = 0; a < argc; a++)
 		argv_kernel[a] = argbuf[a];
 	unsigned long sp = build_user_stack(p, argv_kernel, argc);
 
-	/* Replace this process's address space in place -- old physical
-	 * pages (code/data/stack of whatever was running before) are
-	 * simply never freed. Documented leak, not an oversight: this
-	 * kernel has no "tear down an address space" walk yet (same
-	 * "no reclaim yet" simplification as arch/risc/riscv64_syscall.c's
-	 * sys_brk shrink path), and every process in this checkpoint's
-	 * tests execve()s at most once. */
 	p->root_table = new_root;
+	paging_destroy_addrspace(prev_root);
 
 	process_arch_execve_rewrite(r, entry, sp);
 

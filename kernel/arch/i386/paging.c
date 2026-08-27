@@ -225,6 +225,41 @@ unsigned long *paging_new_addrspace(void) {
 	return root;
 }
 
+void paging_destroy_addrspace(unsigned long *root) {
+	if (!root || root == root_table)
+		return;
+	for (unsigned int pd = 0; pd < ENTRIES; pd++) {
+		if (!(root[pd] & PTE_PRESENT) || root[pd] == root_table[pd])
+			continue;
+		unsigned long *table = (unsigned long *)(root[pd] & ~0xFFFUL);
+		for (unsigned int pt = 0; pt < ENTRIES; pt++)
+			if ((table[pt] & (PTE_PRESENT | PTE_USER)) == (PTE_PRESENT | PTE_USER))
+				pmm_free_page((unsigned int)(table[pt] & ~0xFFFUL));
+		pmm_free_page((unsigned int)(unsigned long)table);
+	}
+	pmm_free_page((unsigned int)(unsigned long)root);
+}
+
+void paging_fork_user(unsigned long *dst, unsigned long *src) {
+	for (unsigned int pd = 0; pd < ENTRIES; pd++) {
+		if (!(src[pd] & PTE_PRESENT) || src[pd] == root_table[pd])
+			continue;
+		unsigned long *table = (unsigned long *)(src[pd] & ~0xFFFUL);
+		for (unsigned int pt = 0; pt < ENTRIES; pt++) {
+			unsigned long pte = table[pt];
+			if ((pte & (PTE_PRESENT | PTE_USER)) != (PTE_PRESENT | PTE_USER))
+				continue;
+			unsigned long phys = pte & ~0xFFFUL;
+			unsigned long flags = (pte & 0xFFFUL & ~PTE_WRITABLE) | PTE_COW;
+			table[pt] = phys | flags;
+			pmm_retain_page((unsigned int)phys);
+			paging_map_page_in(dst, ((unsigned long)pd << 22) | ((unsigned long)pt << 12), phys, flags);
+		}
+	}
+	if (src == active_root)
+		paging_flush_tlb();
+}
+
 /* Thin trap-decoding wrapper -- the actual COW-copy and page-fault
  * dispatch logic is mm/paging_common.c's paging_handle_fault(), shared
  * with riscv64 outright (see that file's own comment for why it

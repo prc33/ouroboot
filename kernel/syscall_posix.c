@@ -34,6 +34,7 @@
  * not decimal. */
 #define O_CREAT  0100
 #define O_TRUNC  01000
+#define O_APPEND 02000
 
 #define SEEK_SET 0
 #define SEEK_CUR 1
@@ -345,6 +346,8 @@ void sys_mmap(struct regs *r) {
 		sys_ret(r, (unsigned long)-ENOMEM);
 		return;
 	}
+	if (flags & MAP_FIXED)
+		process_note_mmap_end(base + len);
 	sys_ret(r, base);
 }
 
@@ -507,8 +510,10 @@ static void openat_core(struct regs *r, long dirfd, const char *user_path, unsig
 	}
 	resolve_path(path, input, base);
 
-	/* Directories are inferred from stored file path prefixes. */
-	if (ramfs_is_dir(path)) {
+	/* O_CREAT is overwhelmingly a regular-file operation (compiler output and
+	 * archive extraction). Avoid enumerating the entire inferred directory tree
+	 * merely to prove that each new full pathname is not itself a directory. */
+	if (!(flags & O_CREAT) && ramfs_is_dir(path)) {
 		int idx = process_fd_alloc();
 		if (idx < 0) {
 			sys_ret(r, (unsigned long)-ENOMEM);
@@ -550,7 +555,7 @@ static void openat_core(struct regs *r, long dirfd, const char *user_path, unsig
 		struct fd_entry *fd = process_fd_get(idx);
 		fd->data = 0;
 		fd->size = 0;
-		fd->pos = 0;
+		fd->pos = (flags & O_APPEND) ? dyn->size : 0;
 		fd->is_dir = 0;
 		fd->dynfile = dyn;
 		sys_ret(r, (unsigned long)(idx + 3));
@@ -571,7 +576,7 @@ static void openat_core(struct regs *r, long dirfd, const char *user_path, unsig
 		struct fd_entry *fd = process_fd_get(idx);
 		fd->data = 0;
 		fd->size = 0;
-		fd->pos = 0;
+		fd->pos = (flags & O_APPEND) ? dyn->size : 0;
 		fd->is_dir = 0;
 		fd->dynfile = dyn;
 		sys_ret(r, (unsigned long)(idx + 3));
@@ -740,6 +745,23 @@ void sys_read(struct regs *r) {
 		return;
 	}
 	sys_ret(r, read_from_fd_entry(entry, buf, count));
+}
+
+void sys_readv(struct regs *r) {
+	unsigned long fd = sys_arg(r, 0);
+	unsigned long *iov = (unsigned long *)sys_arg(r, 1);
+	unsigned long iovcnt = sys_arg(r, 2);
+	struct fd_entry *entry = fd == 0 ? process_stdio_get(0) :
+		(fd >= 3 ? process_fd_get((int)fd - 3) : 0);
+	if (!entry) { sys_ret(r, (unsigned long)-EBADF); return; }
+	unsigned long total = 0;
+	for (unsigned long i = 0; i < iovcnt; i++) {
+		unsigned long n = read_from_fd_entry(entry,
+			(unsigned char *)iov[i * 2], iov[i * 2 + 1]);
+		total += n;
+		if (n < iov[i * 2 + 1]) break;
+	}
+	sys_ret(r, total);
 }
 
 /* checkpoint 12: real seeking -- needed for real file writes, not
@@ -1057,24 +1079,15 @@ void sys_getdents64(struct regs *r) {
  * that function's own signature can just be "two NUL-terminated
  * char* arrays", arch-neutral in spirit even though nothing else
  * uses it yet). */
-/* checkpoint 14: bumped from 8 -- must match sched/process.c's own
- * copy (duplicated rather than shared via a header, same convention
- * as that file's own FORK_MMAP_HI comment). A real self-hosted
- * `tcc -B... -I... -I... -I... -I... -nostdinc -c -o out.o in.c`
- * invocation (see compiler/Makefile's own stage1 recipe, the proven
- * command line this mirrors) needs 13 argv entries; 20 is headroom
- * above that measured count. */
-#define EXECVE_MAX_ARGV 20
-
 void sys_execve(struct regs *r) {
 	char path[PATH_MAX_LOCAL];
 	resolve_user_path(path, (const char *)sys_arg(r, 0));
 
-	char *argv[EXECVE_MAX_ARGV + 1];
+	char *argv[PROCESS_EXEC_MAX_ARGS + 1];
 	unsigned long *user_argv = (unsigned long *)sys_arg(r, 1);
 	int argc = 0;
 	if (user_argv)
-		while (argc < EXECVE_MAX_ARGV && user_argv[argc]) {
+		while (argc < PROCESS_EXEC_MAX_ARGS && user_argv[argc]) {
 			argv[argc] = (char *)user_argv[argc];
 			argc++;
 		}

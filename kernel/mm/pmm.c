@@ -25,6 +25,7 @@
 extern unsigned char kernel_end;
 
 static unsigned int bitmap[BITMAP_WORDS];
+static unsigned short refs[MAX_PAGES];
 static unsigned int total_pages;
 static unsigned int free_pages;
 static unsigned int phys_base;
@@ -52,6 +53,8 @@ void pmm_init(unsigned int mem_top, unsigned int base) {
 	 * remember to apply everywhere */
 	for (unsigned int i = 0; i < BITMAP_WORDS; i++)
 		bitmap[i] = 0xFFFFFFFFu;
+	for (unsigned int i = 0; i < MAX_PAGES; i++)
+		refs[i] = 1;
 
 	/* everything from the kernel's load address up through the page
 	 * containing kernel_end is not free -- it's us. Everything below
@@ -63,6 +66,7 @@ void pmm_init(unsigned int mem_top, unsigned int base) {
 	free_pages = 0;
 	for (unsigned int p = first_free_page; p < total_pages; p++) {
 		bitmap_clear(p);
+		refs[p] = 0;
 		free_pages++;
 	}
 
@@ -92,6 +96,7 @@ unsigned int pmm_alloc_page(void) {
 		unsigned int p = (next_free_hint + i) % total_pages;
 		if (!bitmap_test(p)) {
 			bitmap_set(p);
+			refs[p] = 1;
 			free_pages--;
 			next_free_hint = p + 1;
 			return phys_base + p * PAGE_SIZE;
@@ -109,6 +114,11 @@ unsigned int pmm_alloc_page(void) {
 unsigned int pmm_alloc_contiguous(unsigned int count) {
 	if (count == 0 || count > total_pages)
 		return 0;
+	/* Most ramfs files fit in one page. A one-page run is precisely the
+	 * hinted allocator's job; rescanning from page zero for thousands of
+	 * source files turns archive extraction quadratic for no benefit. */
+	if (count == 1)
+		return pmm_alloc_page();
 	unsigned int run_start = 0;
 	unsigned int run_len = 0;
 	for (unsigned int p = 0; p < total_pages; p++) {
@@ -118,7 +128,7 @@ unsigned int pmm_alloc_contiguous(unsigned int count) {
 			run_len++;
 			if (run_len == count) {
 				for (unsigned int q = run_start; q < run_start + count; q++)
-					bitmap_set(q);
+					bitmap_set(q), refs[q] = 1;
 				free_pages -= count;
 				return phys_base + run_start * PAGE_SIZE;
 			}
@@ -129,9 +139,15 @@ unsigned int pmm_alloc_contiguous(unsigned int count) {
 	return 0; /* no run of `count` contiguous free pages -- real fragmentation, not a bug */
 }
 
+void pmm_retain_page(unsigned int addr) {
+	unsigned int p = (addr - phys_base) / PAGE_SIZE;
+	if (p < total_pages && bitmap_test(p) && refs[p] != 0xffff)
+		refs[p]++;
+}
+
 void pmm_free_page(unsigned int addr) {
 	unsigned int p = (addr - phys_base) / PAGE_SIZE;
-	if (p < total_pages && bitmap_test(p)) {
+	if (p < total_pages && bitmap_test(p) && refs[p] && --refs[p] == 0) {
 		bitmap_clear(p);
 		free_pages++;
 	}
@@ -149,6 +165,7 @@ void pmm_reserve_range(unsigned int lo, unsigned int hi) {
 	for (unsigned int p = first; p < last; p++) {
 		if (!bitmap_test(p)) {
 			bitmap_set(p);
+			refs[p] = 1;
 			free_pages--;
 		}
 	}

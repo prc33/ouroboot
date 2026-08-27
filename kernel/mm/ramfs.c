@@ -72,9 +72,28 @@ const struct ramfs_file *ramfs_lookup(const char *path) {
  * crt1.o/crti.o/crtn.o/libc.a/libtcc1.a, the prebuilt riscv64 tcc
  * binary that does the compiling, plus whatever the build itself
  * writes out. 512 is real headroom above that measured ~260, not a
- * guess padded for its own sake. */
-#define RAMFS_MAX_DYNAMIC_FILES 512
+ * guess padded for its own sake. The source-build closure later raised this
+ * to 8192: musl and BusyBox together contain several thousand regular files,
+ * and their object files must coexist with those inputs while building. */
+#define RAMFS_MAX_DYNAMIC_FILES 8192
 static struct ramfs_dynamic_file dynamic_files[RAMFS_MAX_DYNAMIC_FILES];
+static unsigned int dynamic_high_water;
+/* Index-plus-one chains: zero is the natural BSS-initialized null value. */
+static unsigned short dynamic_hash[RAMFS_MAX_DYNAMIC_FILES];
+static unsigned short dynamic_next[RAMFS_MAX_DYNAMIC_FILES];
+#define DIR_CACHE_ENTRIES 1024
+static char dir_cache_path[128];
+static char dir_cache_names[DIR_CACHE_ENTRIES][128];
+static unsigned char dir_cache_directory[DIR_CACHE_ENTRIES];
+static unsigned char dir_cache_symlink[DIR_CACHE_ENTRIES];
+static unsigned int dir_cache_count;
+static int dir_cache_valid;
+
+static unsigned int name_hash(const char *name) {
+	unsigned int h = 2166136261U;
+	while (*name) { h ^= (unsigned char)*name++; h *= 16777619U; }
+	return h & (RAMFS_MAX_DYNAMIC_FILES - 1);
+}
 
 static void name_copy(char *dst, const char *src, unsigned int cap) {
 	unsigned int i = 0;
@@ -84,10 +103,18 @@ static void name_copy(char *dst, const char *src, unsigned int cap) {
 
 struct ramfs_dynamic_file *ramfs_dynamic_lookup(const char *path) {
 	const char *norm = normalize_path(path);
-	for (unsigned int i = 0; i < RAMFS_MAX_DYNAMIC_FILES; i++)
+	for (unsigned int link = dynamic_hash[name_hash(norm)]; link; link = dynamic_next[link - 1]) {
+		unsigned int i = link - 1;
 		if (dynamic_files[i].used && streq(norm, dynamic_files[i].name))
 			return &dynamic_files[i];
+	}
 	return 0;
+}
+
+static void hash_insert(unsigned int index) {
+	unsigned int bucket = name_hash(dynamic_files[index].name);
+	dynamic_next[index] = dynamic_hash[bucket];
+	dynamic_hash[bucket] = index + 1;
 }
 
 struct ramfs_dynamic_file *ramfs_dynamic_open_or_create(const char *path) {
@@ -95,15 +122,27 @@ struct ramfs_dynamic_file *ramfs_dynamic_open_or_create(const char *path) {
 	if (existing)
 		return existing;
 	const char *norm = normalize_path(path);
-	for (unsigned int i = 0; i < RAMFS_MAX_DYNAMIC_FILES; i++) {
+	for (unsigned int i = 0; i < dynamic_high_water; i++) {
 		if (!dynamic_files[i].used) {
+			dir_cache_valid = 0;
 			dynamic_files[i].used = 1;
 			name_copy(dynamic_files[i].name, norm, sizeof(dynamic_files[i].name));
 			dynamic_files[i].data = 0;
 			dynamic_files[i].size = 0;
 			dynamic_files[i].capacity = 0;
+			hash_insert(i);
 			return &dynamic_files[i];
 		}
+	}
+	if (dynamic_high_water < RAMFS_MAX_DYNAMIC_FILES) {
+		dir_cache_valid = 0;
+		struct ramfs_dynamic_file *f = &dynamic_files[dynamic_high_water++];
+		f->used = 1;
+		name_copy(f->name, norm, sizeof(f->name));
+		f->data = 0;
+		f->size = f->capacity = 0;
+		hash_insert(dynamic_high_water - 1);
+		return f;
 	}
 	return 0; /* every slot in use -- a real, if generous, fixed ceiling */
 }
@@ -136,6 +175,13 @@ void ramfs_dynamic_unlink(const char *path) {
 		for (unsigned int i = 0; i < pages; i++)
 			pmm_free_page(base + i * PAGE_SIZE);
 	}
+	unsigned int index = (unsigned int)(f - dynamic_files);
+	unsigned int bucket = name_hash(f->name);
+	unsigned short *link = &dynamic_hash[bucket];
+	while (*link && *link - 1 != index) link = &dynamic_next[*link - 1];
+	if (*link) *link = dynamic_next[index];
+	dir_cache_valid = 0;
+	dynamic_next[index] = 0;
 	f->used = 0;
 	f->data = 0;
 	f->size = 0;
@@ -148,7 +194,9 @@ void ramfs_dynamic_unlink(const char *path) {
  * from one page) for amortized O(1) reallocations per byte written
  * overall, the same reasoning as any growable-array design; an empty
  * file (capacity 0) costs nothing until the first write actually
- * needs somewhere to go. Returns 0 on success, -1 if
+ * needs somewhere to go. Capacity beyond the logical size is left
+ * uninitialized because it is unobservable; ramfs_dynamic_write() zeros any
+ * sparse gap at the moment it becomes part of the file. Returns 0 on success, -1 if
  * pmm_alloc_contiguous() can't find enough contiguous free RAM (real
  * ENOMEM, not a bug -- see its own comment). */
 static int ramfs_dynamic_grow(struct ramfs_dynamic_file *f, unsigned long needed) {
@@ -165,8 +213,6 @@ static int ramfs_dynamic_grow(struct ramfs_dynamic_file *f, unsigned long needed
 	unsigned long i;
 	for (i = 0; i < f->size; i++)
 		new_data[i] = f->data[i];
-	for (i = f->size; i < new_capacity; i++)
-		new_data[i] = 0; /* fresh pages -- real content, not garbage, from the first byte past size onward */
 	if (f->capacity) {
 		unsigned int old_pages = (unsigned int)(f->capacity / PAGE_SIZE);
 		unsigned int old_base = (unsigned int)(unsigned long)f->data;
@@ -254,32 +300,43 @@ static int raw_child(const char *dir, unsigned int raw, char *name,
 
 int ramfs_dir_entry(const char *dir, unsigned int index, char *name,
 	unsigned int capacity, int *directory, int *symlink) {
-	unsigned int raw_count = RAMFS_MAX_DYNAMIC_FILES + NUM_APPLETS;
-	unsigned int accepted = 0;
-	for (unsigned int raw = 0; raw < raw_count; raw++) {
-		char candidate[128], previous[128];
-		int candidate_dir, candidate_link, duplicate = 0;
-		if (!raw_child(dir, raw, candidate, sizeof(candidate), &candidate_dir, &candidate_link))
-			continue;
-		for (unsigned int earlier = 0; earlier < raw; earlier++) {
-			int previous_dir, previous_link;
-			if (raw_child(dir, earlier, previous, sizeof(previous), &previous_dir, &previous_link) &&
-			    streq(candidate, previous)) { duplicate = 1; break; }
+	if (!dir_cache_valid || !streq(dir, dir_cache_path)) {
+		name_copy(dir_cache_path, dir, sizeof(dir_cache_path));
+		dir_cache_count = 0;
+		unsigned int raw_count = dynamic_high_water + NUM_APPLETS;
+		for (unsigned int raw = 0; raw < raw_count && dir_cache_count < DIR_CACHE_ENTRIES; raw++) {
+			char candidate[128];
+			int candidate_dir, candidate_link, duplicate = 0;
+			if (!raw_child(dir, raw, candidate, sizeof(candidate), &candidate_dir, &candidate_link))
+				continue;
+			for (unsigned int earlier = 0; earlier < dir_cache_count; earlier++)
+				if (streq(candidate, dir_cache_names[earlier])) { duplicate = 1; break; }
+			if (duplicate) continue;
+			name_copy(dir_cache_names[dir_cache_count], candidate, 128);
+			dir_cache_directory[dir_cache_count] = candidate_dir;
+			dir_cache_symlink[dir_cache_count] = candidate_link;
+			dir_cache_count++;
 		}
-		if (duplicate) continue;
-		if (accepted++ == index) {
-			name_copy(name, candidate, capacity);
-			*directory = candidate_dir;
-			*symlink = candidate_link;
-			return 1;
-		}
+		dir_cache_valid = 1;
 	}
-	return 0;
+	if (index >= dir_cache_count) return 0;
+	name_copy(name, dir_cache_names[index], capacity);
+	*directory = dir_cache_directory[index];
+	*symlink = dir_cache_symlink[index];
+	return 1;
 }
 
 int ramfs_is_dir(const char *dir) {
-	if (!dir[0]) return 1;
-	char name[128];
-	int directory, symlink;
-	return ramfs_dir_entry(dir, 0, name, sizeof(name), &directory, &symlink);
+	const char *norm = normalize_path(dir);
+	if (!norm[0] || streq(norm, "bin")) return 1;
+	unsigned int n = 0;
+	while (norm[n]) n++;
+	for (unsigned int i = 0; i < dynamic_high_water; i++) {
+		const char *path = dynamic_files[i].name;
+		if (!dynamic_files[i].used) continue;
+		unsigned int j = 0;
+		while (j < n && path[j] == norm[j]) j++;
+		if (j == n && path[j] == '/') return 1;
+	}
+	return 0;
 }

@@ -25,6 +25,7 @@
 
 #define PROC_KSTACK_WORDS 1024 /* 8KB kernel stack per process, words are 8 bytes */
 #define MAX_PROCESSES 8
+#define PROCESS_EXEC_MAX_ARGS 256
 
 enum process_state {
 	PROC_UNUSED = 0,
@@ -149,6 +150,7 @@ int process_current_ppid(void);
 unsigned long process_current_brk(void);
 void process_set_current_brk(unsigned long value);
 unsigned long process_take_mmap(unsigned long length);
+void process_note_mmap_end(unsigned long end);
 int process_handle_stack_fault(unsigned long address);
 const char *process_current_cwd(void);
 void process_set_current_cwd(const char *path);
