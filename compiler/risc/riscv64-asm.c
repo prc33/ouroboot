@@ -526,25 +526,13 @@ static void asm_emit_b(int token, uint32_t opcode, const Operand *rs1, const Ope
         tcc_error("'%s': Expected destination operand that is a register", get_tok_str(token, NULL));
     }
     if (imm->type == OP_IM32 && imm->e.sym) {
-        int b_ofs = ind;
-        uint32_t inv_func3 = ((opcode >> 12) & 7) ^ 1;
-        uint32_t inv_opcode = (opcode & ~(7 << 12)) | (inv_func3 << 12);
-        asm_emit_opcode(inv_opcode | ENCODE_RS1(rs1->reg)
-                        | ENCODE_RS2(rs2->reg) | (1 << 8));
-        greloca(cur_text_section, imm->e.sym, ind, R_RISCV_CALL, 0);
-        asm_emit_opcode(0x17 | ENCODE_RD(5));
-        write32le(cur_text_section->data + b_ofs,
-                  read32le(cur_text_section->data + b_ofs)
-                  | (((ind - b_ofs) >> 1) & 0xf) << 8
-                  | (((ind - b_ofs) >> 5) & 0x3f) << 25
-                  | (((ind - b_ofs) >> 11) & 1) << 7
-                  | (((ind - b_ofs) >> 12) & 1) << 31);
-        return;
+        greloca(cur_text_section, imm->e.sym, ind, R_RISCV_BRANCH, 0);
+        offset = 0;
+    } else {
+        if (imm->type != OP_IM12S)
+            tcc_error("branch offset out of range");
+        offset = imm->e.v;
     }
-    if (imm->type != OP_IM12S) {
-        tcc_error("'%s': Expected second source operand that is an immediate value between 0 and 8191", get_tok_str(token, NULL));
-    }
-    offset = imm->e.v;
     asm_emit_opcode(opcode | ENCODE_RS1(rs1->reg) | ENCODE_RS2(rs2->reg) | (((offset >> 1) & 0xF) << 8) | (((offset >> 5) & 0x1f) << 25) | (((offset >> 11) & 1) << 7) | (((offset >> 12) & 1) << 31));
 }
 static int asm_fcvt_rm(TCCState *s1) {
