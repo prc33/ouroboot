@@ -482,10 +482,10 @@ unsigned long long __umoddi3(unsigned long long u, unsigned long long v)
     return w;
 }
 
-/* XXX: fix tcc's code generator to do this instead */
+/* i386's pair-of-words backend needs these helpers when TCC compiles itself. */
 long long __ashrdi3(long long a, int b)
 {
-#ifdef __TINYC__
+#if defined(__TINYC__) && defined(__i386__)
     DWunion u;
     u.ll = a;
     if (b >= 32) {
@@ -501,10 +501,9 @@ long long __ashrdi3(long long a, int b)
 #endif
 }
 
-/* XXX: fix tcc's code generator to do this instead */
 unsigned long long __lshrdi3(unsigned long long a, int b)
 {
-#ifdef __TINYC__
+#if defined(__TINYC__) && defined(__i386__)
     DWunion u;
     u.ll = a;
     if (b >= 32) {
@@ -520,10 +519,9 @@ unsigned long long __lshrdi3(unsigned long long a, int b)
 #endif
 }
 
-/* XXX: fix tcc's code generator to do this instead */
 long long __ashldi3(long long a, int b)
 {
-#ifdef __TINYC__
+#if defined(__TINYC__) && defined(__i386__)
     DWunion u;
     u.ll = a;
     if (b >= 32) {
