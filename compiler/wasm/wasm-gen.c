@@ -322,42 +322,6 @@ static void wasm_emit_cmp_set_i32(int op, int lhs_reg, int rhs_reg, int rhs_imm,
     wasm_last_cmp_op = op;
 }
 
-/* Same as wasm_emit_cmp_set_i32(), but the right-hand side is a plain
- * local variable at frame offset local_off, never materialized into a
- * register -- see WASM_OP_FLAG_R1_LOCAL's own comment. Loop conditions
- * (`i < n`) are exactly this shape almost universally. */
-static void wasm_emit_cmp_set_i32_local(int op, int lhs_reg, int local_off)
-{
-    WasmOp *wo = wasm_emit_op(WASM_OP_SET_CMP_I32);
-    if (!wo)
-        return;
-    wo->r0 = lhs_reg;
-    wo->op = op;
-    wo->flags |= WASM_OP_FLAG_R1_LOCAL;
-    wo->imm = local_off;
-    wasm_last_cmp_valid = 1;
-    wasm_last_cmp_op = op;
-}
-
-/* Same as wasm_emit_cmp_set_i32_local(), but BOTH sides are plain
- * locals -- unlike the arithmetic-op equivalent, no destination
- * register is needed at all here: a comparison's result always lands
- * in the fixed local_cmp slot (see the WASM_OP_SET_CMP_I32 emission
- * arm), never in a general-purpose one, so with both operands also
- * skipping registers, this whole comparison touches zero of them. */
-static void wasm_emit_cmp_set_i32_both_local(int op, int left_off, int right_off)
-{
-    WasmOp *wo = wasm_emit_op(WASM_OP_SET_CMP_I32);
-    if (!wo)
-        return;
-    wo->op = op;
-    wo->flags |= WASM_OP_FLAG_R1_LOCAL | WASM_OP_FLAG_L_LOCAL;
-    wo->imm = right_off;
-    wo->target_pc = left_off;
-    wasm_last_cmp_valid = 1;
-    wasm_last_cmp_op = op;
-}
-
 static void wasm_emit_cmp_set_i64(int op, int lhs_reg, int rhs_reg,
                                   int64_t rhs_imm, int is_imm)
 {
@@ -594,37 +558,6 @@ ST_FUNC void store(int r, SValue *v)
         if (ft & VT_UNSIGNED)
             wo->flags |= WASM_OP_FLAG_UNSIGNED;
     }
-}
-
-/* Same shape as store(), for gen_vstore_hook()'s "both plain int locals"
- * case: neither the destination address nor the source value ever touch
- * a register. dst_off/src_off are both plain frame offsets (VT_LOCAL's
- * own c.i) -- see WASM_OP_FLAG_VAL_LOCAL's own comment. */
-static void wasm_emit_store_i32_local(int dst_off, int src_off)
-{
-    WasmOp *wo = wasm_emit_op(WASM_OP_STORE_I32);
-    if (!wo)
-        return;
-    /* WASM_ADDR_FP in the low byte -- the destination is always a plain
-     * frame-relative local here, same as wasm_set_addr() would produce
-     * for a VT_LOCAL destination, just set directly since we never call
-     * it (there's no register to feed it). */
-    wo->flags = WASM_ADDR_FP | WASM_OP_FLAG_VAL_LOCAL;
-    wo->imm = dst_off;
-    wo->target_pc = src_off;
-}
-
-/* Same as wasm_emit_store_i32_local(), but the source is a compile-time
- * int constant rather than a local -- see WASM_OP_FLAG_VAL_IMM's own
- * comment. */
-static void wasm_emit_store_i32_imm(int dst_off, int value)
-{
-    WasmOp *wo = wasm_emit_op(WASM_OP_STORE_I32);
-    if (!wo)
-        return;
-    wo->flags = WASM_ADDR_FP | WASM_OP_FLAG_VAL_IMM;
-    wo->imm = dst_off;
-    wo->i64 = value;
 }
 
 ST_FUNC int gfunc_sret(CType *vt, int variadic, CType *ret, int *ret_align, int *regsize)
@@ -867,80 +800,6 @@ static void wasm_emit_i32_bin(int op, int dst, int src_reg, int src_imm, int is_
     }
 }
 
-/* Same as wasm_emit_i32_bin(), but the second operand is a plain local
- * variable at frame offset local_off that never got materialized into a
- * register at all -- see WASM_OP_FLAG_R1_LOCAL's own comment. */
-static void wasm_emit_i32_bin_local(int op, int dst, int local_off)
-{
-    WasmOp *wo = wasm_emit_op(WASM_OP_I32_BIN);
-    if (!wo)
-        return;
-    wo->r0 = dst;
-    wo->op = op;
-    wo->flags |= WASM_OP_FLAG_R1_LOCAL;
-    wo->imm = local_off;
-}
-
-/* Same as wasm_emit_i32_bin_local(), but BOTH operands are plain locals
- * -- dst is a fresh register (get_reg()'d, never loaded into) that
- * exists purely so whatever consumes this expression's result next has
- * something to address; neither operand ever touches a register at
- * all. See WASM_OP_FLAG_L_LOCAL's own comment. */
-static void wasm_emit_i32_bin_both_local(int op, int dst, int left_off, int right_off)
-{
-    WasmOp *wo = wasm_emit_op(WASM_OP_I32_BIN);
-    if (!wo)
-        return;
-    wo->r0 = dst;
-    wo->op = op;
-    wo->flags |= WASM_OP_FLAG_R1_LOCAL | WASM_OP_FLAG_L_LOCAL;
-    wo->imm = right_off;
-    wo->target_pc = left_off;
-}
-
-/* True for a plain, non-volatile int local still sitting at its own
- * frame slot -- nothing loaded into any register yet. See
- * WASM_OP_FLAG_R1_LOCAL's own comment for why this is worth checking
- * for at all. */
-static int wasm_is_simple_local(SValue *sv)
-{
-    return (sv->r & (VT_VALMASK | VT_LVAL | VT_SYM)) == (VT_LOCAL | VT_LVAL)
-        && (sv->type.t & VT_BTYPE) == VT_INT
-        && !(sv->type.t & VT_VOLATILE);
-}
-
-/* vstore() hook (tccgen.c) -- see its own comment in tcc.h. Called before
- * the shared front end forces vstore()'s source value into a register
- * with gv(), for exactly the two shapes gen_opi() above already treats
- * as "cheaper to reread from a frame slot than to round-trip through a
- * register": a plain int local, or a compile-time int constant, stored
- * into a plain int local. Both operands still sit exactly where the
- * parser left them here -- nothing has called gen_cast() or gv() yet --
- * so this only needs to recognize the shape and hand it straight to a
- * dedicated emitter. Anything else (structs, bitfields, volatile, casts
- * that actually narrow/widen, LLOCAL, two-word types, pointers) falls
- * through untouched; vstore() only reaches this from its single-word
- * scalar branch to begin with. */
-ST_FUNC int gen_vstore_hook(void)
-{
-    SValue *dst = vtop - 1, *src = vtop;
-
-    if (!wasm_is_simple_local(dst))
-        return 0;
-    if ((src->type.t & VT_BTYPE) != VT_INT)
-        return 0;
-
-    if (wasm_is_simple_local(src)) {
-        wasm_emit_store_i32_local(dst->c.i, src->c.i);
-        return 1;
-    }
-    if ((src->r & (VT_VALMASK | VT_LVAL | VT_SYM)) == VT_CONST) {
-        wasm_emit_store_i32_imm(dst->c.i, (int)src->c.i);
-        return 1;
-    }
-    return 0;
-}
-
 ST_FUNC void gen_opi(int op)
 {
     int r, fr, c;
@@ -974,42 +833,6 @@ ST_FUNC void gen_opi(int op)
             vswap();
             c = vtop->c.i;
             wasm_emit_i32_bin(op, r, 0, c, 1);
-        } else if (wasm_is_simple_local(vtop - 1) && wasm_is_simple_local(vtop)) {
-            /* Neither operand touches a register at all: get_reg()
-             * picks a free one purely to hold the RESULT (whatever
-             * consumes this expression next needs somewhere to address
-             * it from), never loaded into. Both operands are emitted
-             * inline, back to back, directly into the combine -- see
-             * WASM_OP_FLAG_L_LOCAL's own comment. This is the single
-             * most common shape of all (`a + b`, `x & mask`, ...), so
-             * it's checked before the one-sided case below. */
-            int loff = vtop[-1].c.i, roff = vtop->c.i;
-            r = get_reg(RC_INT);
-            wasm_emit_i32_bin_both_local(op, r, loff, roff);
-            vtop[-1].r = r; /* result now lives in r -- see gv()'s own
-                              * "vtop->r = r" for the convention this
-                              * mirrors; nothing else marks it since
-                              * neither operand went through gv(). */
-            vtop[-1].c.i = 0; /* stale left-operand offset -- must not be
-                                * re-applied if r is later dereferenced;
-                                * see load()'s own identical comment. */
-        } else if (wasm_is_simple_local(vtop)) {
-            /* Right operand is a plain int local, still un-materialized
-             * (a frame address, nothing loaded into any register yet).
-             * gv2() below would force it into a register purely to
-             * satisfy the generic two-register interface, immediately
-             * spilling and reloading a value that's already sitting at
-             * a fixed, cheap-to-reread address -- no different in cost
-             * from the constant case just above, which already skips
-             * this. Materialize only the left operand; leave the right
-             * one exactly as tccgen.c left it, and encode "load this
-             * frame offset" directly on the combine op itself -- see
-             * WASM_OP_FLAG_R1_LOCAL's own comment. */
-            int off = vtop->c.i;
-            vswap();
-            r = gv(RC_INT);
-            vswap();
-            wasm_emit_i32_bin_local(op, r, off);
         } else {
             gv2(RC_INT, RC_INT);
             r = vtop[-1].r;
@@ -1036,24 +859,6 @@ ST_FUNC void gen_opi(int op)
             vswap();
             c = vtop->c.i;
             wasm_emit_cmp_set_i32(op, r, 0, c, 1);
-        } else if (wasm_is_simple_local(vtop - 1) && wasm_is_simple_local(vtop)) {
-            /* Same case as the '+'/etc. arm above, simpler here: a
-             * comparison's result always lands in the fixed local_cmp
-             * slot (never a general register -- see the
-             * WASM_OP_SET_CMP_I32 emission arm), and vset_VT_CMP()
-             * below overwrites vtop's own .r/.c regardless of which
-             * branch ran, so there's no destination register to
-             * allocate and no SValue bookkeeping to redo here at all. */
-            wasm_emit_cmp_set_i32_both_local(op, vtop[-1].c.i, vtop->c.i);
-        } else if (wasm_is_simple_local(vtop)) {
-            /* Loop conditions (`i < n`) are almost universally exactly
-             * this shape -- see the identical case in the '+'/etc. arm
-             * above, and WASM_OP_FLAG_R1_LOCAL's own comment. */
-            int off = vtop->c.i;
-            vswap();
-            r = gv(RC_INT);
-            vswap();
-            wasm_emit_cmp_set_i32_local(op, r, off);
         } else {
             gv2(RC_INT, RC_INT);
             r = vtop[-1].r;

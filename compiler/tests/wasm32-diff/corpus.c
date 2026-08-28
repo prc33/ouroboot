@@ -597,3 +597,83 @@ int test_vstore_in_loop(void)
     }
     return sum; /* 30 */
 }
+
+/* ---------------------------------------------------------------- */
+/* Type coverage for the operand-stack model (WasmVStack in
+ * tccwasm.c). The rest of this corpus is deliberately weighted toward
+ * control flow; these exist because the operand-stack rewrite touches
+ * every emission arm, including the i64/f32/f64 ones and the address
+ * operand of loads and stores, which plain int control-flow tests
+ * never reach. The multi-read shapes matter most: a value taken off
+ * the operand stack has no home in its local unless the consuming op
+ * either overwrites that register or tee's it on the way past, and
+ * that is exactly what a second reader of the same register would
+ * expose (it did, during the rewrite -- `MOV r1, r0` followed by
+ * `r0 = r0 + 1`). */
+
+int test_ty_i64(void)
+{
+    long long a = 0x100000000LL, b = 7;
+    return (int)((a + b) * 3 - b); /* 14 */
+}
+
+int test_ty_i64_cmp(void)
+{
+    long long a = 5, b = 9;
+    return (a < b) + (a > b) * 10 + (a == b) * 100; /* 1 */
+}
+
+int test_ty_double(void)
+{
+    double a = 3.5, b = 2.0;
+    return (int)((a * b) + (a - b) + (a / b)); /* 7+1.5+1.75 -> 10 */
+}
+
+int test_ty_float(void)
+{
+    float a = 1.5f, b = 4.0f;
+    return (int)((a * b) + (b - a)); /* 6+2.5 -> 8 */
+}
+
+int test_ty_mixed(void)
+{
+    int i = 3;
+    double d = 2.5;
+    return (int)(i * d) + (int)(d / i); /* 7 + 0 */
+}
+
+static int test_ty_helper(int x, int y) { return x * y + 1; }
+
+int test_ty_call(void)
+{
+    /* Two calls in one expression: the first result is pending on the
+     * operand stack across the second call's own argument setup. */
+    int a = 6, b = 7;
+    return test_ty_helper(a, b) + test_ty_helper(b, a); /* 43+43 */
+}
+
+int test_ty_ptr_index(void)
+{
+    /* Store through a computed address -- the address is a register
+     * operand of the store, pushed before the value. */
+    int arr[4], *p = arr, i;
+    for (i = 0; i < 4; i++)
+        p[i] = i * i;
+    return arr[0] + arr[1] + arr[2] + arr[3]; /* 0+1+4+9 = 14 */
+}
+
+int test_ty_deref_chain(void)
+{
+    /* A load whose address register is also the register it loads
+     * into -- the "killed" case wasm_emit_addr() has to tell apart
+     * from a still-live one. */
+    int x = 41, *p = &x, **pp = &p;
+    return **pp + 1; /* 42 */
+}
+
+int test_ty_shift64(void)
+{
+    unsigned long long v = 1;
+    v <<= 40;
+    return (int)(v >> 32); /* 256 */
+}

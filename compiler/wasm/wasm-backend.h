@@ -76,42 +76,6 @@ enum {
 #define WASM_OP_FLAG_IMM   0x0001
 #define WASM_OP_FLAG_INVERT 0x0002
 #define WASM_OP_FLAG_UNSIGNED 0x0100
-/* WASM_OP_I32_BIN only: the second operand is not a register at all --
- * it's a plain `int`-sized local variable, still sitting at its own
- * frame slot, that gen_opi() deliberately never called gv() on. imm
- * holds its frame offset. Avoids ever allocating a fake "register" (a
- * wasm local slot) for the overwhelmingly common case of "combine
- * something with a local variable" -- see docs/wasm-backend-size-
- * 2026-08-28.md's own measurement of how much of the emitted module
- * was exactly this kind of avoidable local.get/local.set traffic. */
-#define WASM_OP_FLAG_R1_LOCAL 0x0200
-/* WASM_OP_I32_BIN / WASM_OP_SET_CMP_I32 only, and only combined with
- * WASM_OP_FLAG_R1_LOCAL: the FIRST operand is ALSO a plain local
- * (target_pc repurposed to hold its frame offset -- unused by these two
- * op kinds otherwise, which never jump anywhere). r0 stops being an
- * input at all here -- it's purely the destination -- so
- * wasm_op_first_input() must never report it as this op's first read
- * for this combination, or a preceding op could tee a value nothing
- * here consumes, leaving it stranded on the wasm stack (a genuine
- * validation-breaking imbalance, not just a missed optimization -- see
- * this flag's own emission-side comment). */
-#define WASM_OP_FLAG_L_LOCAL 0x0400
-/* WASM_OP_STORE_I32 / WASM_OP_STORE_I64 only: the value being stored never
- * got a register either -- gen_vstore_hook() (tcc.h/tccgen.c) intercepted
- * the assignment before tccgen.c's own vstore() ever called gv() to force
- * one. target_pc holds the source local's own frame offset, the same
- * repurposing WASM_OP_FLAG_L_LOCAL uses (STORE ops never jump, so
- * target_pc is otherwise unused by them). r0 is unused here -- there is
- * no source register at all. Mutually exclusive with
- * WASM_OP_FLAG_VAL_IMM. Bit chosen above 0x00ff deliberately: STORE's
- * `flags` low byte already holds the DESTINATION address mode
- * (WASM_ADDR_*, set by wasm_set_addr()) and must not be disturbed. */
-#define WASM_OP_FLAG_VAL_LOCAL 0x0800
-/* WASM_OP_STORE_I32 / WASM_OP_STORE_I64 only: the value being stored is a
- * compile-time constant, held in i64 (truncated to 32 bits by the emitter
- * for STORE_I32) -- also never given a register. Mutually exclusive with
- * WASM_OP_FLAG_VAL_LOCAL. */
-#define WASM_OP_FLAG_VAL_IMM 0x1000
 
 #define WASM_MAX_CALL_ARGS 32
 typedef struct WasmOp {

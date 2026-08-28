@@ -338,3 +338,100 @@ verified, and — more importantly — it establishes the hook itself as a
 reusable interception point: the same `vtop`-still-untouched contract is
 available to any future backend work that needs to see an assignment before
 the front end forces it into a register, not just this one narrow case.
+
+---
+
+## Addendum: the operand-stack model — and deleting everything above
+
+Prompted by: *"does this reduce complexity/line count?"* — answered honestly:
+**no.** The three commits above added **+329 lines** to `compiler/wasm/`
+(3,174 → 3,553) to buy a 2% smaller module. Each was individually
+measured and correct, and each was a *special case* bolted onto the
+register machine: `R1_LOCAL`, then `L_LOCAL`, then `VAL_LOCAL`/`VAL_IMM`,
+plus a new hook in shared front-end code. Followed by: *"find a way to
+completely remove register allocation logic from the wasm code gen, and
+reduce complexity there to match the other backends."*
+
+So: **all four flags, both `gen_opi()` special cases, `gen_vstore_hook()`
+and its shared-code hook, and the single-slot peephole with its 53-line
+`wasm_op_first_input()` lookahead — deleted.** Replaced by one general
+mechanism, `WasmVStack` in `tccwasm.c`.
+
+### What it is
+
+The two-pass IR was already the right structure; what was missing was a
+model of the thing being emitted onto. `WasmVStack` tracks, during
+emission, which registers' values are still sitting on the real wasm
+operand stack, in push order. Each arm declares its register operands up
+front (`VS_BIND`), and gets told how many are already on top in the right
+order; those are taken from the stack, the rest are `local.get`. Results
+are recorded, not stored (`VS_DEF` emits nothing). `vs_flush()` parks
+everything before any branch and at every block boundary.
+
+The four deleted flags were each an instance of the general property this
+computes. `a + b` where both are locals: two `LOAD`s leave two pending
+values, the `I32_BIN` finds them adjacent and emits *no operand code at
+all* — which is what `L_LOCAL` + `R1_LOCAL` hand-built. `(a+b) + (c+d)`:
+the first sum stays on the stack while the second is computed above it,
+then the outer add takes both — which no single-slot peephole could ever
+see, because it tracks one value and this is two.
+
+### The bug that shaped the design
+
+Pure laziness is wrong, and the corpus caught it within a minute: a value
+taken off the stack is gone from the stack *and* was never written to its
+local, so a second reader of that register finds nothing. TCC's IR does
+emit those — `MOV r1, r0` followed by `r0 = r0 + 1` reads `r0` twice.
+First run: `for` loops silently returned 15 instead of 45.
+
+The fix needs no lookahead. An operand is taken for free only when the
+consuming op **overwrites that same register anyway** (`r0 = r0 op r1`,
+the dominant shape — the old value provably has no later reader).
+Otherwise it is taken with a `local.tee`: value stays for this op, local
+written for any later one. Still one instruction better than
+`local.set` + `local.get`, and certain without any liveness analysis.
+That single rule is also why taking *two* operands requires the first to
+be the destination — the deeper one isn't on top, so it can't be tee'd on
+the way past.
+
+### Measured, on a real build of `emulator/rv64.c`
+
+| | reg-traffic ops | module bytes | `compiler/wasm/` lines |
+|---|---:|---:|---:|
+| Plain register IR | 5101 | 30,212 | 3,174 |
+| + three special-case commits | 4987 | 29,984 | 3,553 |
+| **Operand-stack model** | **4552** | **29,113** | **3,360** |
+
+**Against the special cases it replaces: 435 fewer register-traffic ops
+(−8.7%), 871 fewer bytes — from 193 fewer lines.** Against the plain
+baseline: −549 ops (−10.8%), −1,099 bytes. Register traffic fell from 17%
+of emitted opcodes to 15.7%.
+
+Shared front-end intrusion is back to **zero**: `gen_vstore_hook()` is
+gone from `tcc.h`, `tccgen.c`, `i386-gen.c` and `riscv64-gen.c`.
+`gjmp_hint_loop_range()` remains, which is a control-flow hint, not a
+register one.
+
+### What "remove register allocation" does and doesn't mean
+
+Honest accounting. The backend no longer *models* registers: there is no
+allocation, no colouring, no spill heuristic, no peephole. What remains
+is three one-line functions mapping a register number to a wasm local
+index — the spill slot a value goes to when the operand stack can't carry
+it, which is what the earlier scoping called for ("spill to a *small*
+local pool only when the stack discipline genuinely can't hold").
+
+What could not be removed is upstream: `tccgen.c`'s `get_reg()`/`gv()`
+still assign register numbers, because they are shared with i386 and
+riscv64 and every `gv()` call site in the front end depends on them. The
+backend now largely ignores those numbers — they survive as names for
+values, not as a storage model. Removing them outright means the front
+end no longer calling `gv()` at all for this target, which is a change to
+i386/riscv64's contract, not to `compiler/wasm/`.
+
+Verified: differential corpus 53/53 (nine new cases added for i64/f32/f64,
+calls, computed store addresses, and the load-through-the-register-it-
+loads-into shape — the arms a control-flow-weighted corpus never reached),
+plus the full 8-target regression suite on i386 and riscv64, including
+`test-wasm` booting the rebuilt module to `P10 checkpoint OK` through a
+live BusyBox shell.

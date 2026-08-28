@@ -1322,27 +1322,6 @@ ST_FUNC int gjmp_append(int n, int t);
  * but one loop) into the single genuine loop it is -- see
  * docs/wasm-codegen-rethink-2026-08-27.md. */
 ST_FUNC void gjmp_hint_loop_range(int start);
-/* Called by vstore() (tccgen.c) right before it calls gv() to materialize
- * an assignment's source value into a register -- the one register
- * round-trip gen_opi()'s own hooks above can't reach, because store() is
- * a backend function and by the time it runs, the shared front end has
- * already forced the value into a register. This hook runs earlier, while
- * vtop/vtop[-1] are still whatever the parser produced, so a backend can
- * recognize a case it can emit directly (e.g. wasm: a plain int local or
- * constant assigned to a plain int local) and skip the round-trip
- * entirely.
- *
- * Return 1 to mean "fully handled": the backend has emitted complete,
- * correct code for the entire store, and vtop/vtop[-1] are UNCHANGED --
- * still exactly the two SValues the parser pushed, still a valid
- * representation of "the assignment expression's result" for vstore()'s
- * own trailing vswap()+vtop-- to finish correctly (which is why leaving
- * them untouched, rather than popping, is required).
- *
- * Return 0 to mean "not handled, proceed normally" -- the only possible
- * answer for i386/riscv64, and always a safe answer for any backend: the
- * hook may be as narrow or conservative as it likes. */
-ST_FUNC int gen_vstore_hook(void);
 ST_FUNC void gen_opi(int op);
 ST_FUNC void gen_opf(int op);
 ST_FUNC void gen_cvt_ftoi(int t);

@@ -2903,12 +2903,6 @@ ST_FUNC void vstore(void)
     } else if (dbt == VT_VOID) {
         --vtop;
     } else {
-        /* gen_vstore_hook() lets a backend intercept before gv() forces
-           the source value into a register -- see its own comment in
-           tcc.h. If it returns 1, it has already emitted the complete
-           store itself and left vtop/vtop[-1] untouched, so everything
-           below (down to vswap()+vtop--) is skipped entirely. */
-        if (!gen_vstore_hook()) {
             /* optimize char/short casts */
             delayed_cast = 0;
             if ((dbt == VT_BYTE || dbt == VT_SHORT)
@@ -2964,7 +2958,6 @@ ST_FUNC void vstore(void)
                 /* single word */
                 store(r, vtop - 1);
             }
-        }
         vswap();
         vtop--; /* NOT vpop() because on x86 it would flush the fp stack */
     }
