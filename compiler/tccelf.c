@@ -449,13 +449,6 @@ ST_FUNC addr_t get_sym_addr(TCCState *s1, const char *name, int err, int forc)
 {
     int sym_index;
     ElfW(Sym) *sym;
-    char buf[256];
-    if (forc && s1->leading_underscore
-        ) {
-        buf[0] = '_';
-        pstrcpy(buf + 1, sizeof(buf) - 1, name);
-        name = buf;
-    }
     sym_index = find_elf_sym(s1->symtab, name);
     sym = &((ElfW(Sym) *)s1->symtab->data)[sym_index];
     if (!sym_index || sym->st_shndx == SHN_UNDEF) {

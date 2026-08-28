@@ -47,6 +47,7 @@
 #define USING_GLOBALS
 #include "../tcc.h"
 #include <assert.h>
+#include "riscv64-encode.h"
 
 #define XLEN 8
 
@@ -116,13 +117,18 @@ ST_FUNC void o(unsigned int c)
 static void EIu(uint32_t opcode, uint32_t func3,
                uint32_t rd, uint32_t rs1, uint32_t imm)
 {
-    o(opcode | (func3 << 12) | (rd << 7) | (rs1 << 15) | (imm << 20));
+    o(rv_i(opcode, func3, rd, rs1, imm));
 }
 
 static void ER(uint32_t opcode, uint32_t func3,
                uint32_t rd, uint32_t rs1, uint32_t rs2, uint32_t func7)
 {
-    o(opcode | func3 << 12 | rd << 7 | rs1 << 15 | rs2 << 20 | func7 << 25);
+    o(rv_r(opcode, func3, func7, rd, rs1, rs2));
+}
+
+static void EM(uint32_t bits, unsigned rd, unsigned rs1, unsigned rs2)
+{
+    o(bits | RV_RD(rd) | RV_RS1(rs1) | RV_RS2(rs2));
 }
 
 static void EI(uint32_t opcode, uint32_t func3,
@@ -136,8 +142,7 @@ static void ES(uint32_t opcode, uint32_t func3,
                uint32_t rs1, uint32_t rs2, uint32_t imm)
 {
     assert(! ((imm + (1 << 11)) >> 12));
-    o(opcode | (func3 << 12) | ((imm & 0x1f) << 7) | (rs1 << 15)
-      | (rs2 << 20) | ((imm >> 5) << 25));
+    o(rv_s(opcode, func3, rs1, rs2, imm));
 }
 
 // Patch all branches in list pointed to by t to branch to a:
@@ -1080,44 +1085,44 @@ static void gen_opil(int op, int ll)
         break;
 
     case '+':
-        ER(0x33 | ll, 0, d, a, b, 0); // add d, a, b
+        EM(ll ? RV_addw : RV_add, d, a, b);
         break;
     case '-':
-        ER(0x33 | ll, 0, d, a, b, 0x20); // sub d, a, b
+        EM(ll ? RV_subw : RV_sub, d, a, b);
         break;
     case TOK_SAR:
-        ER(0x33 | ll | ll, 5, d, a, b, 0x20); // sra d, a, b
+        EM(ll ? RV_sraw : RV_sra, d, a, b);
         break;
     case TOK_SHR:
-        ER(0x33 | ll | ll, 5, d, a, b, 0); // srl d, a, b
+        EM(ll ? RV_srlw : RV_srl, d, a, b);
         break;
     case TOK_SHL:
-        ER(0x33 | ll, 1, d, a, b, 0); // sll d, a, b
+        EM(ll ? RV_sllw : RV_sll, d, a, b);
         break;
     case '*':
-        ER(0x33 | ll, 0, d, a, b, 1); // mul d, a, b
+        EM(ll ? RV_mulw : RV_mul, d, a, b);
         break;
     case '/':
-        ER(0x33 | ll, 4, d, a, b, 1); // div d, a, b
+        EM(ll ? RV_divw : RV_div, d, a, b);
         break;
     case '&':
-        ER(0x33, 7, d, a, b, 0); // and d, a, b
+        EM(RV_and, d, a, b);
         break;
     case '^':
-        ER(0x33, 4, d, a, b, 0); // xor d, a, b
+        EM(RV_xor, d, a, b);
         break;
     case '|':
-        ER(0x33, 6, d, a, b, 0); // or d, a, b
+        EM(RV_or, d, a, b);
         break;
     case '%':
-        ER(ll ? 0x3b:  0x33, 6, d, a, b, 1); // rem d, a, b
+        EM(ll ? RV_remw : RV_rem, d, a, b);
         break;
     case TOK_UMOD:
-        ER(0x33 | ll, 7, d, a, b, 1); // remu d, a, b
+        EM(ll ? RV_remuw : RV_remu, d, a, b);
         break;
     case TOK_PDIV:
     case TOK_UDIV:
-        ER(0x33 | ll, 5, d, a, b, 1); // divu d, a, b
+        EM(ll ? RV_divuw : RV_divu, d, a, b);
         break;
     }
 }
@@ -1135,6 +1140,7 @@ ST_FUNC void gen_opl(int op)
 ST_FUNC void gen_opf(int op)
 {
     int rs1, rs2, rd, dbl, invert;
+    uint32_t bits;
     if (vtop[0].type.t == VT_LDOUBLE) {
         CType type = vtop[0].type;
         int func = 0;
@@ -1178,48 +1184,48 @@ ST_FUNC void gen_opf(int op)
     default:
         assert(0);
     case '+':
-        op = 0; // fadd
+        bits = dbl ? RV_fadd_d : RV_fadd_s;
     arithop:
         rd = get_reg(RC_FLOAT);
         vtop->r = rd;
         rd = freg(rd);
-        ER(0x53, 7, rd, rs1, rs2, dbl | (op << 2)); // fop.[sd] RD, RS1, RS2 (dyn rm)
+        EM(bits, rd, rs1, rs2);
         break;
     case '-':
-        op = 1; // fsub
+        bits = dbl ? RV_fsub_d : RV_fsub_s;
         goto arithop;
     case '*':
-        op = 2; // fmul
+        bits = dbl ? RV_fmul_d : RV_fmul_s;
         goto arithop;
     case '/':
-        op = 3; // fdiv
+        bits = dbl ? RV_fdiv_d : RV_fdiv_s;
         goto arithop;
     case TOK_EQ:
-        op = 2; // EQ
+        bits = dbl ? RV_feq_d : RV_feq_s;
     cmpop:
         rd = get_reg(RC_INT);
         vtop->r = rd;
         rd = ireg(rd);
-        ER(0x53, op, rd, rs1, rs2, dbl | 0x50); // fcmp.[sd] RD, RS1, RS2 (op == eq/lt/le)
+        EM(bits, rd, rs1, rs2);
         if (invert)
           EI(0x13, 4, rd, rd, 1); // xori RD, 1
         break;
     case TOK_NE:
         invert = 1;
-        op = 2; // EQ
+        bits = dbl ? RV_feq_d : RV_feq_s;
         goto cmpop;
     case TOK_LT:
-        op = 1; // LT
+        bits = dbl ? RV_flt_d : RV_flt_s;
         goto cmpop;
     case TOK_LE:
-        op = 0; // LE
+        bits = dbl ? RV_fle_d : RV_fle_s;
         goto cmpop;
     case TOK_GT:
-        op = 1; // LT
+        bits = dbl ? RV_flt_d : RV_flt_s;
         rd = rs1, rs1 = rs2, rs2 = rd;
         goto cmpop;
     case TOK_GE:
-        op = 0; // LE
+        bits = dbl ? RV_fle_d : RV_fle_s;
         rd = rs1, rs1 = rs2, rs2 = rd;
         goto cmpop;
     }

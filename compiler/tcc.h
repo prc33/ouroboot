@@ -552,7 +552,6 @@ struct TCCState {
     int output_type;
     /* C language options */
     unsigned char char_is_unsigned;
-    unsigned char leading_underscore;
     unsigned char ms_extensions; /* allow nested named struct w/o identifier behave like unnamed */
     unsigned char dollars_in_identifiers;  /* allows '$' char in identifiers */
     unsigned char ms_bitfields; /* if true, emulate MS algorithm for aligning bitfields */
@@ -1226,7 +1225,7 @@ ST_FUNC void section_reserve(Section *sec, unsigned long size);
 ST_FUNC Section *find_section(TCCState *s1, const char *name);
 ST_FUNC Section *new_symtab(TCCState *s1, const char *symtab_name, int sh_type, int sh_flags, const char *strtab_name, const char *hash_name, int hash_sh_flags);
 
-ST_FUNC void put_extern_sym2(Sym *sym, int sh_num, addr_t value, unsigned long size, int can_add_underscore);
+ST_FUNC void put_extern_sym2(Sym *sym, int sh_num, addr_t value, unsigned long size);
 ST_FUNC void put_extern_sym(Sym *sym, Section *section, addr_t value, unsigned long size);
 #if PTR_SIZE == 4
 ST_FUNC void greloc(Section *s, Sym *sym, unsigned long offset, int type);

@@ -376,13 +376,11 @@ ST_FUNC void update_storage(Sym *sym)
    'section' with value 'value' */
 
 ST_FUNC void put_extern_sym2(Sym *sym, int sh_num,
-                            addr_t value, unsigned long size,
-                            int can_add_underscore)
+                            addr_t value, unsigned long size)
 {
     int sym_type, sym_bind, info, other, t;
     ElfSym *esym;
     const char *name;
-    char buf1[256];
 
     if (!sym->c) {
         name = get_tok_str(sym->v, NULL);
@@ -404,14 +402,6 @@ ST_FUNC void put_extern_sym2(Sym *sym, int sh_num,
         if (sym->asm_label) {
             name = get_tok_str(sym->asm_label & ~SYM_FIELD, NULL);
             /* with SYM_FIELD it was __attribute__((alias("..."))) actually */
-            if (!(sym->asm_label & SYM_FIELD))
-                can_add_underscore = 0;
-        }
-
-        if (tcc_state->leading_underscore && can_add_underscore) {
-            buf1[0] = '_';
-            pstrcpy(buf1 + 1, sizeof(buf1) - 1, name);
-            name = buf1;
         }
 
         info = ELFW(ST_INFO)(sym_bind, sym_type);
@@ -431,7 +421,7 @@ ST_FUNC void put_extern_sym(Sym *sym, Section *section,
                            addr_t value, unsigned long size)
 {
     int sh_num = section ? section->sh_num : SHN_UNDEF;
-    put_extern_sym2(sym, sh_num, value, size, 1);
+    put_extern_sym2(sym, sh_num, value, size);
 }
 
 /* add a new relocation entry to symbol 'sym' in section 's' */

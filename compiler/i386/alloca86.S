@@ -1,14 +1,8 @@
 /* ---------------------------------------------- */
 /* alloca86.S */
 
-#ifdef __leading_underscore
-# define _(s) _##s
-#else
-# define _(s) s
-#endif
-
-.globl _(alloca)
-_(alloca):
+.globl alloca
+alloca:
     pop     %edx
     pop     %eax
     add     $3,%eax

@@ -230,13 +230,8 @@
  DEF_ASMDIR(byte)              /* must be first directive */
  DEF_ASMDIR(word)
  DEF_ASMDIR(align)
- DEF_ASMDIR(balign)
- DEF_ASMDIR(p2align)
  DEF_ASMDIR(set)
  DEF_ASMDIR(skip)
- DEF_ASMDIR(space)
- DEF_ASMDIR(string)
- DEF_ASMDIR(asciz)
  DEF_ASMDIR(ascii)
  DEF_ASMDIR(file)
  DEF_ASMDIR(globl)
@@ -261,9 +256,7 @@
  DEF_ASMDIR(code16)
  DEF_ASMDIR(code32)
 #endif
- DEF_ASMDIR(short)
  DEF_ASMDIR(long)
- DEF_ASMDIR(int)
  DEF_ASMDIR(option)
  DEF_ASMDIR(section)            /* must be last directive */
 
