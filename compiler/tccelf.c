@@ -89,7 +89,6 @@ ST_FUNC void tccelf_delete(TCCState *s1)
 {
     int i;
 
-#ifndef ELF_OBJ_ONLY
     /* free symbol versions */
     for (i = 0; i < nb_sym_versions; i++) {
         tcc_free(sym_versions[i].version);
@@ -97,7 +96,6 @@ ST_FUNC void tccelf_delete(TCCState *s1)
     }
     tcc_free(sym_versions);
     tcc_free(sym_to_version);
-#endif
 
     /* free all sections */
     for(i = 1; i < s1->nb_sections; i++)
@@ -462,7 +460,6 @@ ST_FUNC addr_t get_sym_addr(TCCState *s1, const char *name, int err, int forc)
 
 
 
-#ifndef ELF_OBJ_ONLY
 static void
 version_add (TCCState *s1)
 {
@@ -544,7 +541,6 @@ version_add (TCCState *s1)
     }
     dt_verneednum = nb_entries;
 }
-#endif
 
 /* add an elf symbol : check if it is already defined and patch
    it. Return symbol index. NOTE that sh_num can be SHN_UNDEF. */
@@ -850,7 +846,6 @@ ST_FUNC void relocate_section(TCCState *s1, Section *s)
     }
 }
 
-#ifndef ELF_OBJ_ONLY
 /* relocate relocation table in 'sr' */
 static void relocate_rel(TCCState *s1, Section *sr)
 {
@@ -861,7 +856,6 @@ static void relocate_rel(TCCState *s1, Section *sr)
     for_each_elem(sr, 0, rel, ElfW_Rel)
         rel->r_offset += s->sh_addr;
 }
-#endif
 
 static void build_got(TCCState *s1)
 {
@@ -1176,7 +1170,6 @@ ST_FUNC void resolve_common_syms(TCCState *s1)
     tcc_add_linker_symbols(s1);
 }
 
-#ifndef ELF_OBJ_ONLY
 ST_FUNC void fill_got_entry(TCCState *s1, ElfW_Rel *rel)
 {
     int sym_index = ELFW(R_SYM) (rel->r_info);
@@ -1374,7 +1367,6 @@ static void export_global_syms(TCCState *s1)
         }
     }
 }
-#endif
 
 /* Allocate strings for section names and decide if an unallocated section
    should be output.
@@ -1565,7 +1557,6 @@ static int layout_sections(TCCState *s1, ElfW(Phdr) *phdr, int phnum,
     return file_offset;
 }
 
-#ifndef ELF_OBJ_ONLY
 /* put dynamic tag */
 static void put_dt(Section *dynamic, int dt, addr_t val)
 {
@@ -1703,7 +1694,6 @@ static int final_sections_reloc(TCCState *s1)
     }
     return 0;
 }
-#endif
 
 /* Create an ELF file on disk.
    This function handle ELF specific layout requirements */
@@ -1832,7 +1822,6 @@ static int tcc_write_elf_file(TCCState *s1, const char *filename, int phnum,
     return 0;
 }
 
-#ifndef ELF_OBJ_ONLY
 /* Sort section headers by assigned sh_addr, remove sections
    that we aren't going to output.  */
 static void tidy_section_headers(TCCState *s1, int *sec_order)
@@ -1878,7 +1867,6 @@ static void tidy_section_headers(TCCState *s1, int *sec_order)
     s1->nb_sections = nnew;
     tcc_free(backmap);
 }
-#endif
 
 
 /* Output an ELF file. */
@@ -1898,7 +1886,6 @@ static int elf_output_file(TCCState *s1, const char *filename)
     sec_order = NULL;
     interp = dynamic = dynstr = NULL; /* avoid warning */
 
-#ifndef ELF_OBJ_ONLY
     if (file_type != TCC_OUTPUT_OBJ) {
         /* if linking, also link in runtime libraries (libc, libgcc, etc.) */
         tcc_add_runtime(s1);
@@ -1941,7 +1928,6 @@ static int elf_output_file(TCCState *s1, const char *filename)
         build_got_entries(s1);
 	version_add (s1);
     }
-#endif
 
     /* we add a section for symbols */
     strsec = new_section(s1, ".shstrtab", SHT_STRTAB, 0);
@@ -1950,7 +1936,6 @@ static int elf_output_file(TCCState *s1, const char *filename)
     /* Allocate strings for section names */
     ret = alloc_sec_names(s1, file_type, strsec);
 
-#ifndef ELF_OBJ_ONLY
     if (dynamic) {
         int i;
         /* add a list of needed dlls */
@@ -1975,7 +1960,6 @@ static int elf_output_file(TCCState *s1, const char *filename)
         dynamic->sh_size = dynamic->data_offset;
         dynstr->sh_size = dynstr->data_offset;
     }
-#endif
 
     /* compute number of program headers */
     if (file_type == TCC_OUTPUT_OBJ)
@@ -1999,7 +1983,6 @@ static int elf_output_file(TCCState *s1, const char *filename)
     file_offset = layout_sections(s1, phdr, phnum, interp, strsec, &dyninf,
                                   sec_order);
 
-#ifndef ELF_OBJ_ONLY
     /* Fill remaining program header and finalize relocation related to dynamic
        linking. */
     if (file_type != TCC_OUTPUT_OBJ) {
@@ -2035,7 +2018,6 @@ static int elf_output_file(TCCState *s1, const char *filename)
         else if (s1->got)
             fill_local_got_entries(s1);
     }
-#endif
 
     /* Create the ELF file with name 'filename' */
     ret = tcc_write_elf_file(s1, filename, phnum, phdr, file_offset, sec_order);
