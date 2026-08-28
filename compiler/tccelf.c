@@ -1409,10 +1409,6 @@ struct dyn_inf {
     unsigned long data_offset;
     addr_t rel_addr;
     addr_t rel_size;
-#if defined(__FreeBSD__) || defined(__FreeBSD_kernel__)
-    addr_t bss_addr;
-    addr_t bss_size;
-#endif
 };
 
 /* Assign sections to segments and decide how are sections laid out when loaded
@@ -1462,9 +1458,6 @@ static int layout_sections(TCCState *s1, ElfW(Phdr) *phdr, int phnum,
 
         /* dynamic relocation table information, for .dynamic section */
         dyninf->rel_addr = dyninf->rel_size = 0;
-#if defined(__FreeBSD__) || defined(__FreeBSD_kernel__)
-        dyninf->bss_addr = dyninf->bss_size = 0;
-#endif
 
         for(j = 0; j < 2; j++) {
             ph->p_type = PT_LOAD;
@@ -1528,20 +1521,9 @@ static int layout_sections(TCCState *s1, ElfW(Phdr) *phdr, int phnum,
                     }
                     /* update dynamic relocation infos */
                     if (s->sh_type == SHT_RELX) {
-#if defined(__FreeBSD__) || defined(__FreeBSD_kernel__)
-                        if (!strcmp(strsec->data + s->sh_name, ".rel.got")) {
-                            dyninf->rel_addr = addr;
-                            dyninf->rel_size += s->sh_size; /* XXX only first rel. */
-                        }
-                        if (!strcmp(strsec->data + s->sh_name, ".rel.bss")) {
-                            dyninf->bss_addr = addr;
-                            dyninf->bss_size = s->sh_size; /* XXX only first rel. */
-                        }
-#else
                         if (dyninf->rel_size == 0)
                             dyninf->rel_addr = addr;
                         dyninf->rel_size += s->sh_size;
-#endif
                     }
                     addr += s->sh_size;
                     if (s->sh_type != SHT_NOBITS)
@@ -1654,18 +1636,9 @@ static void fill_dynamic(TCCState *s1, struct dyn_inf *dyninf)
     put_dt(dynamic, DT_RELASZ, dyninf->rel_size);
     put_dt(dynamic, DT_RELAENT, sizeof(ElfW_Rel));
 #else
-#if defined(__FreeBSD__) || defined(__FreeBSD_kernel__)
-    put_dt(dynamic, DT_PLTGOT, s1->got->sh_addr);
-    put_dt(dynamic, DT_PLTRELSZ, dyninf->rel_size);
-    put_dt(dynamic, DT_JMPREL, dyninf->rel_addr);
-    put_dt(dynamic, DT_PLTREL, DT_REL);
-    put_dt(dynamic, DT_REL, dyninf->bss_addr);
-    put_dt(dynamic, DT_RELSZ, dyninf->bss_size);
-#else
     put_dt(dynamic, DT_REL, dyninf->rel_addr);
     put_dt(dynamic, DT_RELSZ, dyninf->rel_size);
     put_dt(dynamic, DT_RELENT, sizeof(ElfW_Rel));
-#endif
 #endif
     if (versym_section)
         put_dt(dynamic, DT_VERSYM, versym_section->sh_addr);
@@ -1764,10 +1737,6 @@ static void tcc_output_elf(TCCState *s1, FILE *f, int phnum, ElfW(Phdr) *phdr,
     ehdr.e_ident[4] = ELFCLASSW;
     ehdr.e_ident[5] = ELFDATA2LSB;
     ehdr.e_ident[6] = EV_CURRENT;
-#if defined(__FreeBSD__) || defined(__FreeBSD_kernel__)
-    /* FIXME: should set only for freebsd _target_, but we exclude only PE target */
-    ehdr.e_ident[EI_OSABI] = ELFOSABI_FREEBSD;
-#endif
 #if   defined TCC_TARGET_RISCV64
     ehdr.e_flags = EF_RISCV_FLOAT_ABI_DOUBLE;
 #endif

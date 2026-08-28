@@ -117,18 +117,9 @@ ST_FUNC void expect(const char *msg)
 #define tal_new(a,b,c)
 #define tal_delete(a)
 #else
-#if !defined(MEM_DEBUG)
 #define tal_free(al, p) tal_free_impl(al, p)
 #define tal_realloc(al, p, size) tal_realloc_impl(&al, p, size)
 #define TAL_DEBUG_PARAMS
-#else
-#define TAL_DEBUG 1
-//#define TAL_INFO 1 /* collect and dump allocators stats */
-#define tal_free(al, p) tal_free_impl(al, p, __FILE__, __LINE__)
-#define tal_realloc(al, p, size) tal_realloc_impl(&al, p, size, __FILE__, __LINE__)
-#define TAL_DEBUG_PARAMS , const char *file, int line
-#define TAL_DEBUG_FILE_LEN 40
-#endif
 
 #define TOKSYM_TAL_SIZE     (768 * 1024) /* allocator for tiny TokenSym in table_ident */
 #define TOKSTR_TAL_SIZE     (768 * 1024) /* allocator for tiny TokenString instances */

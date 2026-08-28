@@ -81,7 +81,6 @@ extern long double strtold (const char *__nptr, char **__endptr);
 /* include file debug */
 /* #define INC_DEBUG */
 /* memory leak debug (only for single threaded usage) */
-/* #define MEM_DEBUG */
 /* assembler debug */
 /* #define ASM_DEBUG */
 
@@ -139,14 +138,8 @@ extern long double strtold (const char *__nptr, char **__endptr);
 
 /* name of ELF interpreter */
 #ifndef CONFIG_TCC_ELFINTERP
-# if defined __FreeBSD__
-#  define CONFIG_TCC_ELFINTERP "/libexec/ld-elf.so.1"
-# elif defined __FreeBSD_kernel__
-#   define CONFIG_TCC_ELFINTERP "/lib/ld.so.1"
-# elif defined __DragonFly__
+# if defined __DragonFly__
 #  define CONFIG_TCC_ELFINTERP "/usr/libexec/ld-elf.so.2"
-# elif defined __NetBSD__
-#  define CONFIG_TCC_ELFINTERP "/usr/libexec/ld.elf_so"
 # elif defined __GNU__
 #  define CONFIG_TCC_ELFINTERP "/lib/ld.so"
 # elif defined(TCC_UCLIBC)
@@ -968,24 +961,11 @@ ST_FUNC char *pstrncpy(char *out, const char *in, size_t num);
 PUB_FUNC char *tcc_basename(const char *name);
 PUB_FUNC char *tcc_fileextension (const char *name);
 
-#ifndef MEM_DEBUG
 PUB_FUNC void tcc_free(void *ptr);
 PUB_FUNC void *tcc_malloc(unsigned long size);
 PUB_FUNC void *tcc_mallocz(unsigned long size);
 PUB_FUNC void *tcc_realloc(void *ptr, unsigned long size);
 PUB_FUNC char *tcc_strdup(const char *str);
-#else
-#define tcc_free(ptr)           tcc_free_debug(ptr)
-#define tcc_malloc(size)        tcc_malloc_debug(size, __FILE__, __LINE__)
-#define tcc_mallocz(size)       tcc_mallocz_debug(size, __FILE__, __LINE__)
-#define tcc_realloc(ptr,size)   tcc_realloc_debug(ptr, size, __FILE__, __LINE__)
-#define tcc_strdup(str)         tcc_strdup_debug(str, __FILE__, __LINE__)
-PUB_FUNC void tcc_free_debug(void *ptr);
-PUB_FUNC void *tcc_malloc_debug(unsigned long size, const char *file, int line);
-PUB_FUNC void *tcc_mallocz_debug(unsigned long size, const char *file, int line);
-PUB_FUNC void *tcc_realloc_debug(void *ptr, unsigned long size, const char *file, int line);
-PUB_FUNC char *tcc_strdup_debug(const char *str, const char *file, int line);
-#endif
 
 #define free(p) use_tcc_free(p)
 #define malloc(s) use_tcc_malloc(s)

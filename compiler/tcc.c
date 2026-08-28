@@ -113,11 +113,7 @@ static const char version[] =
 #elif defined TCC_TARGET_RISCV64
         "riscv64"
 #endif
-#if   defined(__FreeBSD__) || defined(__FreeBSD_kernel__)
-        " FreeBSD"
-#else
         " Linux"
-#endif
     ")\n"
     ;
 
