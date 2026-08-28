@@ -162,10 +162,23 @@ That is independently valuable (it would also retire the "we can't safely fix
 the for-loop rotation" blocker from the previous document) and is the honest
 next step before touching codegen.
 
+**Done**: `compiler/tests/wasm32-diff/` (differential against host gcc, 29
+functions weighted toward exactly the shapes this document and the previous
+one identified). It found a real bug on first run — a degenerate
+`WASM_OP_JMP_CMP` (both branches landing on the same block, produced by an
+ordinary `X && 0`/`X || 1` short-circuit) crashed the compiler outright,
+independent of anything about loops or switches, confirmed wasm-specific
+against i386 + `qemu-i386-static` before fixing. `rv64.wasm` stayed
+byte-identical throughout — this pattern doesn't occur in `emulator/rv64.c`,
+which is exactly why byte-identity was silent about a crash-on-sight bug. See
+the commit and `compiler/tests/wasm32-diff/README.md` for the full story. The
+corpus is the safety net (1) and (2) below still need before either is safe
+to attempt.
+
 ## Recommendation
 
-1. **Build the wasm test corpus / differential harness first.** Nothing else
-   here is safe without it.
+1. ~~Build the wasm test corpus / differential harness first.~~ **Done** —
+   `compiler/tests/wasm32-diff/`.
 2. **Then structural emission (1)** — self-contained, deletes the most code
    per unit of risk, and removes the two known-bad fallback paths.
 3. **Then stack-first expressions (2)** — the big prize, both for size and for
