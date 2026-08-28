@@ -24,8 +24,6 @@
 
 #define MAX_OPERANDS 3
 
-#define TOK_ASM_first TOK_ASM_clc
-#define TOK_ASM_last TOK_ASM_emms
 #define TOK_ASM_alllast TOK_ASM_subps
 
 #define OPC_B          0x01  /* only used with OPC_WL */
@@ -192,7 +190,7 @@ static const ASMInstr asm_instrs[] = {
 #define O(o) ((uint64_t) ((((o) & 0xff00) == 0x0f00) ? ((((o) >> 8) & ~0xff) | ((o) & 0xff)) : (o)))
 /* This constructs instr_type from opcode, type and group.  */
 #define T(o,i,g) ((i) | ((g) << OPC_GROUP_SHIFT) | ((((o) & 0xff00) == 0x0f00) ? OPC_0F : 0))
-#define DEF_ASM_OP0(name, opcode)
+#define DEF_ASM_OP0(name, opcode) { TOK_ASM_ ## name, O(opcode), T(opcode, 0, 0), 0, { 0 } },
 #define DEF_ASM_OP0L(name, opcode, group, instr_type) { TOK_ASM_ ## name, O(opcode), T(opcode, instr_type, group), 0, { 0 } },
 #define DEF_ASM_OP1(name, opcode, group, instr_type, op0) { TOK_ASM_ ## name, O(opcode), T(opcode, instr_type, group), 1, { op0 }},
 #define DEF_ASM_OP2(name, opcode, group, instr_type, op0, op1) { TOK_ASM_ ## name, O(opcode), T(opcode, instr_type, group), 2, { op0, op1 }},
@@ -200,16 +198,6 @@ static const ASMInstr asm_instrs[] = {
 # include "i386-asm.h"
     /* last operation */
     { 0, },
-};
-
-static const uint16_t op0_codes[] = {
-#define ALT(x)
-#define DEF_ASM_OP0(x, opcode) opcode,
-#define DEF_ASM_OP0L(name, opcode, group, instr_type)
-#define DEF_ASM_OP1(name, opcode, group, instr_type, op0)
-#define DEF_ASM_OP2(name, opcode, group, instr_type, op0, op1)
-#define DEF_ASM_OP3(name, opcode, group, instr_type, op0, op1, op2)
-# include "i386-asm.h"
 };
 
 static inline int get_reg_shift(TCCState *s1)
@@ -635,14 +623,7 @@ again:
     next: ;
     }
     if (pa->sym == 0) {
-        if (opcode >= TOK_ASM_first && opcode <= TOK_ASM_last) {
-            int b;
-            b = op0_codes[opcode - TOK_ASM_first];
-            if (b & 0xff00) 
-                g(b >> 8);
-            g(b);
-            return;
-        } else if (opcode <= TOK_ASM_alllast) {
+        if (opcode <= TOK_ASM_alllast) {
             tcc_error("bad operand with opcode '%s'",
                   get_tok_str(opcode, NULL));
         } else {

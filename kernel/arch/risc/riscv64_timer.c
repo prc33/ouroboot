@@ -39,8 +39,8 @@ static void (*g_tick_handler)(void);
 
 static void timer_irq(struct regs *r) {
 	(void)r;
-	unsigned long now = __builtin_riscv_csrr(CSR_TIME);
-	__builtin_riscv_csrw(CSR_STIMECMP, now + g_delta);
+	unsigned long now = riscv_read_time();
+	riscv_write_stimecmp(now + g_delta);
 	if (g_tick_handler)
 		g_tick_handler();
 }
@@ -54,13 +54,13 @@ void timer_init(unsigned int hz) {
 
 	irq_register_handler(5, timer_irq); /* scause 5 = supervisor timer interrupt */
 
-	unsigned long now = __builtin_riscv_csrr(CSR_TIME);
-	__builtin_riscv_csrw(CSR_STIMECMP, now + g_delta);
+	unsigned long now = riscv_read_time();
+	riscv_write_stimecmp(now + g_delta);
 
-	unsigned long sie = __builtin_riscv_csrr(CSR_SIE);
-	__builtin_riscv_csrw(CSR_SIE, sie | SIE_STIE);
-	unsigned long sstatus = __builtin_riscv_csrr(CSR_SSTATUS);
-	__builtin_riscv_csrw(CSR_SSTATUS, sstatus | SSTATUS_SIE);
+	unsigned long sie = riscv_read_sie();
+	riscv_write_sie(sie | SIE_STIE);
+	unsigned long sstatus = riscv_read_sstatus();
+	riscv_write_sstatus(sstatus | SSTATUS_SIE);
 
 	kprintf("timer: Sstc armed at %u Hz (delta=%lu timebase ticks)\n", hz, g_delta);
 }
@@ -93,6 +93,6 @@ void timer_init(unsigned int hz) {
  * process_schedule() by calling it directly, never via a timer ISR),
  * so turning interrupts off for good here trades away nothing real. */
 void timer_disable(void) {
-	unsigned long sstatus = __builtin_riscv_csrr(CSR_SSTATUS);
-	__builtin_riscv_csrw(CSR_SSTATUS, sstatus & ~SSTATUS_SIE);
+	unsigned long sstatus = riscv_read_sstatus();
+	riscv_write_sstatus(sstatus & ~SSTATUS_SIE);
 }

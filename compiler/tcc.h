@@ -1362,13 +1362,6 @@ ST_FUNC void gen_cvt_csti(int t);
 #endif
 
 /* ------------ riscv64-gen.c ------------ */
-ST_DATA int riscv_emit_ecall;
-ST_FUNC void riscv_emit_raw(unsigned int insn);
-ST_FUNC void riscv_gen_csrr(int csr);
-ST_FUNC void riscv_gen_csrw(int csr);
-ST_FUNC void riscv_gen_read_tp(void);
-ST_FUNC void riscv_gen_read_fp(void);
-ST_FUNC void riscv_gen_write_tp(void);
 ST_FUNC void riscv_gen_alloca(void);
 #ifdef TCC_TARGET_RISCV64
 ST_FUNC void gen_opl(int op);

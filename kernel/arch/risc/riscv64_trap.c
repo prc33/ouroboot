@@ -3,13 +3,9 @@
  * interrupts, and `ecall` (our syscall gate) alike -- so dispatch
  * happens entirely in software here, keyed on `scause`.
  *
- * arch/risc/riscv64_trap_entry.S is the raw machine code `stvec` points
- * at; it saves all GPRs + the four trap CSRs into the fixed global
- * struct regs at RV64_TRAPFRAME_BASE, switches to a dedicated trap
- * stack, and calls trap_dispatch() below via a function pointer this
- * file writes into RV64_TRAP_DISPATCH_PTR at init time -- see
- * arch/risc/riscv64_memmap.h for why raw asm can't call trap_dispatch()
- * directly (no relocation support for hand-written .S files). */
+ * arch/risc/riscv64_trap_entry.S saves all GPRs and the four trap CSRs,
+ * switches to the current process's kernel stack, and calls the C
+ * dispatcher below. */
 #include "kernel.h"
 #include "riscv64_trap.h"
 #include "riscv64_memmap.h"
@@ -53,7 +49,7 @@ void trap_dispatch(struct regs *r) {
 		}
 		kprintf("\n!! UNHANDLED INTERRUPT %lu\n", n);
 		kprintf("FATAL: unhandled interrupt, halting\n");
-		for (;;) __builtin_riscv_wfi();
+		for (;;) riscv_wfi();
 	}
 
 	if (cause == 8) { /* ecall from U-mode -- our one syscall gate */
@@ -74,7 +70,7 @@ void trap_dispatch(struct regs *r) {
 		cause, cause < NUM_CAUSES ? exception_names[cause] : "Reserved",
 		(void *)r->stval, (void *)r->sepc);
 	kprintf("FATAL: unhandled exception, halting\n");
-	for (;;) __builtin_riscv_wfi();
+	for (;;) riscv_wfi();
 }
 
 void isr_register_handler(int cause, void (*handler)(struct regs *)) {
@@ -92,18 +88,17 @@ void syscall_set_handler(void (*handler)(struct regs *)) {
 }
 
 void trap_init(void) {
-	*(void (**)(struct regs *))RV64_TRAP_DISPATCH_PTR = trap_dispatch;
 	/* Default: the same single dedicated trap stack every checkpoint
 	 * before sched/riscv64_process.c used, until that subsystem starts
 	 * (right before it dispatches its first process) and repoints this
 	 * at whichever process is about to run -- see
-	 * arch/risc/riscv64_trap_entry.S's own comment for why this indirection
-	 * exists at all. Every trap before that point (the COW/ring3/ELF-
+		 * arch/risc/riscv64_trap_entry.S's own comment. Every trap before
+		 * that point (the COW/ring3/ELF-
 	 * loader checkpoints) behaves exactly as it always did: this never
 	 * changes, so it's still effectively one fixed trap stack for
 	 * them. */
 	*(unsigned long *)RV64_CURRENT_KSTACK_PTR = RV64_TRAP_STACK_TOP;
-	__builtin_riscv_csrw(CSR_STVEC, (unsigned long)riscv64_trap_entry);
+	riscv_write_stvec((unsigned long)riscv64_trap_entry);
 
 	/* sstatus.SUM ("permit Supervisor User Memory access"): without
 	 * it, S-mode is architecturally forbidden from touching any page
@@ -118,7 +113,7 @@ void trap_init(void) {
 	 * payload, reading the U-only-accessible string it was asked to
 	 * print. i386 has no equivalent bit; PTE_USER there simply always
 	 * permits ring0 access too, no separate opt-in. */
-	unsigned long sstatus = __builtin_riscv_csrr(CSR_SSTATUS);
-	__builtin_riscv_csrw(CSR_SSTATUS, sstatus | SSTATUS_SUM);
+	unsigned long sstatus = riscv_read_sstatus();
+	riscv_write_sstatus(sstatus | SSTATUS_SUM);
 	kprintf("trap: stvec installed (direct mode, one vector for exceptions+interrupts+ecall)\n");
 }

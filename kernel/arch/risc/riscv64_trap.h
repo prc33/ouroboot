@@ -3,9 +3,8 @@
 
 /* Matches exactly what arch/risc/riscv64_trap_entry.S saves, low offset to
  * high (all fields are 8 bytes, no padding -- offsets below are the
- * field index * 8, and arch/risc/riscv64_trap_entry.S's raw stores use
- * these same offsets by hand, since it can't #include this header --
- * see that file's comment). x0 (always zero) is never saved; every
+ * field index * 8, and arch/risc/riscv64_trap_entry.S uses these same
+ * offsets by hand). x0 (always zero) is never saved; every
  * other GPR (x1-x31) is, plus the four trap CSRs. */
 struct regs {
 	unsigned long ra, sp, gp, tp;               /*  0, 8, 16, 24 */

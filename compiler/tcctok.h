@@ -149,21 +149,6 @@
      DEF(TOK_builtin_choose_expr, "__builtin_choose_expr")
      DEF(TOK_builtin_constant_p, "__builtin_constant_p")
      DEF(TOK_builtin_frame_address, "__builtin_frame_address")
-#ifdef TCC_TARGET_RISCV64
-/* RISC-V intrinsics: replace inline asm entirely, so no assembler is
- * needed. See riscv64-gen.c and docs/riscv-port-findings.md. */
-     DEF(TOK_builtin_riscv_syscall, "__builtin_riscv_syscall")
-     DEF(TOK_builtin_riscv_csrr, "__builtin_riscv_csrr")
-     DEF(TOK_builtin_riscv_csrw, "__builtin_riscv_csrw")
-     DEF(TOK_builtin_riscv_sfence_vma, "__builtin_riscv_sfence_vma")
-     DEF(TOK_builtin_riscv_wfi, "__builtin_riscv_wfi")
-     DEF(TOK_builtin_riscv_sret, "__builtin_riscv_sret")
-     DEF(TOK_builtin_riscv_ebreak, "__builtin_riscv_ebreak")
-     DEF(TOK_builtin_riscv_fence_i, "__builtin_riscv_fence_i")
-     DEF(TOK_builtin_riscv_read_tp, "__builtin_riscv_read_tp")
-     DEF(TOK_builtin_riscv_write_tp, "__builtin_riscv_write_tp")
-     DEF(TOK_builtin_riscv_read_fp, "__builtin_riscv_read_fp")
-#endif
      DEF(TOK_builtin_return_address, "__builtin_return_address")
      DEF(TOK_builtin_expect, "__builtin_expect")
      /*DEF(TOK_builtin_va_list, "__builtin_va_list")*/
@@ -279,8 +264,11 @@
  DEF_ASMDIR(short)
  DEF_ASMDIR(long)
  DEF_ASMDIR(int)
+ DEF_ASMDIR(option)
  DEF_ASMDIR(section)            /* must be last directive */
 
 #if defined TCC_TARGET_I386
 #include "i386/i386-tok.h"
+#elif defined TCC_TARGET_RISCV64
+#include "risc/riscv64-tok.h"
 #endif

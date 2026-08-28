@@ -78,7 +78,6 @@ ALT(DEF_ASM_OP2(btcw, 0x0fba, 7, OPC_MODRM | OPC_WLX, OPT_IM8, OPT_REGW | OPT_EA
      DEF_ASM_OP0(fwait, 0x9b)
      DEF_ASM_OP0(aword, 0x67)
      DEF_ASM_OP0(addr16, 0x67)
-     ALT(DEF_ASM_OP0(word, 0x66))
      DEF_ASM_OP0(data16, 0x66)
      DEF_ASM_OP0(lock, 0xf0)
      DEF_ASM_OP0(rep, 0xf3)

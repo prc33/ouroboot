@@ -46,17 +46,8 @@
  * checkpoint actually uses and generous room for whatever gets added
  * after it.
  *
- * Everything below is a hardcoded absolute address, not a linker
- * symbol -- required by arch/riscv64_boot.S and
- * arch/risc/riscv64_trap_entry.S, which (being raw .long-encoded machine
- * code, not real assembly TCC can relocate -- see riscv64_boot.S's
- * comment) can only reference *numeric constants*, never symbols;
- * both were regenerated (arch/gen_riscv64_asm.sh, real riscv64-as,
- * not hand-computed opcodes) when this moved, diffed against their
- * previous versions to confirm only the address-loading instructions
- * changed. Laid out on separate pages for clarity, not packed
- * tightly -- we have 128MB of RAM and none of this needs to be
- * dense. */
+ * Everything below is fixed scratch memory outside the linked image.
+ * The regions are page-separated for clarity; RAM is not scarce here. */
 #define RV64_SCRATCH_BASE      0x80600000UL
 
 /* [0x80600000, 0x80604000): general S-mode stack -- used by
@@ -65,15 +56,7 @@
  * per-task stacks (arch/risc/riscv64_task.c). sp starts at the top. */
 #define RV64_BOOT_STACK_TOP    (RV64_SCRATCH_BASE + 0x4000UL) /* 0x80604000 */
 
-/* One 8-byte slot at 0x80605000: void (*)(struct regs *), written
- * once by arch/risc/riscv64_trap.c's trap_init() before any trap can
- * occur, read by arch/risc/riscv64_trap_entry.S on every trap. This is how
- * raw asm calls into compiled C without needing a symbol relocation
- * it can't have -- populated at *runtime* by ordinary (fully
- * relocatable) C code, not baked in at generation time. */
-#define RV64_TRAP_DISPATCH_PTR 0x80605000UL
-
-/* One 8-byte slot at 0x80605008, right after RV64_TRAP_DISPATCH_PTR:
+/* One 8-byte slot at 0x80605008:
  * the *top* of whichever process's kernel stack is current, read by
  * arch/risc/riscv64_trap_entry.S on every trap instead of the single fixed
  * RV64_TRAP_STACK_TOP earlier checkpoints used. sched/riscv64_process.c
@@ -85,9 +68,7 @@
  * that same process's own kernel stack, so a block-and-resume deep in
  * one process's syscall handler can't be clobbered by a second
  * process trapping while the first is still suspended there. Same
- * "runtime-populated pointer slot, not a baked-in immediate" trick as
- * RV64_TRAP_DISPATCH_PTR, for the same reason (no relocation support
- * for hand-written .S files). */
+ * runtime-populated pointer slot. */
 #define RV64_CURRENT_KSTACK_PTR 0x80605008UL
 
 /* struct regs (arch/risc/riscv64_trap.h): 35 8-byte fields = 280 bytes, at
@@ -111,12 +92,9 @@
  * kernel_end (a few MB at most) and the scratch region above, with
  * still-generous headroom below RV64_MEM_TOP (128MB total) for
  * whatever the archive actually contains. Not a linker symbol or a
- * hand-written .S constant -- read only from ordinary, fully
- * relocatable C (riscv64_kmain.c, mm/tar.c) -- so unlike the addresses
- * above, this one didn't need arch/gen_riscv64_asm.sh regeneration
- * when picked; it's hardcoded for the same "we fully control the
- * QEMU invocation" reason as everything else in this file, not
- * because anything *requires* it to be a raw immediate. */
+ * hand-written .S constant -- read only from ordinary C
+ * (riscv64_kmain.c, mm/tar.c). It is hardcoded for the same "we fully
+ * control the QEMU invocation" reason as everything else here. */
 #define RV64_INITRD_BASE       0x84000000UL
 
 /* Reserved via pmm_reserve_range() (riscv64_kmain.c, right alongside

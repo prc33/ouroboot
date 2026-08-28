@@ -900,6 +900,9 @@ static void asm_parse_directive(TCCState *s1, int global)
 	next();
 	pop_section(s1);
 	break;
+    case TOK_ASMDIR_option:
+        do next(); while (tok != ';' && tok != TOK_LINEFEED);
+        break;
 #ifdef TCC_TARGET_I386
     case TOK_ASMDIR_code16:
         {
@@ -1003,7 +1006,7 @@ static void tcc_assemble_inline(TCCState *s1, char *str, int len, int global)
 {
     const int *saved_macro_ptr = macro_ptr;
     int dotid = set_idnum('.', IS_ID);
-    int dolid = set_idnum('$', 0);
+    int dolid = set_idnum('$', ASM_DOLLAR_IN_IDENTIFIERS ? IS_ID : 0);
 
     tcc_open_bf(s1, ":asm:", len);
     memcpy(file->buffer, str, len);

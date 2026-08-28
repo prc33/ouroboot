@@ -2,7 +2,6 @@
 
 // Number of registers available to allocator:
 #define NB_REGS 19 // x10-x17 aka a0-a7, f10-f17 aka fa0-fa7, xxx, ra, sp
-#define NB_ASM_REGS 32
 #define CONFIG_TCC_ASM
 
 #define TREG_R(x) (x) // x = 0..7
@@ -448,48 +447,6 @@ ST_FUNC void store(int r, SValue *sv)
        ptrreg, rr, fc);                                   // RR, fc(base)
 }
 
-/* When set, the next gcall_or_jmp() emits `ecall` instead of a real
- * call. Set by TOK_builtin_riscv_syscall in tccgen.c. This lets the
- * syscall intrinsic reuse TCC's entire argument-marshalling path --
- * the RISC-V C ABI already places the first 8 integer args in a0-a7,
- * which is exactly the Linux syscall convention (args a0-a5, number in
- * a7). So there is nothing to special-case except the final
- * instruction, and no assembler is required. */
-ST_DATA int riscv_emit_ecall;
-
-/* Emit one raw 32-bit instruction word. */
-ST_FUNC void riscv_emit_raw(unsigned int insn)
-{
-    o(insn);
-}
-
-/* mv rd, s0 -> addi rd, s0(x8), 0.
- * TCC's prologue is `addi sp,sp,-N; ...; addi s0,sp,N`, so inside any
- * function s0 holds the stack pointer AS IT WAS ON ENTRY. That is
- * exactly what a RISC-V _start needs to hand to __libc_start_main
- * (argc/argv/envp live at the entry sp), which lets crt1 be written in
- * plain C instead of assembly -- see musl's arch/riscv64/crt_arch.h.
- *
- * Writes directly into REG_IRET rather than letting gv(RC_INT) pick a
- * register: the caller (tccgen.c's TOK_builtin_riscv_read_fp case)
- * unconditionally sets vtop->r = REG_IRET afterwards, so if gv() had
- * picked a different scratch register here, the real value would land
- * in that register while TCC believed it was in REG_IRET -- any
- * subsequent use reads REG_IRET's stale contents instead. Confirmed
- * this exact bug empirically: it manifested as musl's thread pointer
- * silently reading back as 0, corrupting every TLS-relative access
- * downstream and crashing on the very first store through it. */
-ST_FUNC void riscv_gen_read_fp(void)
-{
-    EI(0x13, 0, ireg(REG_IRET), 8, 0);
-}
-
-/* mv rd, tp  ->  addi rd, tp(x4), 0. Same REG_IRET reasoning as above. */
-ST_FUNC void riscv_gen_read_tp(void)
-{
-    EI(0x13, 0, ireg(REG_IRET), 4, 0);
-}
-
 /* alloca(n): round n up to 16 bytes, carve it off the live stack by
  * permanently lowering sp, return the new sp as the allocated block's
  * address. Consumes the size argument already sitting on vtop (pushed
@@ -508,47 +465,9 @@ ST_FUNC void riscv_gen_alloca(void)
     EI(0x13, 0, ireg(REG_IRET), 2, 0);   /* addi result, sp, 0 (mv)      */
 }
 
-/* mv tp, rs  ->  addi tp(x4), rs, 0 */
-ST_FUNC void riscv_gen_write_tp(void)
-{
-    int r = ireg(gv(RC_INT));
-    EI(0x13, 0, 4, r, 0);
-    vtop--;
-}
-
-/* csrr rd, csr  ->  csrrs rd, csr, x0   (funct3=2, rs1=x0)
- * EIu, not EI: the imm field here is the raw 12-bit CSR *address*
- * (system-instruction encoding, unsigned, 0-4095), not a sign-extended
- * I-type immediate -- EI's assertion (imm fits in a *signed* 12-bit
- * range, -2048..2047) is the wrong check for it and aborts the
- * compiler outright for any CSR address >= 2048, e.g. the
- * unprivileged `time` CSR at 0xC01 (3073) -- found via the kernel
- * port's timer code, the first use of a CSR that high. Every other
- * CSR this project uses so far (stvec, sepc, sstatus, scause, stval,
- * satp, sscratch, sie, stimecmp) happens to sit below 0x800, which is
- * exactly why this went unnoticed until now. */
-ST_FUNC void riscv_gen_csrr(int csr)
-{
-    int r = ireg(gv(RC_INT));
-    EIu(0x73, 2, r, 0, csr & 0xfff);
-}
-
-/* csrw csr, rs  ->  csrrw x0, csr, rs   (funct3=1, rd=x0) -- same fix. */
-ST_FUNC void riscv_gen_csrw(int csr)
-{
-    int r = ireg(gv(RC_INT));
-    EIu(0x73, 1, 0, r, csr & 0xfff);
-    vtop--;
-}
-
 static void gcall_or_jmp(int docall)
 {
     int tr = docall ? 1 : 5; // ra or t0
-    if (riscv_emit_ecall) {
-        riscv_emit_ecall = 0;
-        o(0x00000073);      // ecall
-        return;
-    }
     if ((vtop->r & (VT_VALMASK | VT_LVAL)) == VT_CONST &&
         ((vtop->r & VT_SYM) && vtop->c.i == (int)vtop->c.i)) {
         /* constant symbolic case -> simple relocation */
@@ -940,7 +859,7 @@ ST_FUNC void gfunc_epilog(void)
      * point the way an ordinary local's space can. Re-deriving sp from
      * s0 rather than trusting sp's current value fixes that: s0 holds
      * the ORIGINAL entry sp for the whole function body (see
-     * riscv_gen_read_fp's comment), never modified by anything
+     * the function entry), never modified by anything
      * including alloca, so `sp = s0 - v` always lands exactly where
      * ra/s0 were saved -- regardless of how much alloca'd space sits
      * between there and the current sp. Mathematically a no-op when
