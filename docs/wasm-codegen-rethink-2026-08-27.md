@@ -324,3 +324,108 @@ for the other two backends, and it's now proven — not assumed — to be
 behavior-preserving on the project's real flagship program. It just isn't the
 performance fix that was hoped for; that fix is bigger, and is what's actually
 still outstanding.
+
+---
+
+## Addendum 2: does the metadata let the structurer stop rediscovering things?
+
+Direct follow-up: the first hint only told the backend *which* jumps are real
+loop edges — it left the *extent* of each loop (which blocks belong to it, and
+how nested loops relate) to be re-inferred from the jump graph, same as
+before. Two pieces of that inference were pure re-derivation of something
+`tccgen.c` already knows outright:
+
+- **`loop_end`** (how far a loop extends) was computed by scanning for the
+  highest block index with a measured back-edge to each header — an
+  approximation of a fact `tccgen.c` has exactly, the moment it calls `gsym(a)`
+  right after the loop's own exit test resolves (that position *is* the loop's
+  end, by definition — nothing to infer).
+- **Nested-loop extension**, a `do { ... } while (changed)` fixed-point pass
+  correcting for cases where an inner loop's own back-edge reached further
+  than its outer loop's directly-measured one — needed only because the outer
+  loop's extent was itself an approximation. An exact extent has nothing to
+  correct.
+
+### What changed
+
+`gjmp_hint_loop_range(start)` replaces `gjmp_hint_loop()`: called once per
+`while`/`for`/`do` construct (3 call sites, not 6 — down from one hint per
+repeat-edge to one per construct) right after `gsym(a)`, passing the position
+the loop began at (already sitting in a local variable from `gind()`, nothing
+new to compute). The backend records `[start, ind)` — the *exact* range,
+straight from the one place that knows it. `tccwasm.c`'s `is_loop_header` and
+`loop_end` are now direct copies from that range, converted from PC space to
+block-index space the same way jump targets already were. **The backward-edge
+scan and the entire nested-loop fixed-point pass are gone — not simplified,
+deleted**, because an exact range has nothing left to infer.
+
+One more thing fell out of this for free: a `for` loop's rotated layout (its
+condition-test and its increment are two separately-jumped-to positions, but
+one loop) used to register as *two* loop headers under the old per-edge
+tagging. One range per construct means it's one header, correctly, matching
+the source-level construct instead of the jump graph's accidental shape.
+
+### Verified the same way as before
+
+- `emulator/web/rv64.wasm`: still byte-identical (`2ffdddc0...`, 30,212
+  bytes).
+- The same six functions still take the slow path, confirmed by name — this
+  time including `flush_tlb`/`load`/`store`/`rv_init`, which had previously
+  tripped the *"jump into loop"* reducibility check specifically, now instead
+  correctly caught by the switch/goto safety net. Reading why clarified a
+  loose end from Addendum 1: even with one merged header, a for-loop's
+  increment position is still a second, legitimate backward-jump target
+  *inside* that same loop (the body's own repeat edge lands there, not just
+  the condition test's) — the safety net's "target must itself be a loop
+  header" rule doesn't yet know an edge can legitimately land elsewhere
+  *inside* a loop's range, so it (correctly, safely, just for a subtly
+  different reason than before) still declines to hand these to the
+  structured emitter. That gap is the same, already-documented, not-yet-built
+  for-loop-rotation work above — confirmed still open, not newly introduced.
+- `kernel.elf` byte-identical to this branch's own baseline on both real
+  targets (riscv64 `33cbe435...`, i386 `e19b8a65...`).
+- All eight real test targets pass: i386
+  `test`/`test-initrd`/`test-busybox`/`test-selfhost`, riscv64
+  `test`/`test-initrd`/`test-selfhost`/`test-wasm`.
+- One instrumentation bug worth naming honestly: an early verification run
+  showed dozens of unrelated functions — including trivial one-line accessors
+  with no control flow at all, like `u32 rv_ram(void) { return (u32)(unsigned
+  long)ram; }` — apparently tripping the safety net. That was a missing pair
+  of braces in the *debug print statement itself* (an `if (cond) x = 0;
+  fprintf(...)` where the `fprintf` had silently fallen outside the `if`), not
+  a compiler bug — caught by the fact that `rv64.wasm`'s byte-identity could
+  not be true if that many functions had actually changed behavior. Worth
+  recording as a reminder that instrumentation added *to investigate a
+  bug* is exactly as capable of having its own bugs as the thing under
+  investigation, and the same "does the output actually change" check that
+  verifies the real fix also caught the fake finding.
+
+### Net line count
+
+Against the pre-hint baseline (before either addendum): **+72 lines** across
+seven files, all in `compiler/`. But that number conflates two different
+things worth separating: the *plumbing* (new hint function, its declaration,
+two one-line no-op stubs, three call sites in `tccgen.c`, the range-recording
+code in `wasm-gen.c`) is real, new, additive code — call it the cost of ground
+truth. The *inference logic in `tccwasm.c` itself* — the part that answers
+"does the structurer still have to rediscover things" — went from a
+backward-edge scan plus a fixed-point nested-loop correction (~33 lines) to a
+direct range copy (~8 lines): smaller than where it started, not just
+differently shaped. `tccwasm.c` alone nets +12 lines against the true original
+baseline, and roughly half of that is the comment explaining why the fixed
+point is no longer needed.
+
+### Answering the question directly
+
+Yes, for loop identity and extent specifically — that inference is now fully
+replaced by ground truth, and the code that used to rediscover it is deleted,
+not relocated. No, not yet for the two remaining rediscovery jobs in the file:
+basic-block partitioning (which ops are jump targets — generic IR bookkeeping,
+not particular to loops, unaffected by any of this) and the "jump into loop" /
+switch-safety reducibility checks (still genuine CFG analysis, because
+knowing a loop's *exact range* doesn't yet tell the structurer how to
+*represent* an edge that legitimately lands inside that range from outside a
+single recognized header — the for-loop-rotation and switch-dispatch
+representability gaps this document already scoped as separate, larger work).
+The metadata answered the questions it was asked; the deeper structural
+questions still need actual new structural handling, not more hints.

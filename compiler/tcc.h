@@ -1305,16 +1305,24 @@ ST_FUNC int gjmp(int t);
 ST_FUNC void gjmp_addr(int a);
 ST_FUNC int gjmp_cond(int op, int t);
 ST_FUNC int gjmp_append(int n, int t);
-/* Marks the next gjmp_addr()/gsym_addr() call (there are exactly six call
- * sites, all in this file's own while/for/do handling) as a real loop's
- * repeat edge, as opposed to any other jump to an already-known address --
- * of which the only other kind is switch-statement case dispatch (gcase()
- * emits every case body before the compare-and-jump code that reaches them,
- * so it reuses this same "known address" jump primitive, but it isn't a
- * loop). i386/riscv64 don't need this distinction -- they emit machine code
- * directly and never have to decide "is this a loop" -- so it's a no-op for
- * them. wasm does need it: see docs/wasm-codegen-rethink-2026-08-27.md. */
-ST_FUNC void gjmp_hint_loop(void);
+/* Called exactly once per while/for/do construct, right after its exit
+ * test resolves (gsym(a) -- the position right after the whole loop),
+ * with `start` = the position the loop began at (gind(), recorded when
+ * the construct was first parsed). Tells a backend that cares "this
+ * whole [start, here) range is one loop", ground truth from the one
+ * place that actually knows it, rather than something to re-derive from
+ * the jump graph afterward. i386/riscv64 emit machine code directly and
+ * never need this -- a jump is a jump, backward or not -- so it's a
+ * no-op for them. wasm does need it, to tell a loop's own repeat edge
+ * apart from switch-statement case dispatch, which reuses the same
+ * "jump to an already-known address" primitive (gcase() emits every
+ * case body before the compare-and-jump code that reaches them) without
+ * being a loop at all. Using one hint per whole construct rather than
+ * one per repeat-edge also collapses a for-loop's rotated layout (whose
+ * condition-test and increment are two separately-jumped-to positions,
+ * but one loop) into the single genuine loop it is -- see
+ * docs/wasm-codegen-rethink-2026-08-27.md. */
+ST_FUNC void gjmp_hint_loop_range(int start);
 ST_FUNC void gen_opi(int op);
 ST_FUNC void gen_opf(int op);
 ST_FUNC void gen_cvt_ftoi(int t);

@@ -1020,10 +1020,9 @@ ST_FUNC int gjmp(int t)
     return ind - 4;
 }
 
-// riscv64 emits machine code directly and never needs to distinguish a
-// loop's repeat edge from any other jump to an already-known address --
-// see this hint's own comment in tcc.h.
-ST_FUNC void gjmp_hint_loop(void) { }
+// riscv64 emits machine code directly and never needs to know a loop's
+// extent -- see this hint's own comment in tcc.h.
+ST_FUNC void gjmp_hint_loop_range(int start) { (void)start; }
 
 // Generate branch to known address:
 ST_FUNC void gjmp_addr(int a)

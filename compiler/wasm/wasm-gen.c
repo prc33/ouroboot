@@ -101,11 +101,6 @@ static int wasm_cap_patches;
 static int wasm_last_cmp_valid;
 static int wasm_last_cmp_op;
 
-/* Set by gjmp_hint_loop(), consumed (and cleared) by whichever of
- * gjmp_addr()/gsym_addr() tccgen.c calls immediately afterward -- see that
- * hint's own comment in tcc.h. */
-static int wasm_next_resolve_is_loop;
-
 static NORETURN void wasm_unimp(const char *feature)
 {
     tcc_error("wasm32 backend: %s is not supported in the restricted backend", feature);
@@ -182,6 +177,7 @@ ST_FUNC void tcc_wasm_reset(void)
         tcc_free(tcc_wasm_funcs[i].param_types);
         tcc_free(tcc_wasm_funcs[i].param_offsets);
         tcc_free(tcc_wasm_funcs[i].ops);
+        tcc_free(tcc_wasm_funcs[i].loops);
     }
     tcc_free(tcc_wasm_funcs);
     tcc_wasm_funcs = NULL;
@@ -345,8 +341,6 @@ static void wasm_emit_cmp_set_i64(int op, int lhs_reg, int rhs_reg,
 
 ST_FUNC void gsym_addr(int t, int a)
 {
-    int is_loop = wasm_next_resolve_is_loop;
-    wasm_next_resolve_is_loop = 0;
     while (t) {
         WasmPatch *p;
         int next;
@@ -357,15 +351,25 @@ ST_FUNC void gsym_addr(int t, int a)
             tcc_error("wasm32 backend: cross-function patch list");
         next = p->next;
         p->func->ops[p->op_index].target_pc = a;
-        if (is_loop)
-            p->func->ops[p->op_index].flags |= WASM_OP_FLAG_LOOP_EDGE;
         t = next;
     }
 }
 
-ST_FUNC void gjmp_hint_loop(void)
+/* Records one [start, ind) loop range on the current function -- see this
+ * hint's own comment in tcc.h. */
+ST_FUNC void gjmp_hint_loop_range(int start)
 {
-    wasm_next_resolve_is_loop = 1;
+    WasmFuncIR *f = wasm_cur_func;
+    WasmLoopRange *r;
+    if (!f || nocode_wanted)
+        return;
+    if (f->nb_loops == f->cap_loops) {
+        f->cap_loops = f->cap_loops ? f->cap_loops * 2 : 4;
+        f->loops = tcc_realloc(f->loops, f->cap_loops * sizeof(*f->loops));
+    }
+    r = &f->loops[f->nb_loops++];
+    r->start_pc = start;
+    r->end_pc = ind;
 }
 
 ST_FUNC void load(int r, SValue *sv)
@@ -745,16 +749,12 @@ ST_FUNC int gjmp(int t)
 ST_FUNC void gjmp_addr(int a)
 {
     WasmOp *wo;
-    int is_loop = wasm_next_resolve_is_loop;
-    wasm_next_resolve_is_loop = 0;
     if (nocode_wanted)
         return;
     wo = wasm_emit_op(WASM_OP_JMP);
     if (!wo)
         return;
     wo->target_pc = a;
-    if (is_loop)
-        wo->flags |= WASM_OP_FLAG_LOOP_EDGE;
 }
 
 ST_FUNC int gjmp_cond(int op, int t)

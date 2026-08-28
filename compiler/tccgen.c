@@ -5768,9 +5768,10 @@ again:
         a = gvtst(1, 0);
         b = 0;
         lblock(&a, &b);
-        gjmp_hint_loop(); gjmp_addr(d);
-        gjmp_hint_loop(); gsym_addr(b, d);
+        gjmp_addr(d);
+        gsym_addr(b, d);
         gsym(a);
+        gjmp_hint_loop_range(d);
 
     } else if (t == '{') {
         new_scope(&o);
@@ -5870,14 +5871,15 @@ again:
             d = gind();
             gexpr();
             vpop();
-            gjmp_hint_loop(); gjmp_addr(c);
+            gjmp_addr(c);
             gsym(e);
         }
         skip(')');
         lblock(&a, &b);
-        gjmp_hint_loop(); gjmp_addr(d);
-        gjmp_hint_loop(); gsym_addr(b, d);
+        gjmp_addr(d);
+        gsym_addr(b, d);
         gsym(a);
+        gjmp_hint_loop_range(c);
         prev_scope(&o, 0);
 
     } else if (t == TOK_DO) {
@@ -5891,8 +5893,9 @@ again:
         skip(')');
         skip(';');
 	c = gvtst(0, 0);
-	gjmp_hint_loop(); gsym_addr(c, d);
+	gsym_addr(c, d);
         gsym(a);
+        gjmp_hint_loop_range(d);
 
     } else if (t == TOK_SWITCH) {
         struct switch_t *sw;

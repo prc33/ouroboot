@@ -76,12 +76,6 @@ enum {
 #define WASM_OP_FLAG_IMM   0x0001
 #define WASM_OP_FLAG_INVERT 0x0002
 #define WASM_OP_FLAG_UNSIGNED 0x0100
-/* Set on a WASM_OP_JMP/WASM_OP_JMP_CMP by gjmp_hint_loop() (see its comment
- * in tcc.h): this jump is a real loop's repeat edge, not switch-dispatch
- * reusing the same "jump to an already-known address" primitive. Ground
- * truth from the front end, not inferred from position -- see
- * docs/wasm-codegen-rethink-2026-08-27.md. */
-#define WASM_OP_FLAG_LOOP_EDGE 0x0200
 
 #define WASM_MAX_CALL_ARGS 32
 typedef struct WasmOp {
@@ -106,6 +100,16 @@ typedef struct WasmOp {
     int call_arg_off[WASM_MAX_CALL_ARGS];
 } WasmOp;
 
+/* One while/for/do loop's exact extent, as tccgen.c itself knows it --
+ * see gjmp_hint_loop_range()'s own comment in tcc.h. Recorded once per
+ * loop construct, not once per repeat-edge, so a for-loop's rotated
+ * layout (whose two individually-jumped-to positions -- the condition
+ * test and the increment -- both belong to the SAME loop) still yields
+ * exactly one range, not two. */
+typedef struct WasmLoopRange {
+    int start_pc, end_pc;
+} WasmLoopRange;
+
 typedef struct WasmFuncIR {
     int sym_tok;
     char *name;
@@ -122,6 +126,9 @@ typedef struct WasmFuncIR {
     WasmOp *ops;
     int nb_ops;
     int cap_ops;
+    WasmLoopRange *loops;
+    int nb_loops;
+    int cap_loops;
 } WasmFuncIR;
 
 extern WasmFuncIR *tcc_wasm_funcs;
