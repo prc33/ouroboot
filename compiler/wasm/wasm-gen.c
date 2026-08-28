@@ -4,6 +4,7 @@
 
 /* virtual register file for wasm backend */
 #define NB_REGS         12
+#define ASM_DOLLAR_IN_IDENTIFIERS 0
 
 /* register classes: keep INT and FLOAT separate to match tccgen expectations */
 #define RC_INT          0x0001

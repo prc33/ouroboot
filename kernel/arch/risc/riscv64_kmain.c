@@ -64,7 +64,7 @@ static void run_pmm_reserve_test(void) {
 
 	if (hit_reserved) {
 		kprintf("FATAL: pmm handed out a page inside the reserved scratch region\n");
-		for (;;) __builtin_riscv_wfi();
+		for (;;) riscv_wfi();
 	}
 	kprintf("pmm: reserve test OK (%u pages, none in [%p, %p))\n",
 		n, (void *)RV64_SCRATCH_BASE, (void *)RV64_TRAP_STACK_TOP);
@@ -92,7 +92,7 @@ void run_checkpoint_boot(void);
  * this split exists and how the syscall/scheduler layers were
  * decoupled from checkpoint numbering to make it possible. */
 void arch_halt_forever(void) {
-	for (;;) __builtin_riscv_wfi();
+	for (;;) riscv_wfi();
 }
 
 void kmain(unsigned long hartid, unsigned long dtb) {
@@ -109,7 +109,7 @@ void kmain(unsigned long hartid, unsigned long dtb) {
 	trap_init();
 
 	isr_register_handler(3, breakpoint_handler); /* scause 3 = Breakpoint */
-	__builtin_riscv_ebreak();
+	__asm__ volatile ("ebreak");
 	if (!g_breakpoint_hit) {
 		kprintf("FATAL: breakpoint handler did not run\n");
 		goto halt;
@@ -172,5 +172,5 @@ void kmain(unsigned long hartid, unsigned long dtb) {
 halt:
 	kprintf("halting.\n");
 	for (;;)
-		__builtin_riscv_wfi();
+		riscv_wfi();
 }

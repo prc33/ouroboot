@@ -846,9 +846,6 @@ LIBTCCAPI int tcc_set_output_type(TCCState *s, int output_type)
     if (s->option_pthread)
         tcc_define_symbol(s, "_REENTRANT", NULL);
 
-    if (s->leading_underscore)
-        tcc_define_symbol(s, "__leading_underscore", NULL);
-
     if (!s->nostdinc) {
         /* default include paths */
         /* -isystem paths have already been handled */
@@ -1322,7 +1319,6 @@ static const FlagDef options_f[] = {
     { offsetof(TCCState, char_is_unsigned), 0, "unsigned-char" },
     { offsetof(TCCState, char_is_unsigned), FD_INVERT, "signed-char" },
     { offsetof(TCCState, nocommon), FD_INVERT, "common" },
-    { offsetof(TCCState, leading_underscore), 0, "leading-underscore" },
     { offsetof(TCCState, ms_extensions), 0, "ms-extensions" },
     { offsetof(TCCState, dollars_in_identifiers), 0, "dollars-in-identifiers" },
     { 0, 0, NULL }

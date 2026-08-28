@@ -75,7 +75,7 @@ void process_arch_trampoline(void) {
 	process_arch_activate_and_restore(process_get_current());
 	riscv64_trap_return();
 	/* never reached: riscv64_trap_return ends in sret */
-	for (;;) __builtin_riscv_wfi();
+	for (;;) riscv_wfi();
 }
 
 /* Hand-built initial kernel-stack frame -- identical technique to
@@ -106,7 +106,7 @@ void process_arch_init_context(struct process *p, unsigned long entry, unsigned 
 		*w = 0;
 	ur->sepc = entry;
 	ur->sp = sp;
-	unsigned long sstatus = __builtin_riscv_csrr(CSR_SSTATUS);
+	unsigned long sstatus = riscv_read_sstatus();
 	sstatus &= ~SSTATUS_SPP;  /* sret drops to U-mode */
 	/* SPIE inherits the *current* global SIE, not a hardcoded 1: real
 	 * sret semantics copy SPIE into SIE, and this kernel has no

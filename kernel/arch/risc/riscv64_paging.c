@@ -39,7 +39,7 @@ static unsigned long *alloc_table(void) {
 	unsigned long phys = pmm_alloc_page();
 	if (!phys) {
 		kprintf("FATAL: riscv64 paging out of memory allocating a page table\n");
-		for (;;) __builtin_riscv_wfi();
+		for (;;) riscv_wfi();
 	}
 	unsigned long *t = (unsigned long *)phys; /* identity-mapped -- see file comment */
 	for (int i = 0; i < ENTRIES; i++)
@@ -76,7 +76,7 @@ void paging_map_page_in(unsigned long *root, unsigned long virt, unsigned long p
 	unsigned long *pte = get_pte_in(root, virt, 1);
 	*pte = ((phys >> 12) << PPN_SHIFT) | flags;
 	if (root == active_root)
-		__builtin_riscv_sfence_vma();
+		riscv_sfence_vma();
 }
 
 void paging_map_page(unsigned long virt, unsigned long phys, unsigned long flags) {
@@ -106,7 +106,7 @@ unsigned long paging_get_flags(unsigned long virt) {
 }
 
 void paging_flush_tlb(void) {
-	__builtin_riscv_sfence_vma();
+	riscv_sfence_vma();
 }
 
 /* Switches to address space `root`: writes satp and updates
@@ -119,8 +119,8 @@ void paging_flush_tlb(void) {
 void paging_activate(unsigned long *root) {
 	active_root = root;
 	unsigned long satp = SATP_MODE_SV39 | ((unsigned long)root >> 12);
-	__builtin_riscv_csrw(CSR_SATP, satp);
-	__builtin_riscv_sfence_vma();
+	riscv_write_satp(satp);
+	riscv_sfence_vma();
 }
 
 unsigned long *paging_active_root(void) {
@@ -256,7 +256,7 @@ static void page_fault_handler(struct regs *r) {
 	kprintf("\n!! PAGE FAULT at %p (scause=%lu stval=%p %s)\n", (void *)fault_addr,
 		r->scause, (void *)fault_addr, is_write ? "write" : "read/exec");
 	kprintf("FATAL: unhandled page fault, sepc=%p\n", (void *)r->sepc);
-	for (;;) __builtin_riscv_wfi();
+	for (;;) riscv_wfi();
 }
 
 void paging_init(unsigned long mem_top) {
@@ -286,8 +286,8 @@ void paging_init(unsigned long mem_top) {
 	isr_register_handler(15, page_fault_handler); /* Store/AMO page fault */
 
 	unsigned long satp = SATP_MODE_SV39 | ((unsigned long)root_table >> 12);
-	__builtin_riscv_csrw(CSR_SATP, satp);
-	__builtin_riscv_sfence_vma();
+	riscv_write_satp(satp);
+	riscv_sfence_vma();
 
 	kprintf("paging: Sv39 identity-mapped 0x80000000..%p, page fault handler installed\n",
 		(void *)mem_top);

@@ -376,13 +376,11 @@ ST_FUNC void update_storage(Sym *sym)
    'section' with value 'value' */
 
 ST_FUNC void put_extern_sym2(Sym *sym, int sh_num,
-                            addr_t value, unsigned long size,
-                            int can_add_underscore)
+                            addr_t value, unsigned long size)
 {
     int sym_type, sym_bind, info, other, t;
     ElfSym *esym;
     const char *name;
-    char buf1[256];
 
     if (!sym->c) {
         name = get_tok_str(sym->v, NULL);
@@ -404,14 +402,6 @@ ST_FUNC void put_extern_sym2(Sym *sym, int sh_num,
         if (sym->asm_label) {
             name = get_tok_str(sym->asm_label & ~SYM_FIELD, NULL);
             /* with SYM_FIELD it was __attribute__((alias("..."))) actually */
-            if (!(sym->asm_label & SYM_FIELD))
-                can_add_underscore = 0;
-        }
-
-        if (tcc_state->leading_underscore && can_add_underscore) {
-            buf1[0] = '_';
-            pstrcpy(buf1 + 1, sizeof(buf1) - 1, name);
-            name = buf1;
         }
 
         info = ELFW(ST_INFO)(sym_bind, sym_type);
@@ -431,7 +421,7 @@ ST_FUNC void put_extern_sym(Sym *sym, Section *section,
                            addr_t value, unsigned long size)
 {
     int sh_num = section ? section->sh_num : SHN_UNDEF;
-    put_extern_sym2(sym, sh_num, value, size, 1);
+    put_extern_sym2(sym, sh_num, value, size);
 }
 
 /* add a new relocation entry to symbol 'sym' in section 's' */
@@ -4584,126 +4574,6 @@ ST_FUNC void unary(void)
 	}
         break;
 #ifdef TCC_TARGET_RISCV64
-    /* --- RISC-V intrinsics (replace inline asm; see riscv64-gen.c) --- */
-    case TOK_builtin_riscv_syscall:
-        {
-            /* Reuse the ordinary function-call path so args land in
-             * a0-a7 per the C ABI, which is already the syscall
-             * convention; only the final instruction differs. Callee
-             * is a dummy void(*)() -- never emitted, since
-             * gcall_or_jmp() short-circuits to ecall. */
-            int nb_args = 0;
-            CType sc;
-            next();
-            skip('(');
-            sc.t = VT_LONG | VT_LLONG;
-            sc.ref = NULL;
-            /* push placeholder callee */
-            vpushi(0);
-            vtop->type.t = VT_FUNC;
-            vtop->type.ref = sym_push(SYM_FIELD, &sc, FUNC_CDECL, 0);
-            while (tok != ')') {
-                expr_eq();
-                gv(RC_INT);
-                nb_args++;
-                if (tok != ',')
-                    break;
-                next();
-            }
-            skip(')');
-            if (nb_args < 1 || nb_args > 8)
-                tcc_error("__builtin_riscv_syscall takes 1-8 arguments "
-                          "(args first, syscall number last)");
-            riscv_emit_ecall = 1;
-            gfunc_call(nb_args);
-            /* result is in a0, which gfunc_call already models as the
-             * function return register */
-            vpushi(0);
-            vtop->type.t = VT_LLONG;
-            vtop->r = REG_IRET;
-        }
-        break;
-
-    case TOK_builtin_riscv_csrr:
-        {
-            int csr;
-            next(); skip('(');
-            csr = expr_const();
-            skip(')');
-            vpushi(0);
-            vtop->type.t = VT_LLONG;
-            riscv_gen_csrr(csr);
-            vtop->r = REG_IRET;
-        }
-        break;
-
-    case TOK_builtin_riscv_csrw:
-        {
-            int csr;
-            next(); skip('(');
-            csr = expr_const();
-            skip(',');
-            expr_eq();
-            skip(')');
-            riscv_gen_csrw(csr);
-            vpushi(0);
-        }
-        break;
-
-    case TOK_builtin_riscv_sfence_vma:
-        next(); skip('('); skip(')');
-        riscv_emit_raw(0x12000073);   /* sfence.vma zero, zero */
-        vpushi(0);
-        break;
-
-    case TOK_builtin_riscv_wfi:
-        next(); skip('('); skip(')');
-        riscv_emit_raw(0x10500073);   /* wfi */
-        vpushi(0);
-        break;
-
-    case TOK_builtin_riscv_sret:
-        next(); skip('('); skip(')');
-        riscv_emit_raw(0x10200073);   /* sret */
-        vpushi(0);
-        break;
-
-    case TOK_builtin_riscv_ebreak:
-        next(); skip('('); skip(')');
-        riscv_emit_raw(0x00100073);   /* ebreak */
-        vpushi(0);
-        break;
-
-    case TOK_builtin_riscv_read_fp:
-        next(); skip('('); skip(')');
-        vpushi(0);
-        vtop->type.t = VT_LLONG;
-        riscv_gen_read_fp();
-        vtop->r = REG_IRET;
-        break;
-
-    case TOK_builtin_riscv_read_tp:
-        next(); skip('('); skip(')');
-        vpushi(0);
-        vtop->type.t = VT_LLONG;
-        riscv_gen_read_tp();
-        vtop->r = REG_IRET;
-        break;
-
-    case TOK_builtin_riscv_write_tp:
-        next(); skip('(');
-        expr_eq();
-        skip(')');
-        riscv_gen_write_tp();
-        vpushi(0);
-        break;
-
-    case TOK_builtin_riscv_fence_i:
-        next(); skip('('); skip(')');
-        riscv_emit_raw(0x0000100f);   /* fence.i */
-        vpushi(0);
-        break;
-
     case TOK_alloca:
         /* Grow this function's frame inline; gfunc_epilog restores sp from s0. */
         next(); skip('(');

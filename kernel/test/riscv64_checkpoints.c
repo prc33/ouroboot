@@ -96,7 +96,7 @@ static void run_cow_user_test(void) {
 	if (!(flags & PTE_USER) || val != 99) {
 		kprintf("FATAL: COW copy dropped PTE_USER or corrupted data (flags=%p val=%d)\n",
 			(void *)flags, val);
-		for (;;) __builtin_riscv_wfi();
+		for (;;) riscv_wfi();
 	}
 	kprintf("COW test: PTE_USER preserved after copy OK\n");
 }
@@ -150,7 +150,7 @@ static void run_ring3_test(void) {
 	struct ramfs_dynamic_file *file = required_initrd_file("user_test");
 	unsigned long entry = file ? elf_load(file->data, file->size) : 0;
 	if (!entry)
-		for (;;) __builtin_riscv_wfi();
+		for (;;) riscv_wfi();
 
 	unsigned long stack_phys = pmm_alloc_page();
 	unsigned long user_stack_va = 0x900000UL;
@@ -199,7 +199,7 @@ static void run_elf_test(void) {
 	unsigned long entry = file ? elf_load(file->data, file->size) : 0;
 	if (!entry) {
 		kprintf("FATAL: elf_load failed\n");
-		for (;;) __builtin_riscv_wfi();
+		for (;;) riscv_wfi();
 	}
 
 	unsigned long stack_va = 0xB0000000UL;
@@ -252,7 +252,7 @@ static void run_fork_test(void) {
 	struct process *p = process_from_initrd("proc_fork_test", "fork_test");
 	if (!p) {
 		kprintf("FATAL: process_create_from_elf failed\n");
-		for (;;) __builtin_riscv_wfi();
+		for (;;) riscv_wfi();
 	}
 	kprintf("process: fork test process created (pid %d)\n", p->pid);
 	process_run(p);
@@ -271,7 +271,7 @@ static void run_exec_test(void) {
 	struct process *p = process_from_initrd("proc_exec_test", "exec_test");
 	if (!p) {
 		kprintf("FATAL: process_create_from_elf failed\n");
-		for (;;) __builtin_riscv_wfi();
+		for (;;) riscv_wfi();
 	}
 	kprintf("process: exec test process created (pid %d)\n", p->pid);
 	process_run(p);
@@ -290,7 +290,7 @@ static void run_init_test(void) {
 	struct process *p = process_from_initrd("init_test", "init_test");
 	if (!p) {
 		kprintf("FATAL: process_create_from_elf failed\n");
-		for (;;) __builtin_riscv_wfi();
+		for (;;) riscv_wfi();
 	}
 	kprintf("process: init test process created (pid %d)\n", p->pid);
 	process_run(p);
@@ -323,7 +323,7 @@ static void run_interactive_test(void) {
 	struct process *p = process_from_initrd("interactive_test", "interactive_test");
 	if (!p) {
 		kprintf("FATAL: process_create_from_elf failed\n");
-		for (;;) __builtin_riscv_wfi();
+		for (;;) riscv_wfi();
 	}
 	kprintf("process: interactive test process created (pid %d)\n", p->pid);
 	process_run(p);
@@ -337,7 +337,7 @@ static void run_process_test(void) {
 	struct process *b = process_from_initrd("proc_test", "B");
 	if (!a || !b) {
 		kprintf("FATAL: process_create_from_elf failed\n");
-		for (;;) __builtin_riscv_wfi();
+		for (;;) riscv_wfi();
 	}
 	kprintf("process: two independent processes created (pid %d, pid %d)\n", a->pid, b->pid);
 	process_run(a);
@@ -363,7 +363,7 @@ static void task_body(char letter) {
 	unsigned int my_loops = 0;
 	for (;;) {
 		while (g_ticks - last_tick < TICKS_PER_SWITCH)
-			__builtin_riscv_wfi();
+			riscv_wfi();
 		last_tick = g_ticks;
 		my_loops++;
 		g_switches++;

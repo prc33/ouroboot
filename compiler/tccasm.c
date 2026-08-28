@@ -38,38 +38,9 @@ static int tcc_assemble_internal(TCCState *s1, int do_preprocess, int global);
 static Sym* asm_new_label(TCCState *s1, int label, int is_local);
 static Sym* asm_new_label1(TCCState *s1, int label, int is_local, int sh_num, int value);
 
-/* If a C name has an _ prepended then only asm labels that start
-   with _ are representable in C, by removing the first _.  ASM names
-   without _ at the beginning don't correspond to C names, but we use
-   the global C symbol table to track ASM names as well, so we need to
-   transform those into ones that don't conflict with a C name,
-   so prepend a '.' for them, but force the ELF asm name to be set.  */
-static int asm2cname(int v, int *addeddot)
-{
-    const char *name;
-    *addeddot = 0;
-    if (!tcc_state->leading_underscore)
-      return v;
-    name = get_tok_str(v, NULL);
-    if (!name)
-      return v;
-    if (name[0] == '_') {
-        v = tok_alloc(name + 1, strlen(name) - 1)->tok;
-    } else if (!strchr(name, '.')) {
-        int n = strlen(name) + 2;
-        char newname[256];
-        snprintf(newname, sizeof newname, ".%s", name);
-        v = tok_alloc(newname, n - 1)->tok;
-        *addeddot = 1;
-    }
-    return v;
-}
-
 static Sym *asm_label_find(int v)
 {
     Sym *sym;
-    int addeddot;
-    v = asm2cname(v, &addeddot);
     sym = sym_find(v);
     while (sym && sym->sym_scope && !(sym->type.t & VT_STATIC))
         sym = sym->prev_tok;
@@ -78,14 +49,10 @@ static Sym *asm_label_find(int v)
 
 static Sym *asm_label_push(int v)
 {
-    int addeddot, v2 = asm2cname(v, &addeddot);
     /* We always add VT_EXTERN, for sym definition that's tentative
        (for .set, removed for real defs), for mere references it's correct
        as is.  */
-    Sym *sym = global_identifier_push(v2, VT_ASM | VT_EXTERN | VT_STATIC, 0);
-    if (addeddot)
-        sym->asm_label = v;
-    return sym;
+    return global_identifier_push(v, VT_ASM | VT_EXTERN | VT_STATIC, 0);
 }
 
 /* Return a symbol we can use inside the assembler, having name NAME.
@@ -424,7 +391,7 @@ static Sym* asm_new_label1(TCCState *s1, int label, int is_local,
         sym = asm_label_push(label);
     }
     if (!sym->c)
-      put_extern_sym2(sym, SHN_UNDEF, 0, 0, 1);
+      put_extern_sym2(sym, SHN_UNDEF, 0, 0);
     esym = elfsym(sym);
     esym->st_shndx = sh_num;
     esym->st_value = value;
@@ -497,21 +464,11 @@ static void asm_parse_directive(TCCState *s1, int global)
     sec = cur_text_section;
     switch(tok) {
     case TOK_ASMDIR_align:
-    case TOK_ASMDIR_balign:
-    case TOK_ASMDIR_p2align:
     case TOK_ASMDIR_skip:
-    case TOK_ASMDIR_space:
         tok1 = tok;
         next();
         n = asm_int_expr(s1);
-        if (tok1 == TOK_ASMDIR_p2align)
-        {
-            if (n < 0 || n > 30)
-                tcc_error("invalid p2align, must be between 0 and 30");
-            n = 1 << n;
-            tok1 = TOK_ASMDIR_align;
-        }
-        if (tok1 == TOK_ASMDIR_align || tok1 == TOK_ASMDIR_balign) {
+        if (tok1 == TOK_ASMDIR_align) {
             if (n < 0 || (n & (n-1)) != 0)
                 tcc_error("alignment must be a positive power of two");
             offset = (ind + n - 1) & -n;
@@ -568,11 +525,9 @@ static void asm_parse_directive(TCCState *s1, int global)
         size = 1;
         goto asm_data;
     case TOK_ASMDIR_word:
-    case TOK_ASMDIR_short:
         size = 2;
         goto asm_data;
     case TOK_ASMDIR_long:
-    case TOK_ASMDIR_int:
         size = 4;
     asm_data:
         next();
@@ -713,21 +668,18 @@ static void asm_parse_directive(TCCState *s1, int global)
             next();
 	} while (tok == ',');
 	break;
-    case TOK_ASMDIR_string:
     case TOK_ASMDIR_ascii:
-    case TOK_ASMDIR_asciz:
         {
             const uint8_t *p;
-            int i, size, t;
+            int i, size;
 
-            t = tok;
             next();
             for(;;) {
                 if (tok != TOK_STR)
                     expect("string constant");
                 p = tokc.str.data;
                 size = tokc.str.size;
-                if (t == TOK_ASMDIR_ascii && size > 0)
+                if (size > 0)
                     size--;
                 for(i = 0; i < size; i++)
                     g(p[i]);
@@ -900,6 +852,9 @@ static void asm_parse_directive(TCCState *s1, int global)
 	next();
 	pop_section(s1);
 	break;
+    case TOK_ASMDIR_option:
+        do next(); while (tok != ';' && tok != TOK_LINEFEED);
+        break;
 #ifdef TCC_TARGET_I386
     case TOK_ASMDIR_code16:
         {
@@ -1003,7 +958,7 @@ static void tcc_assemble_inline(TCCState *s1, char *str, int len, int global)
 {
     const int *saved_macro_ptr = macro_ptr;
     int dotid = set_idnum('.', IS_ID);
-    int dolid = set_idnum('$', 0);
+    int dolid = set_idnum('$', ASM_DOLLAR_IN_IDENTIFIERS ? IS_ID : 0);
 
     tcc_open_bf(s1, ":asm:", len);
     memcpy(file->buffer, str, len);

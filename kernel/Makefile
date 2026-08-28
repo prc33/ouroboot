@@ -20,10 +20,7 @@
 # see docs/riscv-port-findings.md's kernel-port section. The only
 # compiler this Makefile ever invokes, for either ARCH, is
 # ../compiler/tcc -- no rule here calls riscv64-linux-gnu-as or
-# anything outside this project's own toolchain (that cross-assembler
-# is a discovery tool used offline, by hand, to generate the raw
-# riscv64_*.S files checked into arch/risc/ -- see
-# arch/risc/gen_riscv64_asm.sh).
+# anything outside this project's own toolchain.
 #
 # docs/kernel-arch-split-plan.md: every genuinely architecture-specific
 # file lives under arch/i386/ or arch/risc/ (mirroring
@@ -77,12 +74,8 @@ CFLAGS  += -DKERNEL_ARCH_RISCV64
 # machine jumps to the lowest PT_LOAD vaddr, not e_entry -- they just
 # happen to always agree with TCC's linker.
 LDFLAGS := -B$(TCCDIR) -nostdlib -static -Wl,-Ttext=0x80200000
-# arch/risc/riscv64_boot.o MUST be first (its hardcoded jump target
-# assumes it occupies exactly the first 0x1000 bytes of the image --
-# see its own comment) and arch/risc/riscv64_entry.o must be
-# immediately next (its _riscv64_entry must be the very first thing
-# linked after that page). arch/risc/riscv64_kend.o must be last, same
-# reason as i386's arch/i386/kend.o.
+# arch/risc/riscv64_boot.o supplies the entry point and must be first;
+# arch/risc/riscv64_kend.o must be last, like arch/i386/kend.o.
 # arch/risc/riscv64_task.o (the P4 fixed-2-task scheduler, superseded
 # by sched/process.o from checkpoint 6 onward) is deliberately *not*
 # here -- the product kernel never calls it. It's added back for
