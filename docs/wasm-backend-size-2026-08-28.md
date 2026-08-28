@@ -1,0 +1,180 @@
+# Why the wasm backend is 3,174 lines — and why the hints were the wrong half
+
+Prompted by: *"I'm still very confused by the size of the wasm backend. The
+generic TCC code knows basic block boundaries and all the things wasm is
+fighting to work out. Maybe wasm should codegen directly from the AST rather
+than trying to use the generic register machine codegen at all — the hints
+might be fighting a losing battle."*
+
+**That's right, and the measurements say it more strongly than the question
+does.** The control-flow recovery I've spent two commits improving is only
+**20%** of the backend. The larger cost — **54%** — is machinery that exists
+purely to model *registers that wasm does not have*, and then to partially
+undo that modelling again. Hints cannot touch any of it.
+
+---
+
+## Where the 3,174 lines actually go
+
+| Lines | % | What |
+|---:|---:|---|
+| ~1,700 | 54% | **Register-machine impedance**: inventing registers, then translating them back to a stack |
+| ~621 | 20% | **Control-flow recovery**: rediscovering loop/branch structure from flattened jumps |
+| ~850 | 27% | Module writing, symbol/reloc resolution, LEB128, opcode tables — irreducible |
+
+### The 54%: modelling registers wasm doesn't have
+
+`wasm-gen.c` declares twelve fake registers to satisfy TCC's backend
+interface:
+
+```c
+TREG_I0 = 0, TREG_I1, TREG_I2, TREG_I3,   /* "integer registers" */
+TREG_L0, TREG_L1, TREG_L2, TREG_L3,       /* "long registers"    */
+TREG_F0, TREG_F1, TREG_F2, TREG_F3,       /* "float registers"   */
+```
+
+None of these exist. Each is mapped onto a wasm *local* by helpers
+(`wasm_i32_reg_local`, `wasm_i64_reg_local`, `wasm_f64_reg_local`) called
+**82 times** across the emitter. `wasm_emit_case()`'s non-branch arms — **489
+lines** — are almost entirely "take operands out of fake registers, push them
+on the real wasm stack, do the operation, put the result back in a fake
+register."
+
+Then, because that round-trip is pure waste, the emitter carries a *second*
+layer to partially undo it: the `WB_SET_OR_TEE` / `WB_GET_OR_SKIP` peepholes
+(**58 uses**) plus a 53-line lookahead helper (`wasm_op_first_input`), whose
+entire job is to notice "this value is already on the wasm stack, don't
+round-trip it through a local."
+
+**The pipeline is losing information twice:**
+
+```
+tccgen.c's vstack  →  gv() forces a register  →  wasm local  →  peephole  →  wasm stack
+   (a stack!)            (loses stack order)      (spill)     (partial undo)   (a stack!)
+```
+
+TCC's front end *already has a value stack*. wasm *is* a stack machine. The
+register machine is an artefact sitting between two stack machines.
+
+### The cost is in the output too, not just the source
+
+Instrumenting the emitter over a real build of `emulator/rv64.c`:
+
+```
+WASM LOCALS: get=2751 set=1937 tee=413 = 5101 register-traffic ops
+             of 29974 emitted opcodes (17%)
+```
+
+**17% of every opcode emitted into `rv64.wasm` is `local.get`/`local.set`/
+`local.tee` shuffling values through fake registers** — and that is the number
+*after* the peepholes have already removed everything they can. The browser
+executes that overhead 294.6 million times per boot test.
+
+### The 20%: control-flow recovery (what the hints addressed)
+
+Inside `wasm_emit_function_body()` (605 lines), only 74 are real prologue work:
+
+| Lines | Region |
+|---:|---|
+| 74 | prologue / locals / param spill |
+| 44 | basic-block partitioning |
+| 116 | successor + loop + reducibility analysis |
+| 111 | forward-scope placement + nesting fixpoint |
+| 189 | structured emission |
+| 71 | `br_table` dispatch fallback |
+
+plus ~90 lines of branch arms in `wasm_emit_case()`. **~621 lines rediscovering
+what `tccgen.c` knew for certain and threw away.**
+
+---
+
+## "Codegen from the AST": the one correction
+
+**TCC has no AST.** It is strictly single-pass: `block()` (tccgen.c:5732)
+parses and emits in the same traversal, and nothing is retained. So
+"generate from the AST" is not literally available.
+
+But the *intent* is exactly right, and there is a realizable form of it:
+**generate from the parser**. At the moment `block()` is handling `TOK_WHILE`,
+the structure is not merely inferable, it is *the program state*. The problem
+is only that the current backend interface offers nowhere to say so, so the
+structure is flattened into patchable jumps and then painstakingly
+reconstructed downstream.
+
+That is also the honest verdict on my last two commits: **they were a local
+optimum on the smaller half of the problem.** They bought real things — a
+latent crash fixed, the nested-loop fixpoint deleted outright — but they were
+feeding better information into an architecture whose main cost is elsewhere.
+"Fighting a losing battle" is fair for the 54%; the hints simply cannot reach
+it, because no amount of control-flow metadata changes the fact that `gv()`
+has already forced a value into a register before the backend sees it.
+
+---
+
+## What a stack-native wasm backend would look like
+
+Two independent changes, in increasing order of difficulty:
+
+**1. Structural emission for control flow.** Hook the parser rather than the
+jump stream: `wasm_begin_loop()` / `wasm_end_loop()` / `wasm_begin_if()` /
+`wasm_else()` / `wasm_end_if()` / `wasm_begin_switch()` / … C's structured
+constructs map onto wasm's `block`/`loop`/`if`/`br`/`br_table` essentially
+one-to-one, which is why this is worth doing: the recovery pass exists only
+because that correspondence was discarded. `break`/`continue` become `br` to a
+tracked scope depth — TCC already threads these through
+`cur_scope->bsym`/`csym`. Eliminates most of the 621 lines *and* both fallback
+paths, and dissolves the for-loop-rotation and switch-dispatch problems rather
+than working around them, because emission follows the source's own nesting
+instead of the flattened layout.
+
+**2. Stack-first expression emission.** Stop materialising into twelve fake
+registers; keep values on the wasm operand stack, and spill to a *small* local
+pool only when the stack discipline genuinely can't hold. This is the 54%, and
+it is the harder half, because TCC's front end does shuffle its value stack:
+`vswap` (33 call sites), `vdup` (17), `vrott` (6), `save_reg` (4). Those are
+real — an early `--gc-sections` run appeared to show them unreachable in the
+wasm32 build, but that was **gcc inlining them**, not disuse; checking the
+actual call sites corrected it. So spill locals remain necessary. The point is
+that they'd be an occasional fallback rather than the mandatory path for every
+single value.
+
+Prize: plausibly **~3,174 → ~1,600 lines**, *and* the 17% opcode overhead goes
+away (a faster browser demo, not just a smaller compiler), *and* the fallback
+dispatch path — with its 52%-slower output — stops being reachable at all.
+
+---
+
+## Why this is not in this commit
+
+This is a rewrite of `wasm-gen.c` and `wasm_emit_case()`, not an incremental
+change, and the current safety net cannot support it. Everything verified so
+far has leaned on **byte-identical `rv64.wasm`** — which is precisely the wrong
+instrument here, because a stack-native backend is *supposed* to emit
+different, better code. The moment that check stops applying, the only
+remaining evidence is one boot smoke test, and the failure mode of a
+mis-emitted wasm module is silent miscompilation, not a build error.
+
+**The prerequisite is a real wasm test corpus** — `compiler/tests/wasm32/
+examples.c` is 67 lines. What's needed is either substantially broader coverage
+with known-good expected outputs, or differential testing: compile the same C
+with the i386/riscv64 backends and the wasm backend, run both, compare results.
+That is independently valuable (it would also retire the "we can't safely fix
+the for-loop rotation" blocker from the previous document) and is the honest
+next step before touching codegen.
+
+## Recommendation
+
+1. **Build the wasm test corpus / differential harness first.** Nothing else
+   here is safe without it.
+2. **Then structural emission (1)** — self-contained, deletes the most code
+   per unit of risk, and removes the two known-bad fallback paths.
+3. **Then stack-first expressions (2)** — the big prize, both for size and for
+   browser performance.
+4. **Keep the existing hints in the meantime.** They're inert for
+   i386/riscv64, they fixed a real crash, and under (1) they become the
+   natural place the structural events attach — not wasted work, just
+   insufficient on their own.
+
+Worth stating plainly: the two hint commits made things measurably better and
+provably safe, but they were treating the smaller half. The question was the
+right one to ask.
