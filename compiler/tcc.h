@@ -142,8 +142,6 @@ extern long double strtold (const char *__nptr, char **__endptr);
 #  define CONFIG_TCC_ELFINTERP "/usr/libexec/ld-elf.so.2"
 # elif defined __GNU__
 #  define CONFIG_TCC_ELFINTERP "/lib/ld.so"
-# elif defined(TCC_UCLIBC)
-#  define CONFIG_TCC_ELFINTERP "/lib/ld-uClibc.so.0"
 # elif defined(TCC_TARGET_RISCV64)
 #  define CONFIG_TCC_ELFINTERP "/lib/ld-linux-riscv64-lp64d.so.1"
 # else
@@ -169,11 +167,6 @@ extern long double strtold (const char *__nptr, char **__endptr);
 /* (target specific) libtcc1.a */
 #ifndef TCC_LIBTCC1
 # define TCC_LIBTCC1 "libtcc1.a"
-#endif
-
-/* library to use with CONFIG_USE_LIBGCC instead of libtcc1.a */
-#if defined CONFIG_USE_LIBGCC && !defined TCC_LIBGCC
-#define TCC_LIBGCC USE_TRIPLET(CONFIG_SYSROOT "/" CONFIG_LDDIR) "/libgcc_s.so.1"
 #endif
 
 /* -------------------------------------------- */
