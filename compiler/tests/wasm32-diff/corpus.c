@@ -523,3 +523,77 @@ int test_two_locals_in_loop(void)
         sum += x - y; /* -2 each time */
     return sum; /* -20 */
 }
+
+/* ---------------------------------------------------------------- */
+/* gen_vstore_hook() -- assignments that never allocate a register for
+ * the source value at all, intercepted in tccgen.c's vstore() before its
+ * own gv() call. See the hook's own comment in tcc.h. */
+
+int test_vstore_local_to_local(void)
+{
+    /* Plain int local assigned to plain int local -- the most direct
+     * shape the hook targets. */
+    int a = 42, b = 0;
+    b = a;
+    return b; /* 42 */
+}
+
+int test_vstore_const_to_local(void)
+{
+    /* Compile-time int constant assigned to a plain int local. */
+    int a = 0;
+    a = 99;
+    return a; /* 99 */
+}
+
+int test_vstore_self(void)
+{
+    /* Self-assignment: destination and source are the SAME local
+     * (same frame offset on both sides of '='). Exercises the address
+     * being computed before the value is read -- wasm's own store
+     * requires [address, value] stack order, so if these were emitted
+     * in the wrong sequence this specific case is exactly where a
+     * subtle miscompile would show up (though for THIS shape, plain
+     * i32.load/i32.store are order-independent since neither side
+     * writes before the other reads -- still worth pinning down). */
+    int a = 7;
+    a = a;
+    return a; /* 7 */
+}
+
+int test_vstore_chain(void)
+{
+    /* a = b = c: the inner assignment (b = c) is itself intercepted by
+     * the hook, which must leave vtop/vtop[-1] in a state the OUTER
+     * assignment (a = ...) can still consume correctly -- exactly the
+     * "vtop left untouched, still valid" postcondition the hook's own
+     * comment in tcc.h documents. */
+    int a = 0, b = 0, c = 5;
+    a = b = c;
+    return a * 10 + b; /* 55 */
+}
+
+int test_vstore_result_used(void)
+{
+    /* The assignment expression's own result (not just its side
+     * effect) is consumed immediately afterward -- forces whatever
+     * vtop/vtop[-1] the hook left behind to be gv()'d correctly by
+     * ordinary code right after, not just by vstore()'s own trailing
+     * vswap()+vtop--. */
+    int a = 0, b = 8;
+    int r = (a = b) + 1;
+    return r * 100 + a; /* 909 */
+}
+
+int test_vstore_in_loop(void)
+{
+    /* Plain local-to-local assignment repeated every iteration, inside
+     * a loop -- checks the hook doesn't collide with the loop's own
+     * induction variable or exit test across repeated passes. */
+    int i, src = 3, dst = 0, sum = 0;
+    for (i = 0; i < 10; i++) {
+        dst = src;
+        sum += dst;
+    }
+    return sum; /* 30 */
+}

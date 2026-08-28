@@ -948,6 +948,11 @@ ST_FUNC int gjmp(int t)
 // extent -- see this hint's own comment in tcc.h.
 ST_FUNC void gjmp_hint_loop_range(int start) { (void)start; }
 
+// riscv64 has real registers to spare and store() runs directly against
+// them -- no earlier interception needed. See this hook's own comment in
+// tcc.h.
+ST_FUNC int gen_vstore_hook(void) { return 0; }
+
 // Generate branch to known address:
 ST_FUNC void gjmp_addr(int a)
 {

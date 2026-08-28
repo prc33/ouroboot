@@ -96,6 +96,22 @@ enum {
  * validation-breaking imbalance, not just a missed optimization -- see
  * this flag's own emission-side comment). */
 #define WASM_OP_FLAG_L_LOCAL 0x0400
+/* WASM_OP_STORE_I32 / WASM_OP_STORE_I64 only: the value being stored never
+ * got a register either -- gen_vstore_hook() (tcc.h/tccgen.c) intercepted
+ * the assignment before tccgen.c's own vstore() ever called gv() to force
+ * one. target_pc holds the source local's own frame offset, the same
+ * repurposing WASM_OP_FLAG_L_LOCAL uses (STORE ops never jump, so
+ * target_pc is otherwise unused by them). r0 is unused here -- there is
+ * no source register at all. Mutually exclusive with
+ * WASM_OP_FLAG_VAL_IMM. Bit chosen above 0x00ff deliberately: STORE's
+ * `flags` low byte already holds the DESTINATION address mode
+ * (WASM_ADDR_*, set by wasm_set_addr()) and must not be disturbed. */
+#define WASM_OP_FLAG_VAL_LOCAL 0x0800
+/* WASM_OP_STORE_I32 / WASM_OP_STORE_I64 only: the value being stored is a
+ * compile-time constant, held in i64 (truncated to 32 bits by the emitter
+ * for STORE_I32) -- also never given a register. Mutually exclusive with
+ * WASM_OP_FLAG_VAL_LOCAL. */
+#define WASM_OP_FLAG_VAL_IMM 0x1000
 
 #define WASM_MAX_CALL_ARGS 32
 typedef struct WasmOp {

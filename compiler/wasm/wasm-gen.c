@@ -596,6 +596,37 @@ ST_FUNC void store(int r, SValue *v)
     }
 }
 
+/* Same shape as store(), for gen_vstore_hook()'s "both plain int locals"
+ * case: neither the destination address nor the source value ever touch
+ * a register. dst_off/src_off are both plain frame offsets (VT_LOCAL's
+ * own c.i) -- see WASM_OP_FLAG_VAL_LOCAL's own comment. */
+static void wasm_emit_store_i32_local(int dst_off, int src_off)
+{
+    WasmOp *wo = wasm_emit_op(WASM_OP_STORE_I32);
+    if (!wo)
+        return;
+    /* WASM_ADDR_FP in the low byte -- the destination is always a plain
+     * frame-relative local here, same as wasm_set_addr() would produce
+     * for a VT_LOCAL destination, just set directly since we never call
+     * it (there's no register to feed it). */
+    wo->flags = WASM_ADDR_FP | WASM_OP_FLAG_VAL_LOCAL;
+    wo->imm = dst_off;
+    wo->target_pc = src_off;
+}
+
+/* Same as wasm_emit_store_i32_local(), but the source is a compile-time
+ * int constant rather than a local -- see WASM_OP_FLAG_VAL_IMM's own
+ * comment. */
+static void wasm_emit_store_i32_imm(int dst_off, int value)
+{
+    WasmOp *wo = wasm_emit_op(WASM_OP_STORE_I32);
+    if (!wo)
+        return;
+    wo->flags = WASM_ADDR_FP | WASM_OP_FLAG_VAL_IMM;
+    wo->imm = dst_off;
+    wo->i64 = value;
+}
+
 ST_FUNC int gfunc_sret(CType *vt, int variadic, CType *ret, int *ret_align, int *regsize)
 {
     (void)variadic;
@@ -876,6 +907,38 @@ static int wasm_is_simple_local(SValue *sv)
     return (sv->r & (VT_VALMASK | VT_LVAL | VT_SYM)) == (VT_LOCAL | VT_LVAL)
         && (sv->type.t & VT_BTYPE) == VT_INT
         && !(sv->type.t & VT_VOLATILE);
+}
+
+/* vstore() hook (tccgen.c) -- see its own comment in tcc.h. Called before
+ * the shared front end forces vstore()'s source value into a register
+ * with gv(), for exactly the two shapes gen_opi() above already treats
+ * as "cheaper to reread from a frame slot than to round-trip through a
+ * register": a plain int local, or a compile-time int constant, stored
+ * into a plain int local. Both operands still sit exactly where the
+ * parser left them here -- nothing has called gen_cast() or gv() yet --
+ * so this only needs to recognize the shape and hand it straight to a
+ * dedicated emitter. Anything else (structs, bitfields, volatile, casts
+ * that actually narrow/widen, LLOCAL, two-word types, pointers) falls
+ * through untouched; vstore() only reaches this from its single-word
+ * scalar branch to begin with. */
+ST_FUNC int gen_vstore_hook(void)
+{
+    SValue *dst = vtop - 1, *src = vtop;
+
+    if (!wasm_is_simple_local(dst))
+        return 0;
+    if ((src->type.t & VT_BTYPE) != VT_INT)
+        return 0;
+
+    if (wasm_is_simple_local(src)) {
+        wasm_emit_store_i32_local(dst->c.i, src->c.i);
+        return 1;
+    }
+    if ((src->r & (VT_VALMASK | VT_LVAL | VT_SYM)) == VT_CONST) {
+        wasm_emit_store_i32_imm(dst->c.i, (int)src->c.i);
+        return 1;
+    }
+    return 0;
 }
 
 ST_FUNC void gen_opi(int op)

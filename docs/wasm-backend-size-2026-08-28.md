@@ -253,3 +253,88 @@ stack-first rewrite (2) already scoped above, not a shortcut around it. No
 code changes shipped from this addendum; the corpus is what made "tried it,
 it's a regression, proved it in twenty minutes instead of finding out from a
 production slowdown" possible at all.
+
+---
+
+## Addendum: preventing the register instead of recovering it
+
+The peephole addendum above tries to *recover* stack residency after the
+fact, competing for one slot. The alternative — *prevent* the register from
+ever being allocated, at IR-recording time, for operands that are provably
+"immediately consumed, nothing intervening" — doesn't have that competition
+problem, because it doesn't touch the peephole at all. `gen_opi()` is
+`wasm-gen.c`'s own code; it doesn't have to call `gv2()` — it can inspect
+`vtop[-1]`/`vtop`'s raw `SValue` fields directly and skip register
+materialization for a plain, non-volatile `int` local
+(`wasm_is_simple_local()`).
+
+**Two commits shipped from this:** first, the right operand of `+ - & ^ | *
+<< >> ...` and comparisons, when it's a simple local, is loaded inline from
+its own frame slot instead of round-tripped through a register
+(`WASM_OP_FLAG_R1_LOCAL`). Second, when *both* operands are simple locals,
+neither touches a register at all — for comparisons this means zero
+registers used, since the result always lands in the fixed `local_cmp` slot
+already; for arithmetic, `get_reg()` (not `gv()`) grabs a destination purely
+to hold the result, never loaded into (`WASM_OP_FLAG_L_LOCAL`). Verified with
+9 new operand-order-sensitive corpus tests (non-commutative ops are
+load-bearing here — a swapped operand flips the answer, not just the cost).
+Measured on `emulator/rv64.c`: 5101 → 5047 → 5033 register-traffic ops;
+30,212 → 30,104 → 30,076 bytes.
+
+**Diagnostic breakdown of what was left**, by `WasmOp` kind: `LOAD_I32`
+(885), `LOAD_I64` (504), `STORE_I32` (445), `STORE_I64` (411), `JMP_CMP`
+(402, mostly reading the fixed `local_cmp` slot — not real waste), `I32_BIN`
+(343), `I64_BIN` (327, untouched), `SET_CMP_I32` (322), `CALL` (251,
+inherent to wasm's calling convention), `I32_CONST` (196), `JMP` (186),
+`SET_CMP_I64` (161). Loads and stores dominate, not binary-op operands —
+reframing where the remaining opportunity actually is.
+
+**Why the same trick can't reach `store()` from inside `wasm-gen.c` alone.**
+`vstore()` (`tccgen.c`, shared by every assignment TCC compiles, for all
+three backends) unconditionally calls `gv(RC_TYPE(dbt))` to materialize the
+source value *before* ever invoking the backend's own `store()`. Unlike
+`gen_opi()`, `store()` has no opportunity to intervene — the front end has
+already decided by the time backend code runs.
+
+**A peephole-recovery approach for `store()`'s source was also considered,
+and ruled out as actually unsafe, not just suboptimal**, before writing any
+code. wasm's `i32.store` requires `[address, value]` stack order; the
+store's own address computation (`wasm_emit_addr`) always emits bytes
+*between* any preceding "hot" value and where the store needs to read it —
+any attempt to keep a preceding value on the stack for a store to consume
+would corrupt operand order, risking silent data corruption rather than a
+crash. Caught by tracing the emission order, not by the corpus.
+
+**The fix: a new hook, `gen_vstore_hook()`, called from `vstore()` itself
+right before its `gv()` call** (`compiler/tcc.h` declares it; i386/riscv64
+stub it to `return 0`, the established no-op precedent from
+`gjmp_hint_loop_range()`). This runs *before* the front end has committed to
+materializing anything, while `vtop`/`vtop[-1]` are still exactly what the
+parser produced — the same position `gen_opi()` already had, just for
+assignment instead of binary ops. Scoped to plain `int`-to-`int` stores
+only (sidesteps cast interaction, bitfields, structs, two-word types, which
+`vstore()` already routes elsewhere before reaching the hook's call site):
+if the destination is a simple local and the source is either a simple
+local or a compile-time constant, the backend emits the complete store
+inline — address, then value (local-load or const), then the store
+instruction — and returns 1, and `vstore()` skips its own `gv()`+`store()`
+entirely, falling straight through to its unchanged trailing
+`vswap();vtop--;`. The "leave `vtop` untouched" contract is what makes this
+safe for chained/nested assignment (`a = b = c`, or `(a = b) + 1`): the
+unmodified source `SValue` is still a fully valid representation of "the
+assignment expression's result" for whatever consumes it next.
+
+Verified with 6 new corpus tests (local-to-local, const-to-local,
+self-assignment, `a = b = c` chaining, the assignment expression's own
+result consumed immediately, and repeated assignment inside a loop) — 44/44
+still pass. Measured on `emulator/rv64.c`: 5033 → 4987 register-traffic ops
+(46 fewer); 30,076 → 29,984 bytes (92 bytes smaller).
+
+Smaller win in absolute terms than the two `gen_opi()` commits, because
+`STORE_I32`'s source is very often already the *result* of a computation
+(not a bare local or constant) — this hook only fires for the subset of
+assignments whose right-hand side is literally a name or a literal. Real,
+verified, and — more importantly — it establishes the hook itself as a
+reusable interception point: the same `vtop`-still-untouched contract is
+available to any future backend work that needs to see an assignment before
+the front end forces it into a register, not just this one narrow case.

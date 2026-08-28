@@ -734,22 +734,35 @@ static void wasm_emit_case(const WasmEmitCtx *c, WasmBuf *b, WasmOp *op,
     case WASM_OP_STORE_I64:
     case WASM_OP_STORE_I8:
     case WASM_OP_STORE_I16:
-        src = op->kind == WASM_OP_STORE_I64
-            ? wasm_i64_reg_local(op->r0, local_tmp64)
-            : wasm_i32_reg_local(op->r0, local_i0);
         wasm_emit_addr(b, op, local_fp, local_i0);
-        if (op->kind == WASM_OP_STORE_I64) {
-            wb_local_get(b, src);
-            wb_u8(b, 0x37), wb_memarg(b, 3);
+        if (op->flags & WASM_OP_FLAG_VAL_LOCAL) {
+            /* The value being stored never got a register either -- see
+             * WASM_OP_FLAG_VAL_LOCAL's own comment. Load it inline from
+             * its own frame slot, same address bytecode wasm_emit_addr()
+             * would produce for it, just spent here instead of on a
+             * separate LOAD op with its own register. Only ever set for
+             * STORE_I32 -- see gen_vstore_hook()'s own scoping. */
+            wb_local_get(b, local_fp);
+            if (op->target_pc)
+                wb_i32_const(b, op->target_pc), wb_u8(b, 0x6a);
+            wb_u8(b, 0x28), wb_memarg(b, 2); /* i32.load */
+        } else if (op->flags & WASM_OP_FLAG_VAL_IMM) {
+            /* Compile-time constant -- also never given a register. */
+            wb_i32_const(b, (int)op->i64);
         } else {
+            src = op->kind == WASM_OP_STORE_I64
+                ? wasm_i64_reg_local(op->r0, local_tmp64)
+                : wasm_i32_reg_local(op->r0, local_i0);
             wb_local_get(b, src);
-            if (op->kind == WASM_OP_STORE_I32)
-                wb_u8(b, 0x36), wb_memarg(b, 2);
-            else if (op->kind == WASM_OP_STORE_I8)
-                wb_u8(b, 0x3a), wb_memarg(b, 0);
-            else
-                wb_u8(b, 0x3b), wb_memarg(b, 1);
         }
+        if (op->kind == WASM_OP_STORE_I64)
+            wb_u8(b, 0x37), wb_memarg(b, 3);
+        else if (op->kind == WASM_OP_STORE_I32)
+            wb_u8(b, 0x36), wb_memarg(b, 2);
+        else if (op->kind == WASM_OP_STORE_I8)
+            wb_u8(b, 0x3a), wb_memarg(b, 0);
+        else
+            wb_u8(b, 0x3b), wb_memarg(b, 1);
         break;
 
     case WASM_OP_STORE_F32:
