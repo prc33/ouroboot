@@ -101,6 +101,11 @@ static int wasm_cap_patches;
 static int wasm_last_cmp_valid;
 static int wasm_last_cmp_op;
 
+/* Set by gjmp_hint_loop(), consumed (and cleared) by whichever of
+ * gjmp_addr()/gsym_addr() tccgen.c calls immediately afterward -- see that
+ * hint's own comment in tcc.h. */
+static int wasm_next_resolve_is_loop;
+
 static NORETURN void wasm_unimp(const char *feature)
 {
     tcc_error("wasm32 backend: %s is not supported in the restricted backend", feature);
@@ -340,6 +345,8 @@ static void wasm_emit_cmp_set_i64(int op, int lhs_reg, int rhs_reg,
 
 ST_FUNC void gsym_addr(int t, int a)
 {
+    int is_loop = wasm_next_resolve_is_loop;
+    wasm_next_resolve_is_loop = 0;
     while (t) {
         WasmPatch *p;
         int next;
@@ -350,8 +357,15 @@ ST_FUNC void gsym_addr(int t, int a)
             tcc_error("wasm32 backend: cross-function patch list");
         next = p->next;
         p->func->ops[p->op_index].target_pc = a;
+        if (is_loop)
+            p->func->ops[p->op_index].flags |= WASM_OP_FLAG_LOOP_EDGE;
         t = next;
     }
+}
+
+ST_FUNC void gjmp_hint_loop(void)
+{
+    wasm_next_resolve_is_loop = 1;
 }
 
 ST_FUNC void load(int r, SValue *sv)
@@ -731,12 +745,16 @@ ST_FUNC int gjmp(int t)
 ST_FUNC void gjmp_addr(int a)
 {
     WasmOp *wo;
+    int is_loop = wasm_next_resolve_is_loop;
+    wasm_next_resolve_is_loop = 0;
     if (nocode_wanted)
         return;
     wo = wasm_emit_op(WASM_OP_JMP);
     if (!wo)
         return;
     wo->target_pc = a;
+    if (is_loop)
+        wo->flags |= WASM_OP_FLAG_LOOP_EDGE;
 }
 
 ST_FUNC int gjmp_cond(int op, int t)

@@ -220,3 +220,107 @@ correct output?" — worth remembering as a category, beyond this one instance.
 Not implemented in this pass, and deliberately so — flagging it for a
 decision rather than presenting a rewritten control-flow structurer as a
 fait accompli.
+
+---
+
+## Addendum: the cheap-plumbing fix, implemented and verified
+
+Follow-up question after this was written: since the other two backends don't
+need the loop/switch distinction, can the metadata just be threaded through
+`tccgen.c` cheaply, tagged, and ignored elsewhere? Yes — implemented, and the
+result is more interesting than either "it worked" or "it didn't."
+
+### What was built
+
+A new shared primitive, `gjmp_hint_loop()`, called immediately before each of
+the **exactly six** call sites in `tccgen.c` where a `while`/`for`/`do` loop
+resolves its own repeat edge (`gjmp_addr`/`gsym_addr` in the `TOK_WHILE`,
+`TOK_FOR`, and `TOK_DO` handlers — enumerated exhaustively by grepping every
+`gjmp_addr`/`gsym_addr`/`gtst_addr` call in the file, 13 call sites in total,
+sorted into loop / switch-dispatch / goto by reading each one). i386 and
+riscv64 define it as an empty function — it costs them nothing, since it's a
+bookkeeping call inside the compiler's own execution, not code emitted into
+whatever program TCC is compiling. wasm's version sets a one-shot flag that
+`gjmp_addr()`/`gsym_addr()` consume and stamp onto the `WasmOp`(s) they
+resolve, via a new `WASM_OP_FLAG_LOOP_EDGE` bit. `tccwasm.c`'s
+`is_loop_header` computation now requires that flag, not just "some later
+block jumps here" — switch-dispatch and goto, which never set it, stop being
+misread as loops. **Net: +81 lines, entirely additive; the general structuring
+algorithm itself is untouched.**
+
+### It immediately found a real, previously-latent crash
+
+Rebuilding `emulator/web/rv64.wasm` with the fix applied: `tcc: error:
+wasm32 structured: no scope for JMP_CMP taken block 86 from block 346` — a
+hard compile failure, not a silent miscompile, but still a bug the fix itself
+introduced. Root cause: fixing the *classification* correctly stopped `switch`
+dispatch from opening fake loop scopes, but the **emission** code has its own,
+entirely separate, still-purely-positional assumption — "target position ≤
+current position → search for a loop scope, full stop" — which the analysis
+fix now violates for the first time in the code's history. It had never been
+exercised before, because the old over-broad classification's false-positive
+loop headers were *accidentally* triggering the "jump into loop" fallback for
+almost every switch-heavy function first, so structured emission never had to
+try.
+
+This surfaces the actual hard constraint: **a backward jump into an
+already-emitted, already-closed case body has no wasm structured
+representation at all**, regardless of how the analysis is done — wasm branches
+can only target scopes still open on the stack. `switch`-case dispatch, laid
+out bodies-first-then-comparisons by `tccgen.c`, produces exactly that shape.
+Fixed with an explicit rule, added right alongside the existing "jump into
+loop" check rather than touching the emission code: **any backward-by-position
+edge that isn't tagged as a real loop edge unconditionally forces the dispatch
+fallback**, since it is structurally required, not just heuristically likely.
+
+### The verified result: correct, but no performance win — here
+
+With both the classification fix and the safety net in place:
+
+- `emulator/web/rv64.wasm` rebuilds **byte-identical** to the pre-change
+  baseline (`2ffdddc0bf41bdbcbe2a9cb8abf978dc`, 30,212 bytes).
+- Re-running the same fallback-logging instrumentation from the main
+  investigation: **the same six functions** (`flush_tlb`, `load`, `store`,
+  `execute`, `rv_init`, `rv_run`) still take the slow path — confirmed by
+  function name, with `execute` now explicitly logged as hitting the new
+  safety net rather than the old "jump into loop" check it used to trip by
+  coincidence.
+- Every existing test passes on both real hardware targets: i386
+  `test`/`test-initrd`/`test-busybox`/`test-selfhost`, riscv64
+  `test`/`test-initrd`/`test-selfhost`, and — the test that matters most here,
+  since it runs `execute()` 294.6M times under the *new* code path decision —
+  riscv64 `test-wasm` (full kernel boot, self-hosting compile, interactive
+  BusyBox shell, all inside the browser-emulator wasm module).
+
+So: **byte-identical output means zero net effect on this real program.** The
+classification fix and the safety net it required cancel out exactly, because
+`execute()` was always going to fail *some* check — it just fails a different,
+now-honest one. This is not a wasted result: it replaces an accidental,
+"works by luck" correctness property (this exact shape happened to trip the
+old heuristic) with a real, provable one (division by construction: loop
+headers only ever come from where `tccgen.c` says they're loops), and along
+the way it found and fixed a genuine crash that the old code's accidental
+conservatism had been silently hiding. That crash risk is real for *some*
+future switch-shaped function even in this codebase, not just a
+theoretical concern — it took exactly one honest classification fix to
+surface it.
+
+**It does not, on its own, get `execute()` onto the fast path.** That still
+needs the separately-scoped, larger fix this document already recommended:
+either recognizing `gcase()`'s specific bodies-then-dispatch shape and
+rewriting it (at record time, before the general structurer runs) into
+something wasm can represent directly — inline `if`/`else if` comparisons
+ahead of each case body, the natural wasm-idiomatic switch shape — or a
+narrower, switch-scoped `loop`+`br_table` used only for the dispatch region
+rather than falling back for the entire enclosing function. Both are real
+compiler work, not metadata plumbing, and both are still unimplemented.
+
+### Verdict on the plumbing itself
+
+Cheap, safe, and worth keeping regardless of the performance answer: it is a
+genuine correctness improvement (removes a class of latent crash risk,
+confirmed to exist by triggering it), it's fully additive and provably inert
+for the other two backends, and it's now proven — not assumed — to be
+behavior-preserving on the project's real flagship program. It just isn't the
+performance fix that was hoped for; that fix is bigger, and is what's actually
+still outstanding.

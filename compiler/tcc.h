@@ -1305,6 +1305,16 @@ ST_FUNC int gjmp(int t);
 ST_FUNC void gjmp_addr(int a);
 ST_FUNC int gjmp_cond(int op, int t);
 ST_FUNC int gjmp_append(int n, int t);
+/* Marks the next gjmp_addr()/gsym_addr() call (there are exactly six call
+ * sites, all in this file's own while/for/do handling) as a real loop's
+ * repeat edge, as opposed to any other jump to an already-known address --
+ * of which the only other kind is switch-statement case dispatch (gcase()
+ * emits every case body before the compare-and-jump code that reaches them,
+ * so it reuses this same "known address" jump primitive, but it isn't a
+ * loop). i386/riscv64 don't need this distinction -- they emit machine code
+ * directly and never have to decide "is this a loop" -- so it's a no-op for
+ * them. wasm does need it: see docs/wasm-codegen-rethink-2026-08-27.md. */
+ST_FUNC void gjmp_hint_loop(void);
 ST_FUNC void gen_opi(int op);
 ST_FUNC void gen_opf(int op);
 ST_FUNC void gen_cvt_ftoi(int t);

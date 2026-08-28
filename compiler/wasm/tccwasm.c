@@ -1291,9 +1291,25 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
         }
 
         /* Identify loop headers: a block is a loop header if any block with
-         * a higher index jumps to it (backward edge).
+         * a higher index jumps to it (backward edge) AND that jump is
+         * tagged WASM_OP_FLAG_LOOP_EDGE -- i.e. it came from tccgen.c's own
+         * while/for/do handling (gjmp_hint_loop(), see tcc.h), not from
+         * switch-statement case dispatch reusing the same "jump to an
+         * already-known address" primitive (gcase() emits every case body
+         * before the compare-and-jump code that reaches them, which looks
+         * exactly like a backward edge by position alone). Without this tag
+         * a switch statement's own case dispatch was misread as one loop
+         * header per case, which could reject an entire function's control
+         * flow as unstructurable over jumps that were never loops at all --
+         * see docs/wasm-codegen-rethink-2026-08-27.md for how this was found
+         * (a plain switch-based instruction decoder, called 294.6M times in
+         * this project's own boot test, was silently taking the slow
+         * dispatch-loop path for exactly this reason).
          * Also compute blk[h].loop_end = the last block that has a back-edge to h. */
         for (b_idx = 0; b_idx < nb_blocks; b_idx++) {
+            int is_loop_edge = (f->ops[blk[b_idx].end - 1].flags & WASM_OP_FLAG_LOOP_EDGE) != 0;
+            if (!is_loop_edge)
+                continue;
             if (blk[b_idx].succ0 >= 0 && blk[b_idx].succ0 < nb_blocks
                 && blk[b_idx].succ0 <= b_idx) {
                 blk[blk[b_idx].succ0].is_loop_header = 1;
@@ -1328,12 +1344,33 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
             } while (changed);
         }
 
+        int use_structured = 1;
+
+        /* A backward-by-position edge that ISN'T a tagged loop edge is
+         * switch-case dispatch (gcase() jumping into an already-emitted
+         * case body) or a backward goto -- gjmp_hint_loop() deliberately
+         * never tags either, see its own comment in tcc.h. Structured wasm
+         * cannot express "branch into a scope that has already closed",
+         * which is exactly what such an edge would need (the case body's
+         * own block scope closed when its code finished emitting, long
+         * before the dispatch code that jumps back into it). This can only
+         * be discovered by trying to emit the branch, so it must be ruled
+         * out here, before emission -- the alternative is
+         * wasm_emit_case()'s own tcc_error("no scope for JMP...") aborting
+         * the whole compile. */
+        for (b_idx = 0; b_idx < nb_blocks && use_structured; b_idx++) {
+            int is_loop_edge = (f->ops[blk[b_idx].end - 1].flags & WASM_OP_FLAG_LOOP_EDGE) != 0;
+            if (!is_loop_edge
+                && ((blk[b_idx].succ0 >= 0 && blk[b_idx].succ0 <= b_idx)
+                    || (blk[b_idx].succ1 >= 0 && blk[b_idx].succ1 <= b_idx)))
+                use_structured = 0;
+        }
+
         /* Detect "jump into loop" patterns: a forward edge from block b
          * to block t where some loop header h has b < h <= t <= blk[h].loop_end.
          * This pattern (common in TCC's for-loop layout) cannot be directly
          * expressed in wasm structured control flow.  Fall back to the
          * switch-loop dispatch for such functions. */
-        int use_structured = 1;
         for (b_idx = 0; b_idx < nb_blocks && use_structured; b_idx++) {
             int succs[2], ns2 = 0;
             if (blk[b_idx].succ0 > b_idx && blk[b_idx].succ0 < nb_blocks)

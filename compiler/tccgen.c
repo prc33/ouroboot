@@ -5768,8 +5768,8 @@ again:
         a = gvtst(1, 0);
         b = 0;
         lblock(&a, &b);
-        gjmp_addr(d);
-        gsym_addr(b, d);
+        gjmp_hint_loop(); gjmp_addr(d);
+        gjmp_hint_loop(); gsym_addr(b, d);
         gsym(a);
 
     } else if (t == '{') {
@@ -5870,13 +5870,13 @@ again:
             d = gind();
             gexpr();
             vpop();
-            gjmp_addr(c);
+            gjmp_hint_loop(); gjmp_addr(c);
             gsym(e);
         }
         skip(')');
         lblock(&a, &b);
-        gjmp_addr(d);
-        gsym_addr(b, d);
+        gjmp_hint_loop(); gjmp_addr(d);
+        gjmp_hint_loop(); gsym_addr(b, d);
         gsym(a);
         prev_scope(&o, 0);
 
@@ -5891,7 +5891,7 @@ again:
         skip(')');
         skip(';');
 	c = gvtst(0, 0);
-	gsym_addr(c, d);
+	gjmp_hint_loop(); gsym_addr(c, d);
         gsym(a);
 
     } else if (t == TOK_SWITCH) {
