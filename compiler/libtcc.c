@@ -30,24 +30,6 @@ ST_DATA struct TCCState *tcc_state;
 /********************************************************/
 
 /********************************************************/
-#ifndef CONFIG_TCC_SEMLOCK
-#define WAIT_SEM()
-#define POST_SEM()
-#else
-#include <semaphore.h>
-static int tcc_sem_init;
-static sem_t tcc_sem;
-static void wait_sem(void)
-{
-    if (!tcc_sem_init)
-        sem_init(&tcc_sem, 0, 1), tcc_sem_init = 1;
-    while (sem_wait (&tcc_sem) < 0 && errno == EINTR);
-}
-#define WAIT_SEM() wait_sem()
-#define POST_SEM() sem_post(&tcc_sem)
-#endif
-
-/********************************************************/
 /* copy a string and truncate it. */
 ST_FUNC char *pstrcpy(char *buf, size_t buf_size, const char *s)
 {
@@ -246,14 +228,12 @@ static void strcat_printf(char *buf, int buf_size, const char *fmt, ...)
 
 PUB_FUNC void tcc_enter_state(TCCState *s1)
 {
-    WAIT_SEM();
     tcc_state = s1;
 }
 
 PUB_FUNC void tcc_exit_state(void)
 {
     tcc_state = NULL;
-    POST_SEM();
 }
 
 static void error1(int mode, const char *fmt, va_list ap)

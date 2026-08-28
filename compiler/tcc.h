@@ -187,9 +187,6 @@ extern long double strtold (const char *__nptr, char **__endptr);
 # define PUB_FUNC
 #endif
 
-/* support using libtcc from threads */
-#define CONFIG_TCC_SEMLOCK
-
 #define ST_INLN
 #define ST_FUNC
 #define ST_DATA extern
