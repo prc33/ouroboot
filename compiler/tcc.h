@@ -975,14 +975,7 @@ ST_FUNC void cstr_free(CString *cstr);
 ST_FUNC int cstr_printf(CString *cs, const char *fmt, ...) PRINTF_LIKE(2,3);
 ST_FUNC void cstr_reset(CString *cstr);
 
-ST_INLN void sym_free(Sym *sym);
-ST_FUNC Sym *sym_push2(Sym **ps, int v, int t, int c);
-ST_FUNC Sym *sym_find2(Sym *s, int v);
-ST_FUNC Sym *sym_push(int v, CType *type, int r, int c);
-ST_FUNC void sym_pop(Sym **ptop, Sym *b, int keep);
-ST_INLN Sym *struct_find(int v);
-ST_INLN Sym *sym_find(int v);
-ST_FUNC Sym *global_identifier_push(int v, int t, int c);
+#include "symbols.h"
 
 ST_FUNC void tcc_open_bf(TCCState *s1, const char *filename, int initlen);
 ST_FUNC int tcc_open(TCCState *s1, const char *filename);
@@ -1117,6 +1110,7 @@ ST_DATA int rsym, anon_sym, ind, loc;
 ST_DATA int const_wanted; /* true if constant wanted */
 ST_DATA int nocode_wanted; /* true if no code generation wanted for an expression */
 ST_DATA int global_expr;  /* true if compound literals must be allocated globally (used during initializers parsing */
+ST_DATA int local_scope;
 ST_DATA CType func_vt; /* current function return type (used by return instruction) */
 ST_DATA int func_var; /* true if current function is variadic */
 ST_DATA int func_vc;
@@ -1130,30 +1124,33 @@ ST_FUNC void tccgen_init(TCCState *s1);
 ST_FUNC int tccgen_compile(TCCState *s1);
 ST_FUNC void tccgen_finish(TCCState *s1);
 ST_FUNC void check_vstack(void);
-
-ST_INLN int is_float(int t);
+#include "types.h"
+#include "vstack.h"
+#include "expr.h"
 ST_FUNC int ieee_finite(double d);
 ST_FUNC int exact_log2p1(int i);
 ST_FUNC void test_lvalue(void);
 ST_FUNC void vpushi(int v);
+ST_FUNC void vpush64(int ty, unsigned long long v);
+ST_FUNC void vpushs(addr_t v);
+ST_FUNC void vpush_ref(CType *type, Section *sec, unsigned long offset, unsigned long size);
+ST_FUNC void gen_cast(CType *type);
+ST_FUNC void init_putv(CType *type, Section *sec, unsigned long c);
 ST_FUNC ElfSym *elfsym(Sym *);
 ST_FUNC void update_storage(Sym *sym);
 ST_FUNC Sym *external_global_sym(int v, CType *type);
 ST_FUNC void vset(CType *type, int r, int v);
 ST_FUNC void vset_VT_CMP(int op);
+ST_FUNC void vset_VT_JMP(void);
+ST_FUNC int RC_TYPE(int t);
+ST_FUNC int RC2_TYPE(int t, int rc);
 ST_FUNC void vswap(void);
 ST_FUNC void vpush_global_sym(CType *type, int v);
 ST_FUNC void vrote(SValue *e, int n);
 ST_FUNC void vrott(int n);
 ST_FUNC void vrotb(int n);
-ST_FUNC void vpushv(SValue *v);
-ST_FUNC void save_reg(int r);
-ST_FUNC void save_reg_upstack(int r, int n);
-ST_FUNC int get_reg(int rc);
-ST_FUNC void save_regs(int n);
-ST_FUNC void gaddrof(void);
-ST_FUNC int gv(int rc);
-ST_FUNC void gv2(int rc1, int rc2);
+#include "registers.h"
+#include "optimise.h"
 ST_FUNC void vpop(void);
 ST_FUNC void gen_op(int op);
 ST_FUNC int type_size(CType *type, int *a);
