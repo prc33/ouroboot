@@ -191,3 +191,65 @@ to attempt.
 Worth stating plainly: the two hint commits made things measurably better and
 provably safe, but they were treating the smaller half. The question was the
 right one to ask.
+
+---
+
+## Addendum: a peephole extension, tried, measured, reverted
+
+Direct follow-up once the corpus existed: does the corpus let (2) actually
+happen, and how much does it save? Traced the exact mechanism first, then
+attempted the smallest real slice of it, and it taught something the
+hand-analysis alone didn't predict.
+
+**The two-pass IR isn't the obstacle here.** `load()` (called by the shared
+`gv()`) still just records a symbolic `WasmOp` — it never decides `local.set`
+vs `local.tee`. That decision is made entirely at emission time, by
+`wasm_op_first_input()` and the `WB_SET_OR_TEE`/`WB_GET_OR_SKIP` peephole. So
+improving stack residency for the common case doesn't need to touch
+`gv()`/`gv2()`/`load()`/`tccgen.c` at all — good news for scope.
+
+**Why the 17% survives despite an existing peephole.** `gv2()` (`tccgen.c`)
+always materializes the left operand before the right, for same-class
+operands — the only kind `wasm-gen.c` ever requests. But
+`wasm_op_first_input()` reports `r0` (the left/dst operand, computed *first*,
+two ops before the combine) as what the combine wants, while `r1` (the right
+operand, computed *immediately* before the combine) is the one actually still
+sitting on the wasm stack from its own `local.tee`. That looks like a
+straightforward miswiring: the peephole can only ever match the operand that
+was computed further away, not the one that's actually fresh.
+
+**Fix attempted:** for the five commutative i32 ops (`+ * & | ^`, where popped
+operand order provably can't change the result), swap which operand
+`wasm_op_first_input()` prefers to `r1`, and reorder the combine's own
+emission to match. Verified *correct* immediately — the differential corpus
+passes 29/29, confirming the reordering is semantically sound.
+
+**Verified *not an improvement*, by direct measurement, not assumption.**
+Instrumented the peephole's own hit/miss counter on a real build of
+`emulator/rv64.c`:
+
+| | Peephole hits | Misses |
+|---|---:|---:|
+| Baseline (`r0` priority) | 390 | 291 |
+| Changed (`r1` priority for commutative ops) | 347 | 334 |
+
+**43 fewer hits, exactly matching the +43 opcodes measured separately.** The
+hypothesis was wrong: `r0` is hit *more* often under the existing rule than
+`r1` ever would be under the new one. The likely reason, not confirmed further
+than this: real code's dominant win isn't "this one combine's freshly-computed
+right operand" — it's accumulator-style chaining (`sum += x` in a loop, or one
+statement's result feeding the next statement's left operand), where `r0`
+carries a value *into* a later combine across more than one op, and the
+existing rule already captures that. The peephole extension traded a bigger,
+real pattern for a smaller one and came out behind. **Reverted** — a measured
+regression doesn't ship because it happens to also be correct.
+
+This sharpens the earlier scoping rather than contradicting it. A single-slot
+"what's on top of the stack right now" tracker is provably too narrow to
+capture both patterns (chained `r0` *and* fresh `r1`) at once — that needs
+genuine multi-value / stack-depth-aware tracking, which is a materially bigger
+change than a peephole table edit. It is, in other words, exactly the
+stack-first rewrite (2) already scoped above, not a shortcut around it. No
+code changes shipped from this addendum; the corpus is what made "tried it,
+it's a regression, proved it in twenty minutes instead of finding out from a
+production slowdown" possible at all.
