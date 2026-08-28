@@ -106,9 +106,6 @@ union float_long {
     unsigned int l;
 };
 
-/* XXX: we don't support several builtin supports for now */
-#if !defined __x86_64__ && !defined __arm__
-
 /* XXX: use gcc/tcc intrinsic ? */
 #if defined __i386__
 #define sub_ddmmss(sh, sl, ah, al, bh, bl) \
@@ -542,8 +539,6 @@ long long __ashldi3(long long a, int b)
 #endif
 }
 
-#endif /* !__x86_64__ */
-
 /* XXX: fix tcc's code generator to do this instead */
 float __floatundisf(unsigned long long a)
 {
@@ -653,7 +648,6 @@ long long __fixdfdi (double a1)
     return s ? ret : -ret;
 }
 
-#ifndef __arm__
 unsigned long long __fixunsxfdi (long double a1)
 {
     register union ldouble_long dl1;
@@ -683,4 +677,3 @@ long long __fixxfdi (long double a1)
     ret = __fixunsxfdi((s = a1 >= 0) ? a1 : -a1);
     return s ? ret : -ret;
 }
-#endif /* !ARM */
