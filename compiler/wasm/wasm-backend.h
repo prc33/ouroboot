@@ -85,6 +85,17 @@ enum {
  * 2026-08-28.md's own measurement of how much of the emitted module
  * was exactly this kind of avoidable local.get/local.set traffic. */
 #define WASM_OP_FLAG_R1_LOCAL 0x0200
+/* WASM_OP_I32_BIN / WASM_OP_SET_CMP_I32 only, and only combined with
+ * WASM_OP_FLAG_R1_LOCAL: the FIRST operand is ALSO a plain local
+ * (target_pc repurposed to hold its frame offset -- unused by these two
+ * op kinds otherwise, which never jump anywhere). r0 stops being an
+ * input at all here -- it's purely the destination -- so
+ * wasm_op_first_input() must never report it as this op's first read
+ * for this combination, or a preceding op could tee a value nothing
+ * here consumes, leaving it stranded on the wasm stack (a genuine
+ * validation-breaking imbalance, not just a missed optimization -- see
+ * this flag's own emission-side comment). */
+#define WASM_OP_FLAG_L_LOCAL 0x0400
 
 #define WASM_MAX_CALL_ARGS 32
 typedef struct WasmOp {

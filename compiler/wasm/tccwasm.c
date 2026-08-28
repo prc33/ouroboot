@@ -506,6 +506,12 @@ static int wasm_op_first_input(WasmOp *op, int local_i0, int local_f0)
     /* Ops that read r0 (dst) as first operand — integer */
     case WASM_OP_I32_BIN:
     case WASM_OP_SET_CMP_I32:
+        /* WASM_OP_FLAG_L_LOCAL: r0 isn't an input here at all (the left
+         * operand is inlined from target_pc instead -- see that flag's
+         * own comment), so it must never be reported as "first read",
+         * or a preceding op could tee a value this one never consumes,
+         * stranding it on the wasm stack. */
+        if (op->flags & WASM_OP_FLAG_L_LOCAL) return -1;
         if (op->r0 < 0 || op->r0 > 3) return -1;
         return wasm_i32_reg_local(op->r0, local_i0);
 
@@ -763,7 +769,20 @@ static void wasm_emit_case(const WasmEmitCtx *c, WasmBuf *b, WasmOp *op,
 
     case WASM_OP_I32_BIN:
         dst = wasm_i32_reg_local(op->r0, local_i0);
-        WB_GET_OR_SKIP(b, dst);
+        if (op->flags & WASM_OP_FLAG_L_LOCAL) {
+            /* Neither operand has a register -- r0/dst is purely where
+             * the RESULT goes, never an input, so there's nothing to
+             * GET_OR_SKIP here at all: load the left operand inline
+             * from its own frame slot (target_pc), the same way the
+             * right one below loads from imm. See WASM_OP_FLAG_L_LOCAL's
+             * own comment. */
+            wb_local_get(b, local_fp);
+            if (op->target_pc)
+                wb_i32_const(b, op->target_pc), wb_u8(b, 0x6a);
+            wb_u8(b, 0x28), wb_memarg(b, 2); /* i32.load */
+        } else {
+            WB_GET_OR_SKIP(b, dst);
+        }
         if (op->flags & WASM_OP_FLAG_IMM)
             wb_i32_const(b, op->imm);
         else if (op->flags & WASM_OP_FLAG_R1_LOCAL) {
@@ -848,8 +867,19 @@ static void wasm_emit_case(const WasmEmitCtx *c, WasmBuf *b, WasmOp *op,
 
     case WASM_OP_SET_CMP_I32:
     {
-        int r0_local = wasm_i32_reg_local(op->r0, local_i0);
-        WB_GET_OR_SKIP(b, r0_local);
+        if (op->flags & WASM_OP_FLAG_L_LOCAL) {
+            /* See the identical WASM_OP_I32_BIN case's own comment --
+             * r0 isn't used at all here (this op has no destination
+             * register either, its result always goes to local_cmp
+             * below), so there's nothing to GET_OR_SKIP. */
+            wb_local_get(b, local_fp);
+            if (op->target_pc)
+                wb_i32_const(b, op->target_pc), wb_u8(b, 0x6a);
+            wb_u8(b, 0x28), wb_memarg(b, 2); /* i32.load */
+        } else {
+            int r0_local = wasm_i32_reg_local(op->r0, local_i0);
+            WB_GET_OR_SKIP(b, r0_local);
+        }
         if (op->flags & WASM_OP_FLAG_IMM)
             wb_i32_const(b, op->imm);
         else if (op->flags & WASM_OP_FLAG_R1_LOCAL) {

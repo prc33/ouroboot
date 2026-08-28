@@ -448,3 +448,78 @@ int test_instruction_decoder(void)
     /* op0=17 op1=7 op2=4 op3=13 op4=9 op5=2 op6=0 op7(default)=-1 */
     return sum; /* 17+7+4+13+9+2+0-1 = 51 */
 }
+
+/* ---------------------------------------------------------------- */
+/* Two DIFFERENT plain locals combined directly (not an accumulator
+ * pattern like `sum += i`) -- specifically targeting the case where
+ * neither operand of a binary op or comparison ever touches a wasm
+ * "register" at all. Non-commutative operators are the load-bearing
+ * ones here: they only give the right answer if operand push order
+ * (left, then right) survives being emitted inline instead of via two
+ * separately-materialized registers. */
+
+int test_two_locals_add(void)
+{
+    int a = 17, b = 25;
+    return a + b; /* 42 */
+}
+
+int test_two_locals_sub(void)
+{
+    int a = 100, b = 37;
+    return a - b; /* 63 -- wrong operand order gives -63 */
+}
+
+int test_two_locals_div(void)
+{
+    int a = 97, b = 4;
+    return a / b; /* 24 -- wrong operand order gives 0 */
+}
+
+int test_two_locals_mod(void)
+{
+    int a = 97, b = 4;
+    return a % b; /* 1 -- wrong operand order gives 4 */
+}
+
+int test_two_locals_shift(void)
+{
+    int a = 1, b = 5;
+    return a << b; /* 32 -- wrong operand order gives 0 (5 << 1 truncated? no: 1<<5=32, 5<<1=10) */
+}
+
+int test_two_locals_cmp_lt(void)
+{
+    int a = 3, b = 9;
+    return a < b; /* 1 -- wrong operand order gives 0 */
+}
+
+int test_two_locals_cmp_gt(void)
+{
+    int a = 3, b = 9;
+    return a > b; /* 0 -- wrong operand order gives 1 */
+}
+
+int test_two_locals_chain(void)
+{
+    /* (a+b) + (c+d): the OUTER combine's left operand is itself the
+     * freshly-computed result of an inner both-locals combine (now
+     * living in a real register, get_reg()'d), its right operand is
+     * ANOTHER both-locals combine -- checks that a both-locals result
+     * correctly feeds into being the ordinary left operand of a
+     * further combine. */
+    int a = 1, b = 2, c = 3, d = 4;
+    return (a + b) + (c + d); /* 10 */
+}
+
+int test_two_locals_in_loop(void)
+{
+    /* Same two named locals combined every iteration, inside a loop --
+     * checks that get_reg() correctly finds a free register on every
+     * pass rather than colliding with the loop's own induction
+     * variable or exit test. */
+    int i, x = 3, y = 5, sum = 0;
+    for (i = 0; i < 10; i++)
+        sum += x - y; /* -2 each time */
+    return sum; /* -20 */
+}
