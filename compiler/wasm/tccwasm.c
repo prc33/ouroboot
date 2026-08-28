@@ -1603,26 +1603,51 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
                     } else { /* WASM_OP_JMP_CMP */
                         int taken_bi = blk[b_idx].succ0;
                         /* fall_bi is always b_idx + 1 (next sequential block) */
-                        int d;
 
-                        /* Load condition */
-                        wb_local_get(&body, local_cmp);
-                        if (op->flags & WASM_OP_FLAG_INVERT)
-                            wb_u8(&body, 0x45); /* i32.eqz */
-
-                        /* Find scope for taken target */
-                        if (taken_bi <= b_idx && taken_bi < nb_blocks) {
-                            for (d = scope_depth - 1; d >= 0; d--)
-                                if (scope[d].type == 'L' && scope[d].target == taken_bi) break;
+                        if (taken_bi == b_idx + 1) {
+                            /* Taken and not-taken both land on the next
+                             * block: a degenerate conditional with no real
+                             * branch to make, regardless of local_cmp's
+                             * value. Real source of this: a short-circuit
+                             * &&/|| whose other operand folds to a compile-
+                             * time constant (`X && 0`, `X || 1`) still goes
+                             * through the ordinary two-operand jump-chain
+                             * codegen in tccgen.c, which can produce a
+                             * WASM_OP_JMP_CMP whose "taken" edge coincides
+                             * with the natural fallthrough -- the same
+                             * "target == b_idx + 1" case the plain JMP arm
+                             * above already special-cases, JMP_CMP just
+                             * hadn't needed it until a real test exercised
+                             * this shape (see
+                             * compiler/tests/wasm32-diff/corpus.c's
+                             * test_short_circuit_and and friends, and
+                             * docs/wasm-backend-size-2026-08-28.md's own
+                             * "prerequisite" section on why that corpus
+                             * exists). Emitting nothing is correct: no
+                             * scope search, no br_if, condition value
+                             * simply unused from here. */
                         } else {
-                            for (d = scope_depth - 1; d >= 0; d--)
-                                if (scope[d].type == 'B' && scope[d].target == taken_bi) break;
+                            int d;
+
+                            /* Load condition */
+                            wb_local_get(&body, local_cmp);
+                            if (op->flags & WASM_OP_FLAG_INVERT)
+                                wb_u8(&body, 0x45); /* i32.eqz */
+
+                            /* Find scope for taken target */
+                            if (taken_bi <= b_idx && taken_bi < nb_blocks) {
+                                for (d = scope_depth - 1; d >= 0; d--)
+                                    if (scope[d].type == 'L' && scope[d].target == taken_bi) break;
+                            } else {
+                                for (d = scope_depth - 1; d >= 0; d--)
+                                    if (scope[d].type == 'B' && scope[d].target == taken_bi) break;
+                            }
+                            if (d < 0)
+                                tcc_error("wasm32 structured: no scope for JMP_CMP taken block %d from block %d in %s", taken_bi, b_idx, f->name);
+                            wb_u8(&body, 0x0d); /* br_if */
+                            wb_uleb(&body, scope_depth - 1 - d);
+                            /* Not taken: fallthrough to b_idx + 1 (natural) */
                         }
-                        if (d < 0)
-                            tcc_error("wasm32 structured: no scope for JMP_CMP taken block %d from block %d", taken_bi, b_idx);
-                        wb_u8(&body, 0x0d); /* br_if */
-                        wb_uleb(&body, scope_depth - 1 - d);
-                        /* Not taken: fallthrough to b_idx + 1 (natural) */
                     }
                 } else {
                     /* Non-terminal op: emit normally */
