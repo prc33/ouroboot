@@ -321,6 +321,23 @@ static void wasm_emit_cmp_set_i32(int op, int lhs_reg, int rhs_reg, int rhs_imm,
     wasm_last_cmp_op = op;
 }
 
+/* Same as wasm_emit_cmp_set_i32(), but the right-hand side is a plain
+ * local variable at frame offset local_off, never materialized into a
+ * register -- see WASM_OP_FLAG_R1_LOCAL's own comment. Loop conditions
+ * (`i < n`) are exactly this shape almost universally. */
+static void wasm_emit_cmp_set_i32_local(int op, int lhs_reg, int local_off)
+{
+    WasmOp *wo = wasm_emit_op(WASM_OP_SET_CMP_I32);
+    if (!wo)
+        return;
+    wo->r0 = lhs_reg;
+    wo->op = op;
+    wo->flags |= WASM_OP_FLAG_R1_LOCAL;
+    wo->imm = local_off;
+    wasm_last_cmp_valid = 1;
+    wasm_last_cmp_op = op;
+}
+
 static void wasm_emit_cmp_set_i64(int op, int lhs_reg, int rhs_reg,
                                   int64_t rhs_imm, int is_imm)
 {
@@ -799,6 +816,20 @@ static void wasm_emit_i32_bin(int op, int dst, int src_reg, int src_imm, int is_
     }
 }
 
+/* Same as wasm_emit_i32_bin(), but the second operand is a plain local
+ * variable at frame offset local_off that never got materialized into a
+ * register at all -- see WASM_OP_FLAG_R1_LOCAL's own comment. */
+static void wasm_emit_i32_bin_local(int op, int dst, int local_off)
+{
+    WasmOp *wo = wasm_emit_op(WASM_OP_I32_BIN);
+    if (!wo)
+        return;
+    wo->r0 = dst;
+    wo->op = op;
+    wo->flags |= WASM_OP_FLAG_R1_LOCAL;
+    wo->imm = local_off;
+}
+
 ST_FUNC void gen_opi(int op)
 {
     int r, fr, c;
@@ -832,6 +863,25 @@ ST_FUNC void gen_opi(int op)
             vswap();
             c = vtop->c.i;
             wasm_emit_i32_bin(op, r, 0, c, 1);
+        } else if ((vtop->r & (VT_VALMASK | VT_LVAL | VT_SYM)) == (VT_LOCAL | VT_LVAL)
+                   && (vtop->type.t & VT_BTYPE) == VT_INT
+                   && !(vtop->type.t & VT_VOLATILE)) {
+            /* Right operand is a plain int local, still un-materialized
+             * (a frame address, nothing loaded into any register yet).
+             * gv2() below would force it into a register purely to
+             * satisfy the generic two-register interface, immediately
+             * spilling and reloading a value that's already sitting at
+             * a fixed, cheap-to-reread address -- no different in cost
+             * from the constant case just above, which already skips
+             * this. Materialize only the left operand; leave the right
+             * one exactly as tccgen.c left it, and encode "load this
+             * frame offset" directly on the combine op itself -- see
+             * WASM_OP_FLAG_R1_LOCAL's own comment. */
+            int off = vtop->c.i;
+            vswap();
+            r = gv(RC_INT);
+            vswap();
+            wasm_emit_i32_bin_local(op, r, off);
         } else {
             gv2(RC_INT, RC_INT);
             r = vtop[-1].r;
@@ -858,6 +908,17 @@ ST_FUNC void gen_opi(int op)
             vswap();
             c = vtop->c.i;
             wasm_emit_cmp_set_i32(op, r, 0, c, 1);
+        } else if ((vtop->r & (VT_VALMASK | VT_LVAL | VT_SYM)) == (VT_LOCAL | VT_LVAL)
+                   && (vtop->type.t & VT_BTYPE) == VT_INT
+                   && !(vtop->type.t & VT_VOLATILE)) {
+            /* Loop conditions (`i < n`) are almost universally exactly
+             * this shape -- see the identical case in the '+'/etc. arm
+             * above, and WASM_OP_FLAG_R1_LOCAL's own comment. */
+            int off = vtop->c.i;
+            vswap();
+            r = gv(RC_INT);
+            vswap();
+            wasm_emit_cmp_set_i32_local(op, r, off);
         } else {
             gv2(RC_INT, RC_INT);
             r = vtop[-1].r;

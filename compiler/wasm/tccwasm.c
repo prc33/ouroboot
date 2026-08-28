@@ -766,7 +766,18 @@ static void wasm_emit_case(const WasmEmitCtx *c, WasmBuf *b, WasmOp *op,
         WB_GET_OR_SKIP(b, dst);
         if (op->flags & WASM_OP_FLAG_IMM)
             wb_i32_const(b, op->imm);
-        else
+        else if (op->flags & WASM_OP_FLAG_R1_LOCAL) {
+            /* Right operand was never given a register at all -- load it
+             * directly from its own frame slot. Same address bytecode
+             * WASM_ADDR_FP produces via wasm_emit_addr() for an ordinary
+             * WASM_OP_LOAD_I32, just inlined here instead of spent on a
+             * separate op with its own register. See
+             * WASM_OP_FLAG_R1_LOCAL's own comment. */
+            wb_local_get(b, local_fp);
+            if (op->imm)
+                wb_i32_const(b, op->imm), wb_u8(b, 0x6a);
+            wb_u8(b, 0x28), wb_memarg(b, 2); /* i32.load */
+        } else
             wb_local_get(b, wasm_i32_reg_local(op->r1, local_i0));
         wb_u8(b, wasm_i32_bin_opcode(op->op));
         WB_SET_OR_TEE(b, dst);
@@ -841,7 +852,13 @@ static void wasm_emit_case(const WasmEmitCtx *c, WasmBuf *b, WasmOp *op,
         WB_GET_OR_SKIP(b, r0_local);
         if (op->flags & WASM_OP_FLAG_IMM)
             wb_i32_const(b, op->imm);
-        else
+        else if (op->flags & WASM_OP_FLAG_R1_LOCAL) {
+            /* See the identical WASM_OP_I32_BIN case's own comment. */
+            wb_local_get(b, local_fp);
+            if (op->imm)
+                wb_i32_const(b, op->imm), wb_u8(b, 0x6a);
+            wb_u8(b, 0x28), wb_memarg(b, 2); /* i32.load */
+        } else
             wb_local_get(b, wasm_i32_reg_local(op->r1, local_i0));
         wb_u8(b, wasm_i32_cmp_opcode(op->op));
         wb_local_set(b, local_cmp);

@@ -76,6 +76,15 @@ enum {
 #define WASM_OP_FLAG_IMM   0x0001
 #define WASM_OP_FLAG_INVERT 0x0002
 #define WASM_OP_FLAG_UNSIGNED 0x0100
+/* WASM_OP_I32_BIN only: the second operand is not a register at all --
+ * it's a plain `int`-sized local variable, still sitting at its own
+ * frame slot, that gen_opi() deliberately never called gv() on. imm
+ * holds its frame offset. Avoids ever allocating a fake "register" (a
+ * wasm local slot) for the overwhelmingly common case of "combine
+ * something with a local variable" -- see docs/wasm-backend-size-
+ * 2026-08-28.md's own measurement of how much of the emitted module
+ * was exactly this kind of avoidable local.get/local.set traffic. */
+#define WASM_OP_FLAG_R1_LOCAL 0x0200
 
 #define WASM_MAX_CALL_ARGS 32
 typedef struct WasmOp {
