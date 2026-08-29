@@ -54,9 +54,9 @@ on `tcc.h`: its code-generation/backend boundary has not yet been extracted.
 | `tccelf.c` / `tccelf.h` | 2,506 | 2,591 | +85 | ELF and archive format/API |
 | `tcctools.c` | 317 | 270 | -47 | archive writer |
 | `tcc.c` | 1,553 | 1,580 | +27 | compiler driver and dependency output |
-| `tccpp.c` / `parsing.c` / `parsing.h` | 3,822 | 3,704 | -118 | preprocessor and shared token layer |
+| `tccpp.c` / `parsing.c` / `parsing.h` | 3,822 | 3,719 | -103 | preprocessor and shared token layer |
 | `utils.c` / `utils.h` | 259 | 304 | +45 | memory, strings, and input buffers |
-| `tcc.h` | 980 | 869 | -111 | remaining compiler-wide state/API |
+| `tcc.h` | 980 | 854 | -126 | remaining compiler-wide state/API |
 | `libtcc.h` | 79 | — | -79 | removed unused library API |
 | `registers.h` | 14 | 15 | +1 | register allocator API |
 
