@@ -1,0 +1,11 @@
+
+Welcome to Ouroboot.
+
+This is BusyBox ash on Ouroboot's RISC-V64 kernel, running in its C/Wasm emulator.
+
+Try:
+  ls                 # inspect the self-hosting image
+  cat hello.c        # read the small example program
+  ls tcc-src         # inspect this compiler's source
+  ash /selfhost.sh   # rebuild TCC, compile hello.c, and run it (slow in-browser)
+

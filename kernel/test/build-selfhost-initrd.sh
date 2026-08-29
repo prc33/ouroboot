@@ -44,6 +44,7 @@ cp "$root"/musl-riscv64/lib/crt1.o "$root"/musl-riscv64/lib/crti.o \
     "$stage/musl/lib/"
 cp "$root"/kernel/test/selfhost-hello.c "$stage/hello.c"
 cp "$root"/kernel/test/selfhost.sh "$stage/"
+cp "$root"/kernel/test/welcome.txt "$stage/"
 cp "$root"/demo/build-musl-guest.sh "$stage/build-musl.sh"
 cp "$root"/demo/build-busybox-guest.sh "$root"/demo/busybox-riscv64.sources "$stage/"
 cp "$root"/kernel/test/tcc-stage2.args "$stage/"
@@ -67,5 +68,5 @@ if test -n "${BUSYBOX_SRC:-}"; then
 fi
 
 tar cf "$output" -C "$stage" busybox fetch tcc tcc-src musl hello.c \
-    selfhost.sh build-musl.sh build-busybox-guest.sh busybox-riscv64.sources \
+    selfhost.sh welcome.txt build-musl.sh build-busybox-guest.sh busybox-riscv64.sources \
     tcc-stage2.args $extra
