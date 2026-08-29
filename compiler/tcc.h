@@ -132,7 +132,7 @@ extern long double strtold (const char *__nptr, char **__endptr);
 /* -------------------------------------------- */
 
 #include "libtcc.h"
-#include "elf.h"
+#include "tccelf.h"
 
 /* -------------------------------------------- */
 
@@ -152,16 +152,10 @@ extern long double strtold (const char *__nptr, char **__endptr);
 /* -------------------------------------------- */
 
 #if PTR_SIZE == 8
-# define ELFCLASSW ELFCLASS64
-# define ElfW(type) Elf##64##_##type
-# define ELFW(type) ELF##64##_##type
 # define ElfW_Rel ElfW(Rela)
 # define SHT_RELX SHT_RELA
 # define REL_SECTION_FMT ".rela%s"
 #else
-# define ELFCLASSW ELFCLASS32
-# define ElfW(type) Elf##32##_##type
-# define ELFW(type) ELF##32##_##type
 # define ElfW_Rel ElfW(Rel)
 # define SHT_RELX SHT_REL
 # define REL_SECTION_FMT ".rel%s"
@@ -531,7 +525,7 @@ ST_FUNC void tcc_add_pragma_libs(TCCState *s1);
 PUB_FUNC int tcc_add_library_err(TCCState *s, const char *f);
 PUB_FUNC void tcc_print_stats(TCCState *s, unsigned total_time);
 PUB_FUNC int tcc_parse_args(TCCState *s, int *argc, char ***argv, int optind);
-ST_FUNC int tcc_tool_ar(TCCState *s, int argc, char **argv);
+ST_FUNC int tcc_tool_ar(int argc, char **argv);
 ST_FUNC void gen_makedeps(TCCState *s, const char *target, const char *filename);
 
 /* tcc_parse_args return codes: */

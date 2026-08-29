@@ -2387,18 +2387,6 @@ ST_FUNC int tcc_load_object_file(TCCState *s1,
     return ret;
 }
 
-typedef struct ArchiveHeader {
-    char ar_name[16];           /* name of this member */
-    char ar_date[12];           /* file mtime */
-    char ar_uid[6];             /* owner uid; printed as decimal */
-    char ar_gid[6];             /* owner gid; printed as decimal */
-    char ar_mode[8];            /* file mode, printed as octal   */
-    char ar_size[10];           /* file size, printed as decimal */
-    char ar_fmag[2];            /* should contain ARFMAG */
-} ArchiveHeader;
-
-#define ARFMAG "`\n"
-
 static unsigned long long get_be(const uint8_t *b, int n)
 {
     unsigned long long ret = 0;

@@ -76,6 +76,33 @@ PUB_FUNC void tcc_exit_state(void)
     tcc_state = NULL;
 }
 
+ST_FUNC void gen_makedeps(TCCState *s1, const char *target, const char *filename)
+{
+    FILE *out;
+    char buf[1024];
+    int i, k;
+    if (!filename) {
+        snprintf(buf, sizeof buf, "%.*s.d",
+            (int)(tcc_fileextension(target) - target), target);
+        filename = buf;
+    }
+    if (s1->verbose)
+        printf("<- %s\n", filename);
+    out = fopen(filename, "w");
+    if (!out)
+        tcc_error("could not open '%s'", filename);
+    fprintf(out, "%s:", target);
+    for (i = 0; i < s1->nb_target_deps; ++i) {
+        for (k = 0; k < i; ++k)
+            if (!strcmp(s1->target_deps[i], s1->target_deps[k]))
+                goto next;
+        fprintf(out, " \\\n  %s", s1->target_deps[i]);
+    next:;
+    }
+    fprintf(out, "\n");
+    fclose(out);
+}
+
 static void error1(int mode, const char *fmt, va_list ap)
 {
     char buf[2048];
@@ -1475,7 +1502,7 @@ redo:
         if (s->verbose)
             printf(version);
         if (opt == OPT_AR)
-            return tcc_tool_ar(s, argc, argv);
+            return tcc_tool_ar(argc, argv);
         if (opt == OPT_V)
             return 0;
         if (opt == OPT_PRINT_DIRS) {
