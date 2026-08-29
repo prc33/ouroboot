@@ -29,65 +29,6 @@ ST_DATA struct TCCState *tcc_state;
 
 /********************************************************/
 
-/********************************************************/
-/* copy a string and truncate it. */
-ST_FUNC char *pstrcpy(char *buf, size_t buf_size, const char *s)
-{
-    char *q, *q_end;
-    int c;
-
-    if (buf_size > 0) {
-        q = buf;
-        q_end = buf + buf_size - 1;
-        while (q < q_end) {
-            c = *s++;
-            if (c == '\0')
-                break;
-            *q++ = c;
-        }
-        *q = '\0';
-    }
-    return buf;
-}
-
-/* strcat and truncate. */
-ST_FUNC char *pstrcat(char *buf, size_t buf_size, const char *s)
-{
-    size_t len;
-    len = strlen(buf);
-    if (len < buf_size)
-        pstrcpy(buf + len, buf_size - len, s);
-    return buf;
-}
-
-ST_FUNC char *pstrncpy(char *out, const char *in, size_t num)
-{
-    memcpy(out, in, num);
-    out[num] = '\0';
-    return out;
-}
-
-/* extract the basename of a file */
-PUB_FUNC char *tcc_basename(const char *name)
-{
-    char *p = strchr(name, 0);
-    while (p > name && !IS_DIRSEP(p[-1]))
-        --p;
-    return p;
-}
-
-/* extract extension part of a file
- *
- * (if no extension, return pointer to end-of-string)
- */
-PUB_FUNC char *tcc_fileextension (const char *name)
-{
-    char *b = tcc_basename(name);
-    char *e = strrchr(b, '.');
-    return e ? e : strchr(b, 0);
-}
-
-/********************************************************/
 /* memory management */
 
 #undef free
@@ -123,14 +64,6 @@ PUB_FUNC void *tcc_realloc(void *ptr, unsigned long size)
     if (!ptr1 && size)
         _tcc_error("memory full (realloc)");
     return ptr1;
-}
-
-PUB_FUNC char *tcc_strdup(const char *str)
-{
-    char *ptr;
-    ptr = tcc_malloc(strlen(str) + 1);
-    strcpy(ptr, str);
-    return ptr;
 }
 
 #define free(p) use_tcc_free(p)

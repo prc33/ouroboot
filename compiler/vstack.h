@@ -4,6 +4,17 @@
 #include "types.h"
 #include "parsing.h"
 
+#define VT_VALMASK   0x003f
+#define VT_CONST     0x0030
+#define VT_LLOCAL    0x0031
+#define VT_LOCAL     0x0032
+#define VT_CMP       0x0033
+#define VT_JMP       0x0034
+#define VT_JMPI      0x0035
+#define VT_LVAL      0x0100
+#define VT_SYM       0x0200
+#define VT_MUSTCAST  0x0C00
+
 typedef struct SValue {
     CType type;
     unsigned short r;

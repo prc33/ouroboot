@@ -15,6 +15,7 @@
 /musl/lib/crti.o
 /tcc-src/tcc.c
 /tcc-src/libtcc.c
+/tcc-src/utils.c
 /tcc-src/tccpp.c
 /tcc-src/tccgen.c
 /tcc-src/expr.c

@@ -241,12 +241,7 @@ extern long double strtold (const char *__nptr, char **__endptr);
 
 typedef int nwchar_t;
 
-typedef struct CString {
-    int size; /* size in bytes */
-    void *data; /* either 'char *' or 'nwchar_t *' */
-    int size_allocated;
-} CString;
-
+#include "utils.h"
 #include "parsing.h"
 #include "vstack.h"
 #include "symbols.h"
@@ -573,35 +568,14 @@ struct filespec {
     char name[1];
 };
 
-/* The current value can be: */
-#define VT_VALMASK   0x003f  /* mask for value location, register or: */
-#define VT_CONST     0x0030  /* constant in vc (must be first non register value) */
-#define VT_LLOCAL    0x0031  /* lvalue, offset on stack */
-#define VT_LOCAL     0x0032  /* offset on stack */
-#define VT_CMP       0x0033  /* the value is stored in processor flags (in vc) */
-#define VT_JMP       0x0034  /* value is the consequence of jmp true (even) */
-#define VT_JMPI      0x0035  /* value is the consequence of jmp false (odd) */
-#define VT_LVAL      0x0100  /* var is an lvalue */
-#define VT_SYM       0x0200  /* a symbol value is added */
-#define VT_MUSTCAST  0x0C00  /* value must be casted to be correct (used for
-                                char/short stored in integer registers) */
-
 /* ------------ libtcc.c ------------ */
 
 ST_DATA struct TCCState *tcc_state;
-
-/* public functions currently used by the tcc main function */
-ST_FUNC char *pstrcpy(char *buf, size_t buf_size, const char *s);
-ST_FUNC char *pstrcat(char *buf, size_t buf_size, const char *s);
-ST_FUNC char *pstrncpy(char *out, const char *in, size_t num);
-PUB_FUNC char *tcc_basename(const char *name);
-PUB_FUNC char *tcc_fileextension (const char *name);
 
 PUB_FUNC void tcc_free(void *ptr);
 PUB_FUNC void *tcc_malloc(unsigned long size);
 PUB_FUNC void *tcc_mallocz(unsigned long size);
 PUB_FUNC void *tcc_realloc(void *ptr, unsigned long size);
-PUB_FUNC char *tcc_strdup(const char *str);
 
 #define free(p) use_tcc_free(p)
 #define malloc(s) use_tcc_malloc(s)
@@ -615,14 +589,6 @@ PUB_FUNC void _tcc_warning(const char *fmt, ...) PRINTF_LIKE(1,2);
 /* other utilities */
 ST_FUNC void dynarray_add(void *ptab, int *nb_ptr, void *data);
 ST_FUNC void dynarray_reset(void *pp, int *n);
-ST_INLN void cstr_ccat(CString *cstr, int ch);
-ST_FUNC void cstr_cat(CString *cstr, const char *str, int len);
-ST_FUNC void cstr_wccat(CString *cstr, int ch);
-ST_FUNC void cstr_new(CString *cstr);
-ST_FUNC void cstr_free(CString *cstr);
-ST_FUNC int cstr_printf(CString *cs, const char *fmt, ...) PRINTF_LIKE(2,3);
-ST_FUNC void cstr_reset(CString *cstr);
-
 ST_FUNC void tcc_open_bf(TCCState *s1, const char *filename, int initlen);
 ST_FUNC int tcc_open(TCCState *s1, const char *filename);
 ST_FUNC void tcc_set_cur_filename(const char *filename);
