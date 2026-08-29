@@ -31,6 +31,11 @@
 #endif
 #define addr_t ElfW(Addr)
 #define ElfSym ElfW(Sym)
+#if PTR_SIZE == 8
+# define LONG_SIZE 8
+#else
+# define LONG_SIZE 4
+#endif
 
 typedef struct TCCState TCCState;
 typedef struct CType CType;

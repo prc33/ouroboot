@@ -1,6 +1,10 @@
 #ifndef TCC_PARSING_H
 #define TCC_PARSING_H
 
+#include "common.h"
+#include "target.h"
+#include "utils.h"
+
 #define INCLUDE_STACK_SIZE 32
 #define IFDEF_STACK_SIZE   64
 #define TOKSTR_MAX_SIZE    256
@@ -38,7 +42,7 @@ typedef union CValue {
 ST_FUNC TokenSym *tok_alloc(const char *str, int len);
 ST_FUNC const char *get_tok_str(int v, CValue *cv);
 ST_FUNC void token_syms_init(void);
-ST_FUNC void token_syms_free(void);
+ST_FUNC int token_syms_free(void);
 
 typedef struct TokenString {
     int *str;
@@ -62,6 +66,15 @@ ST_FUNC void tok_str_add(TokenString *s, int t);
 ST_FUNC void tok_str_add2(TokenString *s, int t, CValue *value);
 ST_FUNC void tok_str_add_tok(TokenString *s);
 extern TokenString *macro_stack;
+
+extern BufferedFile *file;
+extern int ch, tok;
+extern CValue tokc;
+extern const int *macro_ptr;
+extern int parse_flags, tok_flags;
+extern CString tokcstr;
+extern int tok_ident;
+extern TokenSym **table_ident;
 
 /* token values */
 

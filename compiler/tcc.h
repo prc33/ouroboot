@@ -143,12 +143,6 @@ extern long double strtold (const char *__nptr, char **__endptr);
 
 /* -------------------------------------------- */
 
-#if PTR_SIZE == 8
-# define LONG_SIZE 8
-#else
-# define LONG_SIZE 4
-#endif
-
 /* -------------------------------------------- */
 
 
@@ -472,18 +466,6 @@ ST_FUNC void gen_makedeps(TCCState *s, const char *target, const char *filename)
 #define OPT_AR 5
 
 /* ------------ tccpp.c ------------ */
-
-ST_DATA struct BufferedFile *file;
-ST_DATA int ch, tok;
-ST_DATA CValue tokc;
-ST_DATA const int *macro_ptr;
-ST_DATA int parse_flags;
-ST_DATA int tok_flags;
-ST_DATA CString tokcstr; /* current parsed string, if any */
-
-/* display benchmark infos */
-ST_DATA int tok_ident;
-ST_DATA TokenSym **table_ident;
 
 ST_FUNC int set_idnum(int c, int val);
 ST_FUNC void begin_macro(TokenString *str, int alloc);

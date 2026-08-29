@@ -2966,11 +2966,13 @@ ST_FUNC void tccpp_new(TCCState *s)
 
 ST_FUNC void tccpp_delete(TCCState *s)
 {
-    int i, n;
+    int n;
 
     dynarray_reset(&s->cached_includes, &s->nb_cached_includes);
 
-    token_syms_free();
+    n = token_syms_free();
+    if (n > total_idents)
+        total_idents = n;
 
     /* free static buffers */
     cstr_free(&tokcstr);

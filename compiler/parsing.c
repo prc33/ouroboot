@@ -1,5 +1,7 @@
-#define USING_GLOBALS
-#include "tcc.h"
+#include "parsing.h"
+#include "symbols.h"
+
+extern void _tcc_error(const char *fmt, ...) NORETURN PRINTF_LIKE(1,2);
 
 TokenString *macro_stack;
 static TokenSym *hash_ident[TOK_HASH_SIZE];
@@ -97,7 +99,7 @@ static TokenSym *tok_alloc_new(TokenSym **slot, const char *str, int len)
     TokenSym *ts;
     int i = tok_ident - TOK_IDENT;
     if (tok_ident >= SYM_FIRST_ANOM)
-        tcc_error("memory full (symbols)");
+        _tcc_error("memory full (symbols)");
     if (!(i % TOK_ALLOC_INCR))
         table_ident = tcc_realloc(table_ident,
             (i + TOK_ALLOC_INCR) * sizeof(*table_ident));
@@ -136,16 +138,15 @@ ST_FUNC void token_syms_init(void)
     cstr_realloc(&tok_text, STRING_MAX_SIZE);
 }
 
-ST_FUNC void token_syms_free(void)
+ST_FUNC int token_syms_free(void)
 {
     int i, n = tok_ident - TOK_IDENT;
-    if (n > total_idents)
-        total_idents = n;
     for (i = 0; i < n; ++i)
         tcc_free(table_ident[i]);
     tcc_free(table_ident);
     table_ident = NULL;
     cstr_free(&tok_text);
+    return n;
 }
 
 ST_INLN void tok_str_new(TokenString *s)
