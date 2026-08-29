@@ -1177,7 +1177,7 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
     unsigned char *direct_param;
     int *direct_offset, *direct_type, *direct_local;
     int nb_direct = 0, nb_direct_i32 = 0, nb_direct_i64 = 0;
-    int has_local_address = 0;
+    int has_local_address = 0, use_frame = 0;
     int local_pc, local_fp, local_cmp, local_carry, local_i0, local_f0, local_tmp64;
     WasmEmitCtx ctx_structured, ctx_dispatch;
     WasmVStack vs;
@@ -1268,6 +1268,21 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
             else nb_direct_i64++;
         }
     }
+    for (i = 0; i < f->nb_params; ++i)
+        if (!direct_param[i])
+            use_frame = 1;
+    for (i = 0; i < f->nb_ops; ++i) {
+        WasmOp *op = &f->ops[i];
+        int k;
+        if (op->kind == WASM_OP_ADDR_LOCAL
+            || ((op->flags & 0xff) == WASM_ADDR_FP
+                && !(op->flags & WASM_OP_FLAG_PARAM)))
+            use_frame = 1;
+        if (op->kind == WASM_OP_CALL)
+            for (k = 0; k < op->call_nb_args; ++k)
+                if (!op->call_arg_local[k])
+                    use_frame = 1;
+    }
 
     /* locals: control/i32 registers, f64 registers, native i64 registers
        plus one i64 scratch used by the remaining i32 carry helpers. */
@@ -1336,7 +1351,7 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
     /* Prolog: keep fp at the caller-visible stack top. The wasm backend
      * addresses frame slots using negative offsets, so fp must point to the
      * original stack pointer before reserving the current frame. */
-    if (f->frame_size) {
+    if (use_frame && f->frame_size) {
         wb_global_get(&body, 0);
         wb_local_tee(&body, local_fp);
         wb_i32_const(&body, f->frame_size);
@@ -2033,8 +2048,10 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
     }
 
     /* epilog: restore stack pointer */
-    wb_local_get(&body, local_fp);
-    wb_global_set(&body, 0);
+    if (use_frame) {
+        wb_local_get(&body, local_fp);
+        wb_global_set(&body, 0);
+    }
 
     if (f->ret_type == WASM_VAL_I32)
         wb_local_get(&body, wasm_i32_reg_local(REG_IRET, local_i0));
