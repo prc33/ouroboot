@@ -28,19 +28,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
  */
 
-#include "tcc.h"
-
-#define ARFMAG "`\n"
-
-typedef struct {
-    char ar_name[16];
-    char ar_date[12];
-    char ar_uid[6];
-    char ar_gid[6];
-    char ar_mode[8];
-    char ar_size[10];
-    char ar_fmag[2];
-} ArHdr;
+#include "tccelf.h"
 
 static unsigned long le2belong(unsigned long ul) {
     return ((ul & 0xFF0000)>>8)+((ul & 0xFF000000)>>24) +
@@ -65,9 +53,9 @@ static int ar_usage(int ret) {
     return ret;
 }
 
-ST_FUNC int tcc_tool_ar(TCCState *s1, int argc, char **argv)
+ST_FUNC int tcc_tool_ar(int argc, char **argv)
 {
-    static ArHdr arhdr = {
+    static ArchiveHeader arhdr = {
         "/               ",
         "            ",
         "0     ",
@@ -77,7 +65,7 @@ ST_FUNC int tcc_tool_ar(TCCState *s1, int argc, char **argv)
         ARFMAG
         };
 
-    static ArHdr arhdro = {
+    static ArchiveHeader arhdro = {
         "                ",
         "            ",
         "0     ",
@@ -247,7 +235,7 @@ ST_FUNC int tcc_tool_ar(TCCState *s1, int argc, char **argv)
     if ((hofs & 1)) // align
         hofs++, fpos = 1;
     // write header
-    fwrite("!<arch>\n", 8, 1, fh);
+    fwrite(ARMAG, sizeof ARMAG - 1, 1, fh);
     sprintf(stmp, "%-10d", (int)(strpos + (funccnt+1) * sizeof(int)));
     memcpy(&arhdr.ar_size, stmp, 10);
     fwrite(&arhdr, sizeof(arhdr), 1, fh);
@@ -277,41 +265,6 @@ the_end:
     if (fo)
         fclose(fo), remove(tfile);
     return ret;
-}
-
-/* -------------------------------------------------------------- */
-/* generate xxx.d file */
-
-ST_FUNC void gen_makedeps(TCCState *s1, const char *target, const char *filename)
-{
-    FILE *depout;
-    char buf[1024];
-    int i, k;
-
-    if (!filename) {
-        /* compute filename automatically: dir/file.o -> dir/file.d */
-        snprintf(buf, sizeof buf, "%.*s.d",
-            (int)(tcc_fileextension(target) - target), target);
-        filename = buf;
-    }
-
-    if (s1->verbose)
-        printf("<- %s\n", filename);
-
-    /* XXX return err codes instead of error() ? */
-    depout = fopen(filename, "w");
-    if (!depout)
-        tcc_error("could not open '%s'", filename);
-    fprintf(depout, "%s:", target);
-    for (i = 0; i<s1->nb_target_deps; ++i) {
-        for (k = 0; k < i; ++k)
-            if (0 == strcmp(s1->target_deps[i], s1->target_deps[k]))
-                goto next;
-        fprintf(depout, " \\\n  %s", s1->target_deps[i]);
-    next:;
-    }
-    fprintf(depout, "\n");
-    fclose(depout);
 }
 
 /* -------------------------------------------------------------- */

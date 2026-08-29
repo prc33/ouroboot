@@ -119,7 +119,6 @@ typedef struct
 					/* Value must be EV_CURRENT */
 
 #define EI_OSABI	7		/* OS ABI identification */
-#define ELFOSABI_FREEBSD	9	/* FreeBSD.  */
 
 
 

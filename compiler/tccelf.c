@@ -20,6 +20,69 @@
 
 #include "tcc.h"
 
+ST_FUNC ElfSym *elfsym(Sym *s)
+{
+    TCCState *s1 = tcc_state;
+    return !s || !s->c ? NULL : &((ElfSym *)symtab_section->data)[s->c];
+}
+
+ST_FUNC void update_storage(Sym *sym)
+{
+    ElfSym *esym = elfsym(sym);
+    int bind;
+    if (!esym)
+        return;
+    if (sym->a.visibility)
+        esym->st_other = (esym->st_other & ~ELFW(ST_VISIBILITY)(-1)) | sym->a.visibility;
+    bind = sym->type.t & (VT_STATIC | VT_INLINE) ? STB_LOCAL :
+           sym->a.weak ? STB_WEAK : STB_GLOBAL;
+    if (bind != ELFW(ST_BIND)(esym->st_info))
+        esym->st_info = ELFW(ST_INFO)(bind, ELFW(ST_TYPE)(esym->st_info));
+}
+
+ST_FUNC void put_extern_sym2(Sym *sym, int sh_num, addr_t value, unsigned long size)
+{
+    TCCState *s1 = tcc_state;
+    ElfSym *esym;
+    const char *name;
+    int t, info;
+    if (sym->c) {
+        esym = elfsym(sym);
+        esym->st_value = value, esym->st_size = size, esym->st_shndx = sh_num;
+    } else {
+        t = sym->type.t;
+        name = sym->asm_label ? get_tok_str(sym->asm_label & ~SYM_FIELD, NULL) : get_tok_str(sym->v, NULL);
+        info = ELFW(ST_INFO)(t & (VT_STATIC | VT_INLINE) ? STB_LOCAL : STB_GLOBAL,
+            (t & VT_BTYPE) == VT_FUNC ? STT_FUNC : (t & VT_BTYPE) == VT_VOID ? STT_NOTYPE : STT_OBJECT);
+        sym->c = put_elf_sym(symtab_section, value, size, info, 0, sh_num, name);
+    }
+    update_storage(sym);
+}
+
+ST_FUNC void put_extern_sym(Sym *sym, Section *section, addr_t value, unsigned long size)
+{
+    put_extern_sym2(sym, section ? section->sh_num : SHN_UNDEF, value, size);
+}
+
+ST_FUNC void greloca(Section *s, Sym *sym, unsigned long offset, int type, addr_t addend)
+{
+    TCCState *s1 = tcc_state;
+    int c = 0;
+    if (nocode_wanted && s == cur_text_section)
+        return;
+    if (sym) {
+        if (!sym->c) put_extern_sym(sym, NULL, 0, 0);
+        c = sym->c;
+    }
+    put_elf_reloca(symtab_section, s, offset, type, c, addend);
+}
+#if PTR_SIZE == 4
+ST_FUNC void greloc(Section *s, Sym *sym, unsigned long offset, int type)
+{
+    greloca(s, sym, offset, type, 0);
+}
+#endif
+
 /* Define this to get some debug output during relocation processing.  */
 #undef DEBUG_RELOC
 
@@ -89,7 +152,6 @@ ST_FUNC void tccelf_delete(TCCState *s1)
 {
     int i;
 
-#ifndef ELF_OBJ_ONLY
     /* free symbol versions */
     for (i = 0; i < nb_sym_versions; i++) {
         tcc_free(sym_versions[i].version);
@@ -97,7 +159,6 @@ ST_FUNC void tccelf_delete(TCCState *s1)
     }
     tcc_free(sym_versions);
     tcc_free(sym_to_version);
-#endif
 
     /* free all sections */
     for(i = 1; i < s1->nb_sections; i++)
@@ -462,7 +523,6 @@ ST_FUNC addr_t get_sym_addr(TCCState *s1, const char *name, int err, int forc)
 
 
 
-#ifndef ELF_OBJ_ONLY
 static void
 version_add (TCCState *s1)
 {
@@ -544,7 +604,6 @@ version_add (TCCState *s1)
     }
     dt_verneednum = nb_entries;
 }
-#endif
 
 /* add an elf symbol : check if it is already defined and patch
    it. Return symbol index. NOTE that sh_num can be SHN_UNDEF. */
@@ -850,7 +909,6 @@ ST_FUNC void relocate_section(TCCState *s1, Section *s)
     }
 }
 
-#ifndef ELF_OBJ_ONLY
 /* relocate relocation table in 'sr' */
 static void relocate_rel(TCCState *s1, Section *sr)
 {
@@ -861,7 +919,6 @@ static void relocate_rel(TCCState *s1, Section *sr)
     for_each_elem(sr, 0, rel, ElfW_Rel)
         rel->r_offset += s->sh_addr;
 }
-#endif
 
 static void build_got(TCCState *s1)
 {
@@ -1176,7 +1233,6 @@ ST_FUNC void resolve_common_syms(TCCState *s1)
     tcc_add_linker_symbols(s1);
 }
 
-#ifndef ELF_OBJ_ONLY
 ST_FUNC void fill_got_entry(TCCState *s1, ElfW_Rel *rel)
 {
     int sym_index = ELFW(R_SYM) (rel->r_info);
@@ -1374,7 +1430,6 @@ static void export_global_syms(TCCState *s1)
         }
     }
 }
-#endif
 
 /* Allocate strings for section names and decide if an unallocated section
    should be output.
@@ -1409,10 +1464,6 @@ struct dyn_inf {
     unsigned long data_offset;
     addr_t rel_addr;
     addr_t rel_size;
-#if defined(__FreeBSD__) || defined(__FreeBSD_kernel__)
-    addr_t bss_addr;
-    addr_t bss_size;
-#endif
 };
 
 /* Assign sections to segments and decide how are sections laid out when loaded
@@ -1462,9 +1513,6 @@ static int layout_sections(TCCState *s1, ElfW(Phdr) *phdr, int phnum,
 
         /* dynamic relocation table information, for .dynamic section */
         dyninf->rel_addr = dyninf->rel_size = 0;
-#if defined(__FreeBSD__) || defined(__FreeBSD_kernel__)
-        dyninf->bss_addr = dyninf->bss_size = 0;
-#endif
 
         for(j = 0; j < 2; j++) {
             ph->p_type = PT_LOAD;
@@ -1528,20 +1576,9 @@ static int layout_sections(TCCState *s1, ElfW(Phdr) *phdr, int phnum,
                     }
                     /* update dynamic relocation infos */
                     if (s->sh_type == SHT_RELX) {
-#if defined(__FreeBSD__) || defined(__FreeBSD_kernel__)
-                        if (!strcmp(strsec->data + s->sh_name, ".rel.got")) {
-                            dyninf->rel_addr = addr;
-                            dyninf->rel_size += s->sh_size; /* XXX only first rel. */
-                        }
-                        if (!strcmp(strsec->data + s->sh_name, ".rel.bss")) {
-                            dyninf->bss_addr = addr;
-                            dyninf->bss_size = s->sh_size; /* XXX only first rel. */
-                        }
-#else
                         if (dyninf->rel_size == 0)
                             dyninf->rel_addr = addr;
                         dyninf->rel_size += s->sh_size;
-#endif
                     }
                     addr += s->sh_size;
                     if (s->sh_type != SHT_NOBITS)
@@ -1583,7 +1620,6 @@ static int layout_sections(TCCState *s1, ElfW(Phdr) *phdr, int phnum,
     return file_offset;
 }
 
-#ifndef ELF_OBJ_ONLY
 /* put dynamic tag */
 static void put_dt(Section *dynamic, int dt, addr_t val)
 {
@@ -1654,18 +1690,9 @@ static void fill_dynamic(TCCState *s1, struct dyn_inf *dyninf)
     put_dt(dynamic, DT_RELASZ, dyninf->rel_size);
     put_dt(dynamic, DT_RELAENT, sizeof(ElfW_Rel));
 #else
-#if defined(__FreeBSD__) || defined(__FreeBSD_kernel__)
-    put_dt(dynamic, DT_PLTGOT, s1->got->sh_addr);
-    put_dt(dynamic, DT_PLTRELSZ, dyninf->rel_size);
-    put_dt(dynamic, DT_JMPREL, dyninf->rel_addr);
-    put_dt(dynamic, DT_PLTREL, DT_REL);
-    put_dt(dynamic, DT_REL, dyninf->bss_addr);
-    put_dt(dynamic, DT_RELSZ, dyninf->bss_size);
-#else
     put_dt(dynamic, DT_REL, dyninf->rel_addr);
     put_dt(dynamic, DT_RELSZ, dyninf->rel_size);
     put_dt(dynamic, DT_RELENT, sizeof(ElfW_Rel));
-#endif
 #endif
     if (versym_section)
         put_dt(dynamic, DT_VERSYM, versym_section->sh_addr);
@@ -1730,7 +1757,6 @@ static int final_sections_reloc(TCCState *s1)
     }
     return 0;
 }
-#endif
 
 /* Create an ELF file on disk.
    This function handle ELF specific layout requirements */
@@ -1764,10 +1790,6 @@ static void tcc_output_elf(TCCState *s1, FILE *f, int phnum, ElfW(Phdr) *phdr,
     ehdr.e_ident[4] = ELFCLASSW;
     ehdr.e_ident[5] = ELFDATA2LSB;
     ehdr.e_ident[6] = EV_CURRENT;
-#if defined(__FreeBSD__) || defined(__FreeBSD_kernel__)
-    /* FIXME: should set only for freebsd _target_, but we exclude only PE target */
-    ehdr.e_ident[EI_OSABI] = ELFOSABI_FREEBSD;
-#endif
 #if   defined TCC_TARGET_RISCV64
     ehdr.e_flags = EF_RISCV_FLOAT_ABI_DOUBLE;
 #endif
@@ -1863,7 +1885,6 @@ static int tcc_write_elf_file(TCCState *s1, const char *filename, int phnum,
     return 0;
 }
 
-#ifndef ELF_OBJ_ONLY
 /* Sort section headers by assigned sh_addr, remove sections
    that we aren't going to output.  */
 static void tidy_section_headers(TCCState *s1, int *sec_order)
@@ -1909,7 +1930,6 @@ static void tidy_section_headers(TCCState *s1, int *sec_order)
     s1->nb_sections = nnew;
     tcc_free(backmap);
 }
-#endif
 
 
 /* Output an ELF file. */
@@ -1929,7 +1949,6 @@ static int elf_output_file(TCCState *s1, const char *filename)
     sec_order = NULL;
     interp = dynamic = dynstr = NULL; /* avoid warning */
 
-#ifndef ELF_OBJ_ONLY
     if (file_type != TCC_OUTPUT_OBJ) {
         /* if linking, also link in runtime libraries (libc, libgcc, etc.) */
         tcc_add_runtime(s1);
@@ -1972,7 +1991,6 @@ static int elf_output_file(TCCState *s1, const char *filename)
         build_got_entries(s1);
 	version_add (s1);
     }
-#endif
 
     /* we add a section for symbols */
     strsec = new_section(s1, ".shstrtab", SHT_STRTAB, 0);
@@ -1981,7 +1999,6 @@ static int elf_output_file(TCCState *s1, const char *filename)
     /* Allocate strings for section names */
     ret = alloc_sec_names(s1, file_type, strsec);
 
-#ifndef ELF_OBJ_ONLY
     if (dynamic) {
         int i;
         /* add a list of needed dlls */
@@ -2006,7 +2023,6 @@ static int elf_output_file(TCCState *s1, const char *filename)
         dynamic->sh_size = dynamic->data_offset;
         dynstr->sh_size = dynstr->data_offset;
     }
-#endif
 
     /* compute number of program headers */
     if (file_type == TCC_OUTPUT_OBJ)
@@ -2030,7 +2046,6 @@ static int elf_output_file(TCCState *s1, const char *filename)
     file_offset = layout_sections(s1, phdr, phnum, interp, strsec, &dyninf,
                                   sec_order);
 
-#ifndef ELF_OBJ_ONLY
     /* Fill remaining program header and finalize relocation related to dynamic
        linking. */
     if (file_type != TCC_OUTPUT_OBJ) {
@@ -2066,7 +2081,6 @@ static int elf_output_file(TCCState *s1, const char *filename)
         else if (s1->got)
             fill_local_got_entries(s1);
     }
-#endif
 
     /* Create the ELF file with name 'filename' */
     ret = tcc_write_elf_file(s1, filename, phnum, phdr, file_offset, sec_order);
@@ -2078,7 +2092,7 @@ static int elf_output_file(TCCState *s1, const char *filename)
     return ret;
 }
 
-LIBTCCAPI int tcc_output_file(TCCState *s, const char *filename)
+ST_FUNC int tcc_output_file(TCCState *s, const char *filename)
 {
     int ret;
 #ifdef TCC_TARGET_WASM32
@@ -2372,18 +2386,6 @@ ST_FUNC int tcc_load_object_file(TCCState *s1,
     tcc_free(shdr);
     return ret;
 }
-
-typedef struct ArchiveHeader {
-    char ar_name[16];           /* name of this member */
-    char ar_date[12];           /* file mtime */
-    char ar_uid[6];             /* owner uid; printed as decimal */
-    char ar_gid[6];             /* owner gid; printed as decimal */
-    char ar_mode[8];            /* file mode, printed as octal   */
-    char ar_size[10];           /* file size, printed as decimal */
-    char ar_fmag[2];            /* should contain ARFMAG */
-} ArchiveHeader;
-
-#define ARFMAG "`\n"
 
 static unsigned long long get_be(const uint8_t *b, int n)
 {

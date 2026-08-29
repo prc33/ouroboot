@@ -14,9 +14,15 @@
 /musl/lib/crt1.o
 /musl/lib/crti.o
 /tcc-src/tcc.c
-/tcc-src/libtcc.c
+/tcc-src/utils.c
 /tcc-src/tccpp.c
 /tcc-src/tccgen.c
+/tcc-src/expr.c
+/tcc-src/symbols.c
+/tcc-src/types.c
+/tcc-src/vstack.c
+/tcc-src/registers.c
+/tcc-src/optimise.c
 /tcc-src/tccelf.c
 /tcc-src/tcctools.c
 /tcc-src/tccasm.c

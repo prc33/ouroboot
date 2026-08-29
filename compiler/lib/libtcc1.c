@@ -106,9 +106,6 @@ union float_long {
     unsigned int l;
 };
 
-/* XXX: we don't support several builtin supports for now */
-#if !defined __x86_64__ && !defined __arm__
-
 /* XXX: use gcc/tcc intrinsic ? */
 #if defined __i386__
 #define sub_ddmmss(sh, sl, ah, al, bh, bl) \
@@ -485,10 +482,10 @@ unsigned long long __umoddi3(unsigned long long u, unsigned long long v)
     return w;
 }
 
-/* XXX: fix tcc's code generator to do this instead */
+/* i386's pair-of-words backend needs these helpers when TCC compiles itself. */
 long long __ashrdi3(long long a, int b)
 {
-#ifdef __TINYC__
+#if defined(__TINYC__) && defined(__i386__)
     DWunion u;
     u.ll = a;
     if (b >= 32) {
@@ -504,10 +501,9 @@ long long __ashrdi3(long long a, int b)
 #endif
 }
 
-/* XXX: fix tcc's code generator to do this instead */
 unsigned long long __lshrdi3(unsigned long long a, int b)
 {
-#ifdef __TINYC__
+#if defined(__TINYC__) && defined(__i386__)
     DWunion u;
     u.ll = a;
     if (b >= 32) {
@@ -523,10 +519,9 @@ unsigned long long __lshrdi3(unsigned long long a, int b)
 #endif
 }
 
-/* XXX: fix tcc's code generator to do this instead */
 long long __ashldi3(long long a, int b)
 {
-#ifdef __TINYC__
+#if defined(__TINYC__) && defined(__i386__)
     DWunion u;
     u.ll = a;
     if (b >= 32) {
@@ -541,8 +536,6 @@ long long __ashldi3(long long a, int b)
     return a << b;
 #endif
 }
-
-#endif /* !__x86_64__ */
 
 /* XXX: fix tcc's code generator to do this instead */
 float __floatundisf(unsigned long long a)
@@ -653,7 +646,6 @@ long long __fixdfdi (double a1)
     return s ? ret : -ret;
 }
 
-#ifndef __arm__
 unsigned long long __fixunsxfdi (long double a1)
 {
     register union ldouble_long dl1;
@@ -683,4 +675,3 @@ long long __fixxfdi (long double a1)
     ret = __fixunsxfdi((s = a1 >= 0) ? a1 : -a1);
     return s ? ret : -ret;
 }
-#endif /* !ARM */
