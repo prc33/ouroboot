@@ -144,19 +144,6 @@ extern long double strtold (const char *__nptr, char **__endptr);
 /* -------------------------------------------- */
 
 #if PTR_SIZE == 8
-# define ElfW_Rel ElfW(Rela)
-# define SHT_RELX SHT_RELA
-# define REL_SECTION_FMT ".rela%s"
-#else
-# define ElfW_Rel ElfW(Rel)
-# define SHT_RELX SHT_REL
-# define REL_SECTION_FMT ".rel%s"
-#endif
-/* target address type */
-#define addr_t ElfW(Addr)
-#define ElfSym ElfW(Sym)
-
-#if PTR_SIZE == 8
 # define LONG_SIZE 8
 #else
 # define LONG_SIZE 4
@@ -189,30 +176,6 @@ ST_FUNC int tcc_output_file(TCCState *s, const char *filename);
 #include "parsing.h"
 #include "vstack.h"
 #include "symbols.h"
-
-/* section definition */
-typedef struct Section {
-    unsigned long data_offset; /* current data offset */
-    unsigned char *data;       /* section data */
-    unsigned long data_allocated; /* used for realloc() handling */
-    TCCState *s1;
-    int sh_name;             /* elf section name (only used during output) */
-    int sh_num;              /* elf section number */
-    int sh_type;             /* elf section type */
-    int sh_flags;            /* elf section flags */
-    int sh_info;             /* elf section info */
-    int sh_addralign;        /* elf section alignment */
-    int sh_entsize;          /* elf entry size */
-    unsigned long sh_size;   /* section size (only used during output) */
-    addr_t sh_addr;          /* address at which the section is relocated */
-    unsigned long sh_offset; /* file offset */
-    int nb_hashed_syms;      /* used to resize the hash table */
-    struct Section *link;    /* link to another section */
-    struct Section *reloc;   /* corresponding section for relocation, if any */
-    struct Section *hash;    /* hash table for symbols */
-    struct Section *prev;    /* previous section on section stack */
-    char name[1];           /* section name */
-} Section;
 
 typedef struct DLLReference {
     int level;
@@ -609,73 +572,6 @@ ST_FUNC void indir(void);
 ST_FUNC void unary(void);
 ST_FUNC void gexpr(void);
 ST_FUNC int expr_const(void);
-
-/* ------------ tccelf.c ------------ */
-
-#define ARMAG  "!<arch>\012"    /* Unix archive magic */
-
-typedef struct {
-    unsigned int n_strx;         /* index into string table of name */
-    unsigned char n_type;         /* type of symbol */
-    unsigned char n_other;        /* misc info (usually empty) */
-    unsigned short n_desc;        /* description field */
-    unsigned int n_value;        /* value of symbol */
-} Stab_Sym;
-
-ST_FUNC void tccelf_new(TCCState *s);
-ST_FUNC void tccelf_delete(TCCState *s);
-ST_FUNC void tccelf_begin_file(TCCState *s1);
-ST_FUNC void tccelf_end_file(TCCState *s1);
-ST_FUNC Section *new_section(TCCState *s1, const char *name, int sh_type, int sh_flags);
-ST_FUNC void section_realloc(Section *sec, unsigned long new_size);
-ST_FUNC size_t section_add(Section *sec, addr_t size, int align);
-ST_FUNC void *section_ptr_add(Section *sec, addr_t size);
-ST_FUNC void section_reserve(Section *sec, unsigned long size);
-ST_FUNC Section *find_section(TCCState *s1, const char *name);
-ST_FUNC Section *new_symtab(TCCState *s1, const char *symtab_name, int sh_type, int sh_flags, const char *strtab_name, const char *hash_name, int hash_sh_flags);
-
-ST_FUNC void put_extern_sym2(Sym *sym, int sh_num, addr_t value, unsigned long size);
-ST_FUNC void put_extern_sym(Sym *sym, Section *section, addr_t value, unsigned long size);
-#if PTR_SIZE == 4
-ST_FUNC void greloc(Section *s, Sym *sym, unsigned long offset, int type);
-#endif
-ST_FUNC void greloca(Section *s, Sym *sym, unsigned long offset, int type, addr_t addend);
-
-ST_FUNC int put_elf_str(Section *s, const char *sym);
-ST_FUNC int put_elf_sym(Section *s, addr_t value, unsigned long size, int info, int other, int shndx, const char *name);
-ST_FUNC int set_elf_sym(Section *s, addr_t value, unsigned long size, int info, int other, int shndx, const char *name);
-ST_FUNC int find_elf_sym(Section *s, const char *name);
-ST_FUNC void put_elf_reloc(Section *symtab, Section *s, unsigned long offset, int type, int symbol);
-ST_FUNC void put_elf_reloca(Section *symtab, Section *s, unsigned long offset, int type, int symbol, addr_t addend);
-
-
-ST_FUNC void resolve_common_syms(TCCState *s1);
-ST_FUNC void relocate_syms(TCCState *s1, Section *symtab);
-ST_FUNC void relocate_section(TCCState *s1, Section *s);
-
-ST_FUNC ssize_t full_read(int fd, void *buf, size_t count);
-ST_FUNC void *load_data(int fd, unsigned long file_offset, unsigned long size);
-ST_FUNC int tcc_object_type(int fd, ElfW(Ehdr) *h);
-ST_FUNC int tcc_load_object_file(TCCState *s1, int fd, unsigned long file_offset);
-ST_FUNC int tcc_load_archive(TCCState *s1, int fd, int alacarte);
-ST_FUNC void add_array(TCCState *s1, const char *sec, int c);
-
-ST_FUNC void build_got_entries(TCCState *s1);
-ST_FUNC struct sym_attr *get_sym_attr(TCCState *s1, int index, int alloc);
-ST_FUNC void squeeze_multi_relocs(Section *sec, size_t oldrelocoffset);
-
-ST_FUNC addr_t get_sym_addr(TCCState *s, const char *name, int err, int forc);
-ST_FUNC void list_elf_symbols(TCCState *s, void *ctx,
-    void (*symbol_cb)(void *ctx, const char *name, const void *val));
-ST_FUNC int set_global_sym(TCCState *s1, const char *name, Section *sec, addr_t offs);
-
-/* Browse each elem of type <type> in section <sec> starting at elem <startoff>
-   using variable <elem> */
-#define for_each_elem(sec, startoff, elem, type) \
-    for (elem = (type *) sec->data + startoff; \
-         elem < (type *) (sec->data + sec->data_offset); elem++)
-
-ST_FUNC void tcc_add_runtime(TCCState *s1);
 
 /* ------------ xxx-link.c ------------ */
 

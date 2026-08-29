@@ -30,7 +30,7 @@ upstream build trees are not part of the repository count.
 |---|---:|---:|---|
 | Emulator | 1,000 hard limit | 939 | Within limit |
 | Kernel | 10,000 hard limit | 9,510 | Within limit |
-| Compiler | 25,000 target; 20,000 stretch | 30,235 | Not yet attained |
+| Compiler | 25,000 target; 20,000 stretch | 30,209 | Not yet attained |
 
 New functionality must stay within the emulator and kernel limits. Compiler
 work should reduce the current count while preserving standard C, ELF output
@@ -38,7 +38,7 @@ for i386/RISC-V64, and the freestanding wasm32 backend.
 
 ### Compiler interface cleanup
 
-This cleanup reduces compiler source by 214 lines overall (30,449 to 30,235).
+This cleanup reduces compiler source by 240 lines overall (30,449 to 30,209).
 The new headers replace broad `tcc.h` inclusion with the smallest shared
 platform and target-definition interfaces. `registers.c` deliberately remains
 on `tcc.h`: its code-generation/backend boundary has not yet been extracted.
@@ -51,12 +51,12 @@ on `tcc.h`: its code-generation/backend boundary has not yet been extracted.
 | `vstack.c` / `vstack.h` | 168 | 172 | +4 | value stack and temporary locals |
 | `symbols.c` / `symbols.h` | 565 | 500 | -65 | symbol scopes and attributes |
 | `tccasm.c` | 1,247 | 1,209 | -38 | generic assembler |
-| `tccelf.c` / `tccelf.h` | 2,506 | 2,591 | +85 | ELF and archive format/API |
+| `tccelf.c` / `tccelf.h` | 2,506 | 2,669 | +163 | ELF sections, format, and linker API |
 | `tcctools.c` | 317 | 270 | -47 | archive writer |
 | `tcc.c` | 1,553 | 1,580 | +27 | compiler driver and dependency output |
 | `tccpp.c` / `parsing.c` / `parsing.h` | 3,822 | 3,719 | -103 | preprocessor and shared token layer |
 | `utils.c` / `utils.h` | 259 | 304 | +45 | memory, strings, and input buffers |
-| `tcc.h` | 980 | 854 | -126 | remaining compiler-wide state/API |
+| `tcc.h` | 980 | 748 | -232 | remaining compiler-wide state/API |
 | `libtcc.h` | 79 | — | -79 | removed unused library API |
 | `registers.h` | 14 | 15 | +1 | register allocator API |
 
