@@ -468,6 +468,12 @@ ST_INLN CType *pointed_type(CType *type)
     return &type->ref->type;
 }
 
+ST_FUNC int pointed_size(CType *type)
+{
+    int align;
+    return type_size(pointed_type(type), &align);
+}
+
 /* modify type so that its it is a pointer to type. */
 ST_FUNC void mk_pointer(CType *type)
 {
@@ -491,7 +497,6 @@ ST_FUNC int is_compatible_unqualified_types(CType *type1, CType *type2)
 {
     return compare_types(type1,type2,1);
 }
-
 
 
 

@@ -729,12 +729,6 @@ static void gen_opif(int op)
     }
 }
 
-static int pointed_size(CType *type)
-{
-    int align;
-    return type_size(pointed_type(type), &align);
-}
-
 static void vla_runtime_pointed_size(CType *type)
 {
     int align;

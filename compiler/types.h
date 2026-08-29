@@ -66,6 +66,7 @@ ST_INLN int is_float(int t);
 ST_FUNC int is_integer_btype(int bt);
 ST_FUNC int btype_size(int bt);
 ST_FUNC int type_size(CType *type, int *align);
+ST_FUNC int pointed_size(CType *type);
 ST_INLN CType *pointed_type(CType *type);
 ST_FUNC void mk_pointer(CType *type);
 ST_FUNC int compare_types(CType *type1, CType *type2, int unqualified);
