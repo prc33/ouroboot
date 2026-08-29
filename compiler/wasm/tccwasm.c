@@ -285,6 +285,10 @@ static void wasm_emit_addr(WasmBuf *b, WasmOp *op, int local_fp, int local_i0,
 static void wasm_emit_call_arg(WasmBuf *b, WasmOp *op, int i, int local_fp)
 {
     int at = op->call_arg_type[i];
+    if (op->call_arg_local[i]) {
+        wb_local_get(b, op->call_arg_local[i] - 1);
+        return;
+    }
     wb_local_get(b, local_fp);
     if (op->call_arg_off[i])
         wb_i32_const(b, op->call_arg_off[i]), wb_u8(b, 0x6a);
@@ -1216,15 +1220,22 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
             has_local_address = 1;
     for (i = 0; i < f->nb_ops; ++i) {
         WasmOp *op = &f->ops[i];
-        int j, k, safe = 1, off;
+        int j, k, safe = 1, off, is_call_arg = 0;
         int type = (op->kind == WASM_OP_LOAD_I32 || op->kind == WASM_OP_STORE_I32)
                  ? WASM_VAL_I32
                  : (op->kind == WASM_OP_LOAD_I64 || op->kind == WASM_OP_STORE_I64)
                  ? WASM_VAL_I64 : 0;
-        if (has_local_address || (op->flags & 0xff) != WASM_ADDR_FP || !type
+        if ((op->flags & 0xff) != WASM_ADDR_FP || !type
             || (op->flags & WASM_OP_FLAG_PARAM))
             continue;
         off = op->imm;
+        for (j = 0; j < f->nb_ops; ++j)
+            if (f->ops[j].kind == WASM_OP_CALL)
+                for (k = 0; k < f->ops[j].call_nb_args; ++k)
+                    if (f->ops[j].call_arg_off[k] == off)
+                        is_call_arg = 1;
+        if (has_local_address && !is_call_arg)
+            continue;
         for (j = 0; j < nb_direct; ++j)
             if (direct_offset[j] == off)
                 break;
@@ -1247,7 +1258,7 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
             }
             if (p->kind == WASM_OP_CALL)
                 for (k = 0; k < p->call_nb_args; ++k)
-                    if (p->call_arg_off[k] == off)
+                    if (p->call_arg_off[k] == off && p->call_arg_type[k] != type)
                         safe = 0;
         }
         if (safe) {
@@ -1294,6 +1305,18 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
                 op->r1 = direct_local[j];
                 break;
             }
+    }
+    for (i = 0; i < f->nb_ops; ++i) {
+        WasmOp *op = &f->ops[i];
+        int j, k;
+        if (op->kind != WASM_OP_CALL)
+            continue;
+        for (k = 0; k < op->call_nb_args; ++k)
+            for (j = 0; j < nb_direct; ++j)
+                if (op->call_arg_off[k] == direct_offset[j]) {
+                    op->call_arg_local[k] = direct_local[j] + 1;
+                    break;
+                }
     }
 
     /* Two emitter contexts, differing only in whether a block map is needed:

@@ -131,6 +131,7 @@ typedef struct WasmOp {
     unsigned char call_nb_args;
     unsigned char call_arg_type[WASM_MAX_CALL_ARGS];
     int call_arg_off[WASM_MAX_CALL_ARGS];
+    int call_arg_local[WASM_MAX_CALL_ARGS];
 } WasmOp;
 
 /* One while/for/do loop's exact extent, as tccgen.c itself knows it --
