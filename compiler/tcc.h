@@ -22,7 +22,6 @@
 #define _TCC_H
 
 #include "common.h"
-#include "util-gen.h"
 
 # define IS_ABSPATH(p) IS_DIRSEP(p[0])
 # define PATHCMP strcmp
@@ -521,7 +520,6 @@ ST_FUNC int ieee_finite(double d);
 ST_FUNC void test_lvalue(void);
 ST_FUNC void vpushi(int v);
 ST_FUNC void vpush64(int ty, unsigned long long v);
-ST_FUNC void vpushll(long long v);
 ST_FUNC void vpushs(addr_t v);
 ST_FUNC void vpush_ref(CType *type, Section *sec, unsigned long offset, unsigned long size);
 ST_FUNC void gen_cast(CType *type);

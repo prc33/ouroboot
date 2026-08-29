@@ -39,7 +39,7 @@ else
 $(error unsupported TARGET '$(TARGET)')
 endif
 
-COMMON_SRCS = tcc.c utils.c util-gen.c parsing.c tccpp.c tccgen.c expr.c symbols.c types.c vstack.c registers.c optimise.c tccelf.c tcctools.c
+COMMON_SRCS = tcc.c utils.c parsing.c tccpp.c tccgen.c expr.c symbols.c types.c vstack.c registers.c optimise.c tccelf.c tcctools.c
 ifneq ($(TARGET),wasm32)
 COMMON_SRCS += tccasm.c
 endif

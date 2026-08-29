@@ -1,8 +1,6 @@
 #ifndef TCC_TARGET_H
 #define TCC_TARGET_H
 
-#include "common.h"
-
 #define TARGET_DEFS_ONLY
 #ifdef TCC_TARGET_I386
 # include "i386/i386-gen.c"
@@ -44,12 +42,6 @@ typedef struct CType CType;
 typedef struct SValue SValue;
 typedef struct Sym Sym;
 struct sym_attr;
-
-ST_FUNC void vpushi(int v);
-ST_FUNC void vpushll(long long v);
-ST_FUNC void vdup(void);
-ST_FUNC void gen_op(int op);
-ST_FUNC int gvtst(int inv, int t);
 
 enum gotplt_entry {
     NO_GOTPLT_ENTRY,
