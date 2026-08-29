@@ -388,6 +388,30 @@ static void execute(u32 insn)
         else ok = 0;
         v = (i64)w; goto write;
     }
+    case 0x2f: {
+        u32 fn = f7 >> 2, size = f3 == 2 ? 4 : f3 == 3 ? 8 : 0;
+        u64 old, value;
+        if (!size || (fn == 2 && rs2)) { ok = 0; break; }
+        ok = load(a, size, 1, &old);
+        if (!ok) { trap(fault == 2 ? 5 : 13, fault_addr, 0); return; }
+        v = size == 4 ? (i64)(i32)old : old;
+        if (fn == 2) goto write;                 /* lr */
+        if (fn == 3) { v = store(a, size, b) ? 0 : 1; goto write; } /* sc */
+        if (size == 4) old = (u32)old, b = (u32)b;
+        if (fn == 0) value = old + b;
+        else if (fn == 1) value = b;
+        else if (fn == 4) value = old ^ b;
+        else if (fn == 8) value = old | b;
+        else if (fn == 12) value = old & b;
+        else if (fn == 16) value = size == 4 ? ((i32)old < (i32)b ? old : b) : ((i64)old < (i64)b ? old : b);
+        else if (fn == 20) value = size == 4 ? ((i32)old > (i32)b ? old : b) : ((i64)old > (i64)b ? old : b);
+        else if (fn == 24) value = old < b ? old : b;
+        else if (fn == 28) value = old > b ? old : b;
+        else { ok = 0; break; }
+        ok = store(a, size, value);
+        if (!ok) { trap(fault == 2 ? 7 : 15, fault_addr, 0); return; }
+        goto write;
+    }
     case 0x0f: break;
     case 0x07:
         addr = a + ((i32)insn >> 20);

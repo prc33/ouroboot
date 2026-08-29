@@ -5,7 +5,7 @@ This directory is a complete RV64 emulator with two front ends:
 - a browser terminal, with the C core compiled to WebAssembly;
 - a native command-line program, with the same core compiled for i386.
 
-The core is the standard C file `rv64.c`. It implements the RV64IM
+The core is the standard C file `rv64.c`. It implements the RV64IMA
 instructions, Sv39, supervisor mode, Sstc, a 16550-style UART, and the small
 F/D subset needed by Ouroboot. Both front ends load the same RISC-V ELF kernel
 and use the same UART interface; neither contains another CPU implementation.

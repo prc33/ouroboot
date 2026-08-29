@@ -34,7 +34,7 @@ the resulting compiler to build and run the example program.
 
 ## Emulator and browser frontend
 
-`emulator/rv64.c` is one C RV64IM emulator with Sv39, supervisor mode, Sstc,
+`emulator/rv64.c` is one C RV64IMA emulator with Sv39, supervisor mode, Sstc,
 UART, and the small floating-point subset the guest uses. TCC compiles it to
 Wasm for a Web Worker. `emulator/web/` supplies only terminal, fetch, and ELF
 loading glue. `emulator/runner.c` is a native terminal frontend for the same
