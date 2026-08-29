@@ -355,7 +355,7 @@ ST_FUNC void vpushs(addr_t v)
 }
 
 /* push long long constant */
-static inline void vpushll(long long v)
+ST_FUNC void vpushll(long long v)
 {
     vpush64(VT_LLONG, v);
 }
@@ -2736,65 +2736,12 @@ static int case_cmp(const void *pa, const void *pb)
     return a < b ? -1 : a > b;
 }
 
-static void gtst_addr(int t, int a)
-{
-    gsym_addr(gvtst(0, t), a);
-}
-
 static void gcase(struct case_t **base, int len, int *bsym)
 {
-    struct case_t *p;
-    int e;
-    int ll = (vtop->type.t & VT_BTYPE) == VT_LLONG;
-    while (len > 8) {
-        /* binary search */
-        p = base[len/2];
-        vdup();
-	if (ll)
-	    vpushll(p->v2);
-	else
-	    vpushi(p->v2);
-        gen_op(TOK_LE);
-        e = gvtst(1, 0);
-        vdup();
-	if (ll)
-	    vpushll(p->v1);
-	else
-	    vpushi(p->v1);
-        gen_op(TOK_GE);
-        gtst_addr(0, p->sym); /* v1 <= x <= v2 */
-        /* x < v1 */
-        gcase(base, len/2, bsym);
-        /* x > v2 */
-        gsym(e);
-        e = len/2 + 1;
-        base += e; len -= e;
-    }
-    /* linear scan */
-    while (len--) {
-        p = *base++;
-        vdup();
-	if (ll)
-	    vpushll(p->v2);
-	else
-	    vpushi(p->v2);
-        if (p->v1 == p->v2) {
-            gen_op(TOK_EQ);
-            gtst_addr(0, p->sym);
-        } else {
-            gen_op(TOK_LE);
-            e = gvtst(1, 0);
-            vdup();
-	    if (ll)
-	        vpushll(p->v1);
-	    else
-	        vpushi(p->v1);
-            gen_op(TOK_GE);
-            gtst_addr(0, p->sym);
-            gsym(e);
-        }
-    }
-    *bsym = gjmp(*bsym);
+    struct switch_gen_ops ops = { gjmp_acs, gsym_addr, gsym,
+                                  TOK_LE, TOK_GE, TOK_EQ };
+    gen_switch((struct switch_case **)base, len, bsym,
+               (vtop->type.t & VT_BTYPE) == VT_LLONG, &ops);
 }
 
 /* ------------------------------------------------------------------------- */
