@@ -8,7 +8,7 @@ ST_FUNC void vstack_push_typed(CType *, int, CValue *);
 ST_FUNC void vstack_swap(void);
 ST_FUNC void vstack_rotate_bottom(int n);
 ST_FUNC void vstack_rotate_top(SValue *e, int n);
-ST_FUNC int vstack_temp_local(int, int, int *, int (*)(int, void *), void *);
+ST_FUNC int vstack_temp_local(int, int, int *);
 ST_FUNC void vstack_clear_temp_locals(void);
 ST_FUNC void vpushv(SValue *v);
 ST_FUNC void vdup(void);

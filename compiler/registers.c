@@ -11,18 +11,6 @@
 #else
 # define VT_PTRDIFF_T (VT_LONG | VT_LLONG)
 #endif
-static int temp_local_is_free(int location, void *opaque)
-{
-    SValue *p;
-    (void)opaque;
-    for (p = vstack_base(); p <= vtop; ++p) {
-        int r = p->r & VT_VALMASK;
-        if ((r == VT_LOCAL || r == VT_LLOCAL) && p->c.i == location)
-            return 0;
-    }
-    return 1;
-}
-
 ST_FUNC void save_regs(int n)
 {
     SValue *p, *p1;
@@ -59,8 +47,7 @@ ST_FUNC void save_reg_upstack(int r, int n)
                     bt = VT_PTR;
                 sv.type.t = bt;
                 size = type_size(&sv.type, &align);
-                l = vstack_temp_local(size, align, &loc,
-                                      temp_local_is_free, NULL);
+                l = vstack_temp_local(size, align, &loc);
                 sv.r = VT_LOCAL | VT_LVAL;
                 sv.c.i = l;
                 store(p->r & VT_VALMASK, &sv);

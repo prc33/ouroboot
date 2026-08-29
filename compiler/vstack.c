@@ -87,14 +87,25 @@ ST_FUNC void vstack_rotate_top(SValue *e, int n)
     e[-n + 1] = tmp;
 }
 
-ST_FUNC int vstack_temp_local(int size, int align, int *frame_loc,
-                              int (*is_free)(int, void *), void *opaque)
+static int temp_local_is_free(int location)
+{
+    SValue *p;
+
+    for (p = vstack_base(); p <= vtop; ++p) {
+        int r = p->r & VT_VALMASK;
+        if ((r == VT_LOCAL || r == VT_LLOCAL) && p->c.i == location)
+            return 0;
+    }
+    return 1;
+}
+
+ST_FUNC int vstack_temp_local(int size, int align, int *frame_loc)
 {
     int i, location;
 
     for (i = 0; i < nb_temp_locals; ++i)
         if (temp_locals[i].size >= size && temp_locals[i].align == align
-            && is_free(temp_locals[i].location, opaque))
+            && temp_local_is_free(temp_locals[i].location))
             return temp_locals[i].location;
 
     location = *frame_loc = (*frame_loc - size) & -align;
