@@ -144,9 +144,6 @@ ST_FUNC void gen_cvt_i32_i64(int is_unsigned);
 ST_FUNC void gen_cvt_i64_i32(void);
 ST_FUNC int tcc_output_wasm(TCCState *s, const char *filename);
 ST_FUNC void tcc_wasm_reset(void);
-struct switch_case;
-ST_FUNC int wasm_gen_switch(struct switch_case **cases, int count,
-                            int *default_patch, int is_ll);
 #endif
 
 #endif

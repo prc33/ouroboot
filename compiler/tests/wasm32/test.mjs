@@ -33,8 +33,4 @@ new Uint8Array(instance.exports.memory.buffer)[instance.exports.byte_array_ptr()
 assert.equal(instance.exports.byte_array_read(37), 91);
 new DataView(instance.exports.memory.buffer).setBigUint64(instance.exports.byte_array_ptr() + 40, 0x10000001n, true);
 assert.equal(instance.exports.byte_array_read64(40), 0x10000001n);
-assert.equal(instance.exports.dense_switch(2), 20);
-assert.equal(instance.exports.dense_switch(5), 50);
-assert.equal(instance.exports.dense_switch(4), -1);
-assert.equal(instance.exports.dense_switch(99), -1);
 console.log('wasm32 examples: PASS');

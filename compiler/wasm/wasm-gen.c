@@ -173,7 +173,6 @@ ST_FUNC void tcc_wasm_reset(void)
         for (j = 0; j < tcc_wasm_funcs[i].nb_ops; ++j) {
             tcc_free(tcc_wasm_funcs[i].ops[j].sym_name);
             tcc_free(tcc_wasm_funcs[i].ops[j].call_name);
-            tcc_free(tcc_wasm_funcs[i].ops[j].switch_targets);
         }
         tcc_free(tcc_wasm_funcs[i].name);
         tcc_free(tcc_wasm_funcs[i].param_types);
@@ -767,38 +766,6 @@ ST_FUNC int gjmp_append(int n, int t)
         return n;
     }
     return t;
-}
-
-ST_FUNC int wasm_gen_switch(struct switch_case **cases, int count,
-                            int *default_patch, int is_ll)
-{
-    WasmOp *wo;
-    int i, min, max, span, op_index;
-    if (is_ll || count < 4)
-        return 0;
-    min = (int)cases[0]->v1;
-    max = (int)cases[count - 1]->v1;
-    for (i = 0; i < count; ++i)
-        if (cases[i]->v1 != cases[i]->v2 ||
-            cases[i]->v1 != (int)cases[i]->v1)
-            return 0;
-    span = max - min + 1;
-    if (span <= 0 || span > count * 4 || span > 4096)
-        return 0;
-    wo = wasm_emit_op(WASM_OP_SWITCH);
-    if (!wo)
-        return 0;
-    wo->r0 = vtop->r & VT_VALMASK;
-    wo->switch_min = min;
-    wo->switch_count = span;
-    wo->switch_targets = tcc_malloc(span * sizeof(int));
-    for (i = 0; i < span; ++i)
-        wo->switch_targets[i] = -1;
-    for (i = 0; i < count; ++i)
-        wo->switch_targets[(int)cases[i]->v1 - min] = cases[i]->sym;
-    op_index = wasm_cur_func->nb_ops - 1;
-    *default_patch = wasm_add_patch(op_index, *default_patch);
-    return 1;
 }
 
 static void wasm_emit_i32_bin(int op, int dst, int src_reg, int src_imm, int is_imm)
