@@ -44,6 +44,17 @@ typedef struct TokenString {
     char alloc;
 } TokenString;
 
+ST_INLN void tok_str_new(TokenString *s);
+ST_FUNC TokenString *tok_str_alloc(void);
+ST_FUNC int *tok_str_dup(TokenString *s);
+ST_FUNC void tok_str_free_str(int *str);
+ST_FUNC void tok_str_free(TokenString *s);
+ST_FUNC int *tok_str_realloc(TokenString *s, int new_size);
+ST_FUNC void tok_str_add(TokenString *s, int t);
+ST_FUNC void tok_str_add2(TokenString *s, int t, CValue *value);
+ST_FUNC void tok_str_add_tok(TokenString *s);
+extern TokenString *macro_stack;
+
 
 /* token values */
 
