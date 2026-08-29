@@ -1,4 +1,7 @@
-#include "tcc.h"
+#include "common.h"
+#include "utils.h"
+
+extern void _tcc_error(const char *fmt, ...) NORETURN PRINTF_LIKE(1,2);
 
 #undef free
 #undef malloc

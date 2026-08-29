@@ -34,6 +34,7 @@
 #define NORETURN __attribute__((noreturn))
 #define ALIGNED(x) __attribute__((aligned(x)))
 #define PRINTF_LIKE(x,y) __attribute__((format(printf, (x), (y))))
+#define IS_DIRSEP(c) ((c) == '/')
 #define ST_INLN
 #define ST_FUNC
 #define ST_DATA extern

@@ -1,6 +1,8 @@
 #ifndef TCC_UTILS_H
 #define TCC_UTILS_H
 
+typedef int nwchar_t;
+
 typedef struct CString {
     int size;
     void *data;

@@ -27,7 +27,6 @@ extern float strtof (const char *__nptr, char **__endptr);
 extern long double strtold (const char *__nptr, char **__endptr);
 
 
-# define IS_DIRSEP(c) (c == '/')
 # define IS_ABSPATH(p) IS_DIRSEP(p[0])
 # define PATHCMP strcmp
 # define PATHSEP ":"
@@ -166,8 +165,6 @@ extern long double strtold (const char *__nptr, char **__endptr);
 /* -------------------------------------------- */
 
 #define STRING_MAX_SIZE     1024
-
-typedef int nwchar_t;
 
 typedef struct TCCState TCCState;
 

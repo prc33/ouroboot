@@ -1,6 +1,13 @@
-#define USING_GLOBALS
-#include "tcc.h"
+#include "common.h"
+#include "target.h"
+#include "vstack.h"
 #include "optimise.h"
+
+extern int const_wanted, nocode_wanted;
+extern void _tcc_error(const char *fmt, ...) NORETURN PRINTF_LIKE(1,2);
+extern void vswap(void);
+extern void gen_opi(int op);
+extern void gen_opl(int op);
 
 #define unevalmask 0xffff
 
@@ -53,7 +60,7 @@ ST_FUNC void gen_opic(int op)
             /* if division by zero, generate explicit division */
             if (l2 == 0) {
                 if (const_wanted && !(nocode_wanted & unevalmask))
-                    tcc_error("division by zero in constant");
+                    _tcc_error("division by zero in constant");
                 goto general_case;
             }
             switch(op) {
