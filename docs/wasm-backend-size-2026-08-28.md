@@ -512,3 +512,65 @@ structured.
 
 Verified: differential corpus 57/57 (four new switch stress cases), full
 8-target regression on i386 and riscv64 including `test-wasm`.
+
+---
+
+## Addendum: emitting bytes directly — tried, measured, reverted
+
+Prompted by: *"why can't we write the code directly and then tweak it later?
+The depth can change depending on reality, and there's no need to buffer
+instructions in a form that's different to the final result."*
+
+**The premise was right and my objection was wrong.** I had claimed wasm
+control flow "isn't backpatchable" because a `br`'s depth isn't known until
+the scope nesting is. That is not a real obstacle: wasm accepts non-minimal
+LEB128 up to the width of the type, so a depth can be written as a padded
+5-byte immediate and rewritten in place — the same mechanism LLVM uses for
+its relocations. Checked, not assumed: a module with a 5-byte-padded `br`
+depth, and one with a 5-byte-padded `i32.const`, both validate and run
+correctly under V8. The same trick covers the two immediates that genuinely
+are unknown while generating — a symbol's final address and a called
+function's index.
+
+So the rewrite was attempted: `WasmOp` carries its own final bytes, encoded
+where the instruction is generated; the operand-stack model moves to
+generation time (flushing at branches and at `gind()`, via a new
+`gjmp_hint_label` hook, since a value on the operand stack cannot survive a
+branch); `wasm_emit_case` shrinks to control flow plus appending bytes.
+
+It works. The corpus passes 62/62. **And it is 115 lines bigger:**
+
+| | lines |
+|---|---:|
+| `tccwasm.c` | −561 |
+| `wasm-encode.c` (new) | +640 |
+| everything else | +36 |
+| **net** | **+115** |
+
+Of those 640 new lines, **537 are the old emission arms moved verbatim** and
+103 are new glue — deferring each op's encoding until its fields are filled,
+and recording where to patch. Nothing was eliminated.
+
+**Where the estimate went wrong.** I had argued each operation is "written
+twice, once as a record and once as an encoder", and that emitting directly
+would collapse the pair. That was a misreading: `wasm-gen.c` setting
+`wo->r0 = r; wo->op = op` is not a second encoding, it is parameter passing
+into the one encoder that exists. Moving that encoder earlier in time
+relocates it; it cannot remove it. Collapsing the two for real would mean
+inlining the encoder at each of its ~40 call sites, which duplicates it
+rather than deleting it.
+
+It also cost output quality: `gind()` fires at more points than the exact
+basic-block boundaries the emission-time model could see, so the operand
+stack is flushed more often — module 24,190 → 24,550 bytes (+1.5%), 60M
+emulated instructions 4.3s → 4.6s.
+
+**Reverted.** A change that adds 103 lines of machinery and 1.5% of output
+for no reduction in either is not worth carrying, however sound its premise.
+What survives is the piece that was worth having on its own: the encoding
+primitives are now shared (`wasm/wasm-emit.c`) rather than private to
+`tccwasm.c`.
+
+The lasting correction is the first paragraph. "wasm control flow cannot be
+backpatched" was wrong, and any future attempt at direct emission should
+start from padded immediates rather than from a symbolic IR.
