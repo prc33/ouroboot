@@ -282,22 +282,7 @@ typedef union CValue {
     int tab[LDOUBLE_SIZE/4];
 } CValue;
 
-/* value on stack */
-typedef struct SValue {
-    CType type;      /* type */
-    unsigned short r;      /* register + flags */
-    unsigned short r2;     /* second register, used for 'long long'
-                              type. If not used, set to VT_CONST */
-    union {
-      struct { int jtrue, jfalse; }; /* forward jmps */
-      CValue c;         /* constant, if VT_CONST */
-    };
-    union {
-      struct { unsigned short cmp_op, cmp_r; }; /* VT_CMP operation */
-      struct Sym *sym;  /* symbol, if (VT_SYM | VT_CONST), or if */
-    };                  /* result of unary() for an identifier. */
-
-} SValue;
+#include "vstack.h"
 
 /* symbol attributes */
 struct SymAttr {
@@ -1061,7 +1046,6 @@ ST_FUNC void tccgen_init(TCCState *s1);
 ST_FUNC int tccgen_compile(TCCState *s1);
 ST_FUNC void tccgen_finish(TCCState *s1);
 ST_FUNC void check_vstack(void);
-#include "vstack.h"
 #include "expr.h"
 ST_FUNC int ieee_finite(double d);
 ST_FUNC int exact_log2p1(int i);

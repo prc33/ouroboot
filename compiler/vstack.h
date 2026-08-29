@@ -1,5 +1,20 @@
 #ifndef TCC_VSTACK_H
 #define TCC_VSTACK_H
+
+typedef struct SValue {
+    CType type;
+    unsigned short r;
+    unsigned short r2;
+    union {
+        struct { int jtrue, jfalse; };
+        CValue c;
+    };
+    union {
+        struct { unsigned short cmp_op, cmp_r; };
+        struct Sym *sym;
+    };
+} SValue;
+
 ST_FUNC void vstack_init(void);
 ST_FUNC int vstack_depth(void);
 ST_FUNC SValue *vstack_base(void);
