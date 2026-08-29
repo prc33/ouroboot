@@ -2,6 +2,7 @@
 #define TCC_VSTACK_H
 
 #include "types.h"
+#include "parsing.h"
 
 typedef struct SValue {
     CType type;

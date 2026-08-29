@@ -236,28 +236,8 @@ extern long double strtold (const char *__nptr, char **__endptr);
 
 /* -------------------------------------------- */
 
-#define INCLUDE_STACK_SIZE  32
-#define IFDEF_STACK_SIZE    64
 #define VSTACK_SIZE         256
 #define STRING_MAX_SIZE     1024
-#define TOKSTR_MAX_SIZE     256
-#define PACK_STACK_SIZE     8
-
-#define TOK_HASH_SIZE       16384 /* must be a power of two */
-#define TOK_ALLOC_INCR      512  /* must be a power of two */
-#define TOK_MAX_SIZE        4 /* token max size in int unit when stored in string */
-
-/* token symbol management */
-typedef struct TokenSym {
-    struct TokenSym *hash_next;
-    struct Sym *sym_define; /* direct pointer to define */
-    struct Sym *sym_label; /* direct pointer to label */
-    struct Sym *sym_struct; /* direct pointer to structure */
-    struct Sym *sym_identifier; /* direct pointer to identifier */
-    int tok; /* token number */
-    int len;
-    char str[1];
-} TokenSym;
 
 typedef int nwchar_t;
 
@@ -267,6 +247,7 @@ typedef struct CString {
     int size_allocated;
 } CString;
 
+#include "parsing.h"
 #include "vstack.h"
 
 /* symbol attributes */
@@ -683,167 +664,6 @@ struct filespec {
 #define VT_SYM       0x0200  /* a symbol value is added */
 #define VT_MUSTCAST  0x0C00  /* value must be casted to be correct (used for
                                 char/short stored in integer registers) */
-/* token values */
-
-/* conditional ops */
-#define TOK_LAND  0x90
-#define TOK_LOR   0x91
-/* warning: the following compare tokens depend on i386 asm code */
-#define TOK_ULT 0x92
-#define TOK_UGE 0x93
-#define TOK_EQ  0x94
-#define TOK_NE  0x95
-#define TOK_ULE 0x96
-#define TOK_UGT 0x97
-#define TOK_Nset 0x98
-#define TOK_Nclear 0x99
-#define TOK_LT  0x9c
-#define TOK_GE  0x9d
-#define TOK_LE  0x9e
-#define TOK_GT  0x9f
-
-#define TOK_ISCOND(t) (t >= TOK_LAND && t <= TOK_GT)
-
-#define TOK_DEC     0x80 /* -- */
-#define TOK_MID     0x81 /* inc/dec, to void constant */
-#define TOK_INC     0x82 /* ++ */
-#define TOK_UDIV    0x83 /* unsigned division */
-#define TOK_UMOD    0x84 /* unsigned modulo */
-#define TOK_PDIV    0x85 /* fast division with undefined rounding for pointers */
-#define TOK_UMULL   0x86 /* unsigned 32x32 -> 64 mul */
-#define TOK_ADDC1   0x87 /* add with carry generation */
-#define TOK_ADDC2   0x88 /* add with carry use */
-#define TOK_SUBC1   0x89 /* add with carry generation */
-#define TOK_SUBC2   0x8a /* add with carry use */
-#define TOK_SHL     '<' /* shift left */
-#define TOK_SAR     '>' /* signed shift right */
-#define TOK_SHR     0x8b /* unsigned shift right */
-
-#define TOK_ARROW   0xa0 /* -> */
-#define TOK_DOTS    0xa1 /* three dots */
-#define TOK_TWODOTS 0xa2 /* C++ token ? */
-#define TOK_TWOSHARPS 0xa3 /* ## preprocessing token */
-#define TOK_PLCHLDR 0xa4 /* placeholder token as defined in C99 */
-#define TOK_NOSUBST 0xa5 /* means following token has already been pp'd */
-#define TOK_PPJOIN  0xa6 /* A '##' in the right position to mean pasting */ 
-
-/* assignment operators */
-#define TOK_A_ADD   0xb0
-#define TOK_A_SUB   0xb1
-#define TOK_A_MUL   0xb2
-#define TOK_A_DIV   0xb3
-#define TOK_A_MOD   0xb4
-#define TOK_A_AND   0xb5
-#define TOK_A_OR    0xb6
-#define TOK_A_XOR   0xb7
-#define TOK_A_SHL   0xb8
-#define TOK_A_SAR   0xb9
-
-#define TOK_ASSIGN(t) (t >= TOK_A_ADD && t <= TOK_A_SAR)
-#define TOK_ASSIGN_OP(t) ("+-*/%&|^<>"[t - TOK_A_ADD])
-
-/* tokens that carry values (in additional token string space / tokc) --> */
-#define TOK_CCHAR   0xc0 /* char constant in tokc */
-#define TOK_LCHAR   0xc1
-#define TOK_CINT    0xc2 /* number in tokc */
-#define TOK_CUINT   0xc3 /* unsigned int constant */
-#define TOK_CLLONG  0xc4 /* long long constant */
-#define TOK_CULLONG 0xc5 /* unsigned long long constant */
-#define TOK_CLONG   0xc6 /* long constant */
-#define TOK_CULONG  0xc7 /* unsigned long constant */
-#define TOK_STR     0xc8 /* pointer to string in tokc */
-#define TOK_LSTR    0xc9
-#define TOK_CFLOAT  0xca /* float constant */
-#define TOK_CDOUBLE 0xcb /* double constant */
-#define TOK_CLDOUBLE 0xcc /* long double constant */
-#define TOK_PPNUM   0xcd /* preprocessor number */
-#define TOK_PPSTR   0xce /* preprocessor string */
-#define TOK_LINENUM 0xcf /* line number info */
-
-#define TOK_HAS_VALUE(t) (t >= TOK_CCHAR && t <= TOK_LINENUM)
-
-#define TOK_EOF       (-1)  /* end of file */
-#define TOK_LINEFEED  10    /* line feed */
-
-/* all identifiers and strings have token above that */
-#define TOK_IDENT 256
-
-#define DEF_ASM(x) DEF(TOK_ASM_ ## x, #x)
-#define TOK_ASM_int TOK_INT
-#define DEF_ASMDIR(x) DEF(TOK_ASMDIR_ ## x, "." #x)
-#define TOK_ASMDIR_FIRST TOK_ASMDIR_byte
-#define TOK_ASMDIR_LAST TOK_ASMDIR_section
-
-#if defined TCC_TARGET_I386
-/* only used for i386 asm opcodes definitions */
-#define DEF_BWL(x) \
- DEF(TOK_ASM_ ## x ## b, #x "b") \
- DEF(TOK_ASM_ ## x ## w, #x "w") \
- DEF(TOK_ASM_ ## x ## l, #x "l") \
- DEF(TOK_ASM_ ## x, #x)
-#define DEF_WL(x) \
- DEF(TOK_ASM_ ## x ## w, #x "w") \
- DEF(TOK_ASM_ ## x ## l, #x "l") \
- DEF(TOK_ASM_ ## x, #x)
-# define DEF_BWLX DEF_BWL
-# define DEF_WLX DEF_WL
-/* number of sizes + 1 */
-# define NBWLX 4
-
-#define DEF_FP1(x) \
- DEF(TOK_ASM_ ## f ## x ## s, "f" #x "s") \
- DEF(TOK_ASM_ ## fi ## x ## l, "fi" #x "l") \
- DEF(TOK_ASM_ ## f ## x ## l, "f" #x "l") \
- DEF(TOK_ASM_ ## fi ## x ## s, "fi" #x "s")
-
-#define DEF_FP(x) \
- DEF(TOK_ASM_ ## f ## x, "f" #x ) \
- DEF(TOK_ASM_ ## f ## x ## p, "f" #x "p") \
- DEF_FP1(x)
-
-#define DEF_ASMTEST(x,suffix) \
- DEF_ASM(x ## o ## suffix) \
- DEF_ASM(x ## no ## suffix) \
- DEF_ASM(x ## b ## suffix) \
- DEF_ASM(x ## c ## suffix) \
- DEF_ASM(x ## nae ## suffix) \
- DEF_ASM(x ## nb ## suffix) \
- DEF_ASM(x ## nc ## suffix) \
- DEF_ASM(x ## ae ## suffix) \
- DEF_ASM(x ## e ## suffix) \
- DEF_ASM(x ## z ## suffix) \
- DEF_ASM(x ## ne ## suffix) \
- DEF_ASM(x ## nz ## suffix) \
- DEF_ASM(x ## be ## suffix) \
- DEF_ASM(x ## na ## suffix) \
- DEF_ASM(x ## nbe ## suffix) \
- DEF_ASM(x ## a ## suffix) \
- DEF_ASM(x ## s ## suffix) \
- DEF_ASM(x ## ns ## suffix) \
- DEF_ASM(x ## p ## suffix) \
- DEF_ASM(x ## pe ## suffix) \
- DEF_ASM(x ## np ## suffix) \
- DEF_ASM(x ## po ## suffix) \
- DEF_ASM(x ## l ## suffix) \
- DEF_ASM(x ## nge ## suffix) \
- DEF_ASM(x ## nl ## suffix) \
- DEF_ASM(x ## ge ## suffix) \
- DEF_ASM(x ## le ## suffix) \
- DEF_ASM(x ## ng ## suffix) \
- DEF_ASM(x ## nle ## suffix) \
- DEF_ASM(x ## g ## suffix)
-
-#endif /* defined TCC_TARGET_I386 */
-
-enum tcc_token {
-    TOK_LAST = TOK_IDENT - 1
-#define DEF(id, str) ,id
-#include "tcctok.h"
-#undef DEF
-};
-
-/* keywords: tok >= TOK_IDENT && tok < TOK_UIDENT */
-#define TOK_UIDENT TOK_DEFINE
 
 /* ------------ libtcc.c ------------ */
 
@@ -933,26 +753,6 @@ ST_DATA CString tokcstr; /* current parsed string, if any */
 /* display benchmark infos */
 ST_DATA int tok_ident;
 ST_DATA TokenSym **table_ident;
-
-#define TOK_FLAG_BOL   0x0001 /* beginning of line before */
-#define TOK_FLAG_BOF   0x0002 /* beginning of file before */
-#define TOK_FLAG_ENDIF 0x0004 /* a endif was found matching starting #ifdef */
-#define TOK_FLAG_EOF   0x0008 /* end of file */
-
-#define PARSE_FLAG_PREPROCESS 0x0001 /* activate preprocessing */
-#define PARSE_FLAG_TOK_NUM    0x0002 /* return numbers instead of TOK_PPNUM */
-#define PARSE_FLAG_LINEFEED   0x0004 /* line feed is returned as a
-                                        token. line feed is also
-                                        returned at eof */
-#define PARSE_FLAG_ASM_FILE 0x0008 /* we processing an asm file: '#' can be used for line comment, etc. */
-#define PARSE_FLAG_SPACES     0x0010 /* next() returns space tokens (for -E) */
-#define PARSE_FLAG_ACCEPT_STRAYS 0x0020 /* next() returns '\\' token */
-#define PARSE_FLAG_TOK_STR    0x0040 /* return parsed strings instead of TOK_PPSTR */
-
-/* isidnum_table flags: */
-#define IS_SPC 1
-#define IS_ID  2
-#define IS_NUM 4
 
 ST_FUNC TokenSym *tok_alloc(const char *str, int len);
 ST_FUNC const char *get_tok_str(int v, CValue *cv);
