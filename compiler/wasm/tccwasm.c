@@ -1171,7 +1171,9 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
     WasmBuf body;
     int i;
     unsigned char *direct_param;
-    int *direct_offset, nb_direct = 0;
+    int *direct_offset, *direct_type, *direct_local;
+    int nb_direct = 0, nb_direct_i32 = 0, nb_direct_i64 = 0;
+    int has_local_address = 0;
     int local_pc, local_fp, local_cmp, local_carry, local_i0, local_f0, local_tmp64;
     WasmEmitCtx ctx_structured, ctx_dispatch;
     WasmVStack vs;
@@ -1180,6 +1182,8 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
 
     direct_param = tcc_mallocz(f->nb_params);
     direct_offset = tcc_malloc(f->nb_ops * sizeof(*direct_offset));
+    direct_type = tcc_malloc(f->nb_ops * sizeof(*direct_type));
+    direct_local = tcc_malloc(f->nb_ops * sizeof(*direct_local));
     for (i = 0; i < f->nb_params; ++i) {
         int j, safe = 1;
         for (j = 0; j < f->nb_ops; ++j) {
@@ -1207,11 +1211,17 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
     }
 
     /* Promote fixed, non-aliased i32 frame slots to real wasm locals. */
+    for (i = 0; i < f->nb_ops; ++i)
+        if (f->ops[i].kind == WASM_OP_ADDR_LOCAL)
+            has_local_address = 1;
     for (i = 0; i < f->nb_ops; ++i) {
         WasmOp *op = &f->ops[i];
         int j, k, safe = 1, off;
-        if ((op->flags & 0xff) != WASM_ADDR_FP
-            || (op->kind != WASM_OP_LOAD_I32 && op->kind != WASM_OP_STORE_I32)
+        int type = (op->kind == WASM_OP_LOAD_I32 || op->kind == WASM_OP_STORE_I32)
+                 ? WASM_VAL_I32
+                 : (op->kind == WASM_OP_LOAD_I64 || op->kind == WASM_OP_STORE_I64)
+                 ? WASM_VAL_I64 : 0;
+        if (has_local_address || (op->flags & 0xff) != WASM_ADDR_FP || !type
             || (op->flags & WASM_OP_FLAG_PARAM))
             continue;
         off = op->imm;
@@ -1227,27 +1237,38 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
             WasmOp *p = &f->ops[j];
             if (p->kind == WASM_OP_ADDR_LOCAL && p->imm == off)
                 safe = 0;
-            if ((p->flags & 0xff) == WASM_ADDR_FP && p->imm == off
-                && p->kind != WASM_OP_LOAD_I32 && p->kind != WASM_OP_STORE_I32)
-                safe = 0;
+            if ((p->flags & 0xff) == WASM_ADDR_FP && p->imm == off) {
+                int ptype = (p->kind == WASM_OP_LOAD_I32 || p->kind == WASM_OP_STORE_I32)
+                          ? WASM_VAL_I32
+                          : (p->kind == WASM_OP_LOAD_I64 || p->kind == WASM_OP_STORE_I64)
+                          ? WASM_VAL_I64 : 0;
+                if (ptype != type)
+                    safe = 0;
+            }
             if (p->kind == WASM_OP_CALL)
                 for (k = 0; k < p->call_nb_args; ++k)
                     if (p->call_arg_off[k] == off)
                         safe = 0;
         }
-        if (safe)
+        if (safe) {
             direct_offset[nb_direct++] = off;
+            direct_type[nb_direct - 1] = type;
+            if (type == WASM_VAL_I32) nb_direct_i32++;
+            else nb_direct_i64++;
+        }
     }
 
     /* locals: control/i32 registers, f64 registers, native i64 registers
        plus one i64 scratch used by the remaining i32 carry helpers. */
-    wb_uleb(&body, nb_direct ? 4 : 3);
+    wb_uleb(&body, 3 + !!nb_direct_i32 + !!nb_direct_i64);
     /* pc/fp/cmp/carry, then the i32 value locals; then f64; then i64. */
     wb_uleb(&body, 4 + WASM_NB_I32_REGS), wb_u8(&body, 0x7f);
     wb_uleb(&body, WASM_NB_F64_REGS), wb_u8(&body, 0x7c);
     wb_uleb(&body, WASM_NB_I64_REGS), wb_u8(&body, 0x7e);
-    if (nb_direct)
-        wb_uleb(&body, nb_direct), wb_u8(&body, 0x7f);
+    if (nb_direct_i32)
+        wb_uleb(&body, nb_direct_i32), wb_u8(&body, 0x7f);
+    if (nb_direct_i64)
+        wb_uleb(&body, nb_direct_i64), wb_u8(&body, 0x7e);
 
     local_pc = f->nb_params;
     local_fp = local_pc + 1;
@@ -1256,17 +1277,21 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
     local_i0 = local_carry + 1;
     local_f0 = local_i0 + WASM_NB_I32_REGS;
     local_tmp64 = local_f0 + WASM_NB_F64_REGS;
-
+    {
+        int next_i32 = local_tmp64 + WASM_NB_I64_REGS;
+        int next_i64 = next_i32 + nb_direct_i32;
+        for (i = 0; i < nb_direct; ++i)
+            direct_local[i] = direct_type[i] == WASM_VAL_I32 ? next_i32++ : next_i64++;
+    }
     for (i = 0; i < f->nb_ops; ++i) {
         WasmOp *op = &f->ops[i];
         int j;
         if ((op->flags & 0xff) != WASM_ADDR_FP)
             continue;
         for (j = 0; j < nb_direct; ++j)
-            if (op->imm == direct_offset[j]
-                && (op->kind == WASM_OP_LOAD_I32 || op->kind == WASM_OP_STORE_I32)) {
+            if (op->imm == direct_offset[j]) {
                 op->flags |= WASM_OP_FLAG_PARAM;
-                op->r1 = local_tmp64 + WASM_NB_I64_REGS + j;
+                op->r1 = direct_local[j];
                 break;
             }
     }
@@ -1978,6 +2003,8 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
     if (s1->nb_errors) {
         tcc_free(direct_param);
         tcc_free(direct_offset);
+        tcc_free(direct_type);
+        tcc_free(direct_local);
         tcc_free(body.data);
         return;
     }
@@ -2001,6 +2028,8 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
     wb_mem(code, body.data, body.len);
     tcc_free(direct_param);
     tcc_free(direct_offset);
+    tcc_free(direct_type);
+    tcc_free(direct_local);
     tcc_free(body.data);
 }
 
