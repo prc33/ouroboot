@@ -39,9 +39,7 @@ ST_DATA TokenSym **table_ident;
 
 /* ------------------------------------------------------------------------- */
 
-static TokenSym *hash_ident[TOK_HASH_SIZE];
 static char token_buf[STRING_MAX_SIZE + 1];
-static CString cstr_buf;
 static CString macro_equal_buf;
 static TokenString tokstr_buf;
 static unsigned char isidnum_table[256 - CH_EOF];
@@ -58,36 +56,6 @@ static const char tcc_keywords[] =
 #undef DEF
 ;
 
-/* WARNING: the content of this string encodes token numbers */
-static const unsigned char tok_two_chars[] =
-/* outdated -- gr
-    "<=\236>=\235!=\225&&\240||\241++\244--\242==\224<<\1>>\2+=\253"
-    "-=\255*=\252/=\257%=\245&=\246^=\336|=\374->\313..\250##\266";
-*/{
-    '<','=', TOK_LE,
-    '>','=', TOK_GE,
-    '!','=', TOK_NE,
-    '&','&', TOK_LAND,
-    '|','|', TOK_LOR,
-    '+','+', TOK_INC,
-    '-','-', TOK_DEC,
-    '=','=', TOK_EQ,
-    '<','<', TOK_SHL,
-    '>','>', TOK_SAR,
-    '+','=', TOK_A_ADD,
-    '-','=', TOK_A_SUB,
-    '*','=', TOK_A_MUL,
-    '/','=', TOK_A_DIV,
-    '%','=', TOK_A_MOD,
-    '&','=', TOK_A_AND,
-    '^','=', TOK_A_XOR,
-    '|','=', TOK_A_OR,
-    '-','>', TOK_ARROW,
-    '.','.', TOK_TWODOTS,
-    '#','#', TOK_TWOSHARPS,
-    0
-};
-
 static void next_nomacro(void);
 
 ST_FUNC void skip(int c)
@@ -100,176 +68,6 @@ ST_FUNC void skip(int c)
 ST_FUNC void expect(const char *msg)
 {
     tcc_error("%s expected", msg);
-}
-
-/* ------------------------------------------------------------------------- */
-/* allocate a new token */
-static TokenSym *tok_alloc_new(TokenSym **pts, const char *str, int len)
-{
-    TokenSym *ts, **ptable;
-    int i;
-
-    if (tok_ident >= SYM_FIRST_ANOM) 
-        tcc_error("memory full (symbols)");
-
-    /* expand token table if needed */
-    i = tok_ident - TOK_IDENT;
-    if ((i % TOK_ALLOC_INCR) == 0) {
-        ptable = tcc_realloc(table_ident, (i + TOK_ALLOC_INCR) * sizeof(TokenSym *));
-        table_ident = ptable;
-    }
-
-    ts = tcc_malloc(sizeof(TokenSym) + len);
-    table_ident[i] = ts;
-    ts->tok = tok_ident++;
-    ts->sym_define = NULL;
-    ts->sym_label = NULL;
-    ts->sym_struct = NULL;
-    ts->sym_identifier = NULL;
-    ts->len = len;
-    ts->hash_next = NULL;
-    memcpy(ts->str, str, len);
-    ts->str[len] = '\0';
-    *pts = ts;
-    return ts;
-}
-
-#define TOK_HASH_INIT 1
-#define TOK_HASH_FUNC(h, c) ((h) + ((h) << 5) + ((h) >> 27) + (c))
-
-
-/* find a token and add it if not found */
-ST_FUNC TokenSym *tok_alloc(const char *str, int len)
-{
-    TokenSym *ts, **pts;
-    int i;
-    unsigned int h;
-    
-    h = TOK_HASH_INIT;
-    for(i=0;i<len;i++)
-        h = TOK_HASH_FUNC(h, ((unsigned char *)str)[i]);
-    h &= (TOK_HASH_SIZE - 1);
-
-    pts = &hash_ident[h];
-    for(;;) {
-        ts = *pts;
-        if (!ts)
-            break;
-        if (ts->len == len && !memcmp(ts->str, str, len))
-            return ts;
-        pts = &(ts->hash_next);
-    }
-    return tok_alloc_new(pts, str, len);
-}
-
-/* XXX: buffer overflow */
-/* XXX: float tokens */
-ST_FUNC const char *get_tok_str(int v, CValue *cv)
-{
-    char *p;
-    int i, len;
-
-    cstr_reset(&cstr_buf);
-    p = cstr_buf.data;
-
-    switch(v) {
-    case TOK_CINT:
-    case TOK_CUINT:
-    case TOK_CLONG:
-    case TOK_CULONG:
-    case TOK_CLLONG:
-    case TOK_CULLONG:
-        /* XXX: not quite exact, but only useful for testing  */
-        sprintf(p, "%llu", (unsigned long long)cv->i);
-        break;
-    case TOK_LCHAR:
-        cstr_ccat(&cstr_buf, 'L');
-    case TOK_CCHAR:
-        cstr_ccat(&cstr_buf, '\'');
-        add_char(&cstr_buf, cv->i);
-        cstr_ccat(&cstr_buf, '\'');
-        cstr_ccat(&cstr_buf, '\0');
-        break;
-    case TOK_PPNUM:
-    case TOK_PPSTR:
-        return (char*)cv->str.data;
-    case TOK_LSTR:
-        cstr_ccat(&cstr_buf, 'L');
-    case TOK_STR:
-        cstr_ccat(&cstr_buf, '\"');
-        if (v == TOK_STR) {
-            len = cv->str.size - 1;
-            for(i=0;i<len;i++)
-                add_char(&cstr_buf, ((unsigned char *)cv->str.data)[i]);
-        } else {
-            len = (cv->str.size / sizeof(nwchar_t)) - 1;
-            for(i=0;i<len;i++)
-                add_char(&cstr_buf, ((nwchar_t *)cv->str.data)[i]);
-        }
-        cstr_ccat(&cstr_buf, '\"');
-        cstr_ccat(&cstr_buf, '\0');
-        break;
-
-    case TOK_CFLOAT:
-        cstr_cat(&cstr_buf, "<float>", 0);
-        break;
-    case TOK_CDOUBLE:
-	cstr_cat(&cstr_buf, "<double>", 0);
-	break;
-    case TOK_CLDOUBLE:
-	cstr_cat(&cstr_buf, "<long double>", 0);
-	break;
-    case TOK_LINENUM:
-	cstr_cat(&cstr_buf, "<linenumber>", 0);
-	break;
-
-    /* above tokens have value, the ones below don't */
-    case TOK_LT:
-        v = '<';
-        goto addv;
-    case TOK_GT:
-        v = '>';
-        goto addv;
-    case TOK_DOTS:
-        return strcpy(p, "...");
-    case TOK_A_SHL:
-        return strcpy(p, "<<=");
-    case TOK_A_SAR:
-        return strcpy(p, ">>=");
-    case TOK_EOF:
-        return strcpy(p, "<eof>");
-    default:
-        if (v < TOK_IDENT) {
-            /* search in two bytes table */
-            const unsigned char *q = tok_two_chars;
-            while (*q) {
-                if (q[2] == v) {
-                    *p++ = q[0];
-                    *p++ = q[1];
-                    *p = '\0';
-                    return cstr_buf.data;
-                }
-                q += 3;
-            }
-        if (v >= 127) {
-            sprintf(cstr_buf.data, "<%02x>", v);
-            return cstr_buf.data;
-        }
-        addv:
-            *p++ = v;
-            *p = '\0';
-        } else if (v < tok_ident) {
-            return table_ident[v - TOK_IDENT]->str;
-        } else if (v >= SYM_FIRST_ANOM) {
-            /* special name for anonymous symbol */
-            sprintf(p, "L.%u", v - SYM_FIRST_ANOM);
-        } else {
-            /* should never happen */
-            return NULL;
-        }
-        break;
-    }
-    return cstr_buf.data;
 }
 
 /* return the current character, handling end of block if necessary
@@ -2126,28 +1924,11 @@ maybe_newline:
     case '_':
     parse_ident_fast:
         p1 = p;
-        h = TOK_HASH_INIT;
-        h = TOK_HASH_FUNC(h, c);
         while (c = *++p, isidnum_table[c - CH_EOF] & (IS_ID|IS_NUM))
-            h = TOK_HASH_FUNC(h, c);
+            ;
         len = p - p1;
         if (c != '\\') {
-            TokenSym **pts;
-
-            /* fast case : no stray found, so we have the full token
-               and we have already hashed it */
-            h &= (TOK_HASH_SIZE - 1);
-            pts = &hash_ident[h];
-            for(;;) {
-                ts = *pts;
-                if (!ts)
-                    break;
-                if (ts->len == len && !memcmp(ts->str, p1, len))
-                    goto token_found;
-                pts = &(ts->hash_next);
-            }
-            ts = tok_alloc_new(pts, (char *) p1, len);
-        token_found: ;
+            ts = tok_alloc((char *)p1, len);
         } else {
             /* slower case */
             cstr_reset(&tokcstr);
@@ -3156,15 +2937,12 @@ ST_FUNC void tccpp_new(TCCState *s)
 
     /* init allocators */
 
-    memset(hash_ident, 0, TOK_HASH_SIZE * sizeof(TokenSym *));
+    token_syms_init();
     memset(s->cached_includes_hash, 0, sizeof s->cached_includes_hash);
 
-    cstr_new(&cstr_buf);
-    cstr_realloc(&cstr_buf, STRING_MAX_SIZE);
     tok_str_new(&tokstr_buf);
     tok_str_realloc(&tokstr_buf, TOKSTR_MAX_SIZE);
 
-    tok_ident = TOK_IDENT;
     p = tcc_keywords;
     while (*p) {
         r = p;
@@ -3192,18 +2970,10 @@ ST_FUNC void tccpp_delete(TCCState *s)
 
     dynarray_reset(&s->cached_includes, &s->nb_cached_includes);
 
-    /* free tokens */
-    n = tok_ident - TOK_IDENT;
-    if (n > total_idents)
-        total_idents = n;
-    for(i = 0; i < n; i++)
-        tcc_free(table_ident[i]);
-    tcc_free(table_ident);
-    table_ident = NULL;
+    token_syms_free();
 
     /* free static buffers */
     cstr_free(&tokcstr);
-    cstr_free(&cstr_buf);
     cstr_free(&macro_equal_buf);
     tok_str_free_str(tokstr_buf.str);
 

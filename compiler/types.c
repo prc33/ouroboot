@@ -1,10 +1,10 @@
 #include "types.h"
 #include "target.h"
+#include "parsing.h"
 #include "vstack.h"
 #include "symbols.h"
 #include "utils.h"
 
-extern const char *get_tok_str(int v, CValue *cv);
 extern void _tcc_error(const char *fmt, ...) NORETURN PRINTF_LIKE(1,2);
 extern void _tcc_warning(const char *fmt, ...) PRINTF_LIKE(1,2);
 
@@ -503,5 +503,4 @@ ST_FUNC int is_compatible_unqualified_types(CType *type1, CType *type2)
 {
     return compare_types(type1,type2,1);
 }
-
 

@@ -164,7 +164,6 @@ extern long double strtold (const char *__nptr, char **__endptr);
 
 /* -------------------------------------------- */
 
-#define STRING_MAX_SIZE     1024
 
 typedef struct TCCState TCCState;
 
@@ -523,8 +522,6 @@ ST_DATA CString tokcstr; /* current parsed string, if any */
 ST_DATA int tok_ident;
 ST_DATA TokenSym **table_ident;
 
-ST_FUNC TokenSym *tok_alloc(const char *str, int len);
-ST_FUNC const char *get_tok_str(int v, CValue *cv);
 ST_FUNC int set_idnum(int c, int val);
 ST_FUNC void begin_macro(TokenString *str, int alloc);
 ST_FUNC void end_macro(void);

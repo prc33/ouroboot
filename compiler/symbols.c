@@ -13,7 +13,6 @@ extern int tok_ident;
 extern TokenSym **table_ident;
 extern Sym *global_stack, *local_stack;
 extern int local_scope;
-extern const char *get_tok_str(int v, CValue *cv);
 extern void _tcc_error(const char *fmt, ...) NORETURN PRINTF_LIKE(1,2);
 extern void _tcc_warning(const char *fmt, ...) PRINTF_LIKE(1,2);
 extern void update_storage(Sym *sym);

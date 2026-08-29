@@ -8,6 +8,9 @@
 #define TOK_HASH_SIZE      16384
 #define TOK_ALLOC_INCR     512
 #define TOK_MAX_SIZE       4
+#define STRING_MAX_SIZE    1024
+#define TOK_HASH_INIT 1
+#define TOK_HASH_FUNC(h, c) ((h) + ((h) << 5) + ((h) >> 27) + (c))
 
 typedef struct TokenSym {
     struct TokenSym *hash_next;
@@ -32,6 +35,11 @@ typedef union CValue {
     int tab[LDOUBLE_SIZE / 4];
 } CValue;
 
+ST_FUNC TokenSym *tok_alloc(const char *str, int len);
+ST_FUNC const char *get_tok_str(int v, CValue *cv);
+ST_FUNC void token_syms_init(void);
+ST_FUNC void token_syms_free(void);
+
 typedef struct TokenString {
     int *str;
     int len;
@@ -54,7 +62,6 @@ ST_FUNC void tok_str_add(TokenString *s, int t);
 ST_FUNC void tok_str_add2(TokenString *s, int t, CValue *value);
 ST_FUNC void tok_str_add_tok(TokenString *s);
 extern TokenString *macro_stack;
-
 
 /* token values */
 
