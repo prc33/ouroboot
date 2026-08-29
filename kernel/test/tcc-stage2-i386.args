@@ -22,6 +22,7 @@
 /tcc-src/types.c
 /tcc-src/vstack.c
 /tcc-src/registers.c
+/tcc-src/util-gen.c
 /tcc-src/optimise.c
 /tcc-src/tccelf.c
 /tcc-src/tcctools.c
