@@ -1,5 +1,79 @@
 #include "tcc.h"
 
+#undef free
+#undef malloc
+#undef realloc
+
+PUB_FUNC void tcc_free(void *ptr)
+{
+    free(ptr);
+}
+
+PUB_FUNC void *tcc_malloc(unsigned long size)
+{
+    void *ptr = malloc(size);
+    if (!ptr && size)
+        _tcc_error("memory full (malloc)");
+    return ptr;
+}
+
+PUB_FUNC void *tcc_mallocz(unsigned long size)
+{
+    void *ptr = tcc_malloc(size);
+    memset(ptr, 0, size);
+    return ptr;
+}
+
+PUB_FUNC void *tcc_realloc(void *ptr, unsigned long size)
+{
+    void *ptr1 = realloc(ptr, size);
+    if (!ptr1 && size)
+        _tcc_error("memory full (realloc)");
+    return ptr1;
+}
+
+#define free(p) use_tcc_free(p)
+#define malloc(s) use_tcc_malloc(s)
+#define realloc(p, s) use_tcc_realloc(p, s)
+
+ST_FUNC void dynarray_add(void *ptab, int *nb_ptr, void *data)
+{
+    int nb = *nb_ptr, nb_alloc;
+    void **pp = *(void ***)ptab;
+
+    if ((nb & (nb - 1)) == 0) {
+        nb_alloc = nb ? nb * 2 : 1;
+        pp = tcc_realloc(pp, nb_alloc * sizeof(void *));
+        *(void ***)ptab = pp;
+    }
+    pp[nb++] = data;
+    *nb_ptr = nb;
+}
+
+ST_FUNC void dynarray_reset(void *pp, int *n)
+{
+    void **p;
+    for (p = *(void ***)pp; *n; ++p, --*n)
+        if (*p)
+            tcc_free(*p);
+    tcc_free(*(void **)pp);
+    *(void **)pp = NULL;
+}
+
+ST_FUNC void strcat_vprintf(char *buf, int buf_size, const char *fmt, va_list ap)
+{
+    int len = strlen(buf);
+    vsnprintf(buf + len, buf_size - len, fmt, ap);
+}
+
+ST_FUNC void strcat_printf(char *buf, int buf_size, const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    strcat_vprintf(buf, buf_size, fmt, ap);
+    va_end(ap);
+}
+
 ST_FUNC char *pstrcpy(char *buf, size_t buf_size, const char *s)
 {
     char *q, *q_end;

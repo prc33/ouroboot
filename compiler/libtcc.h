@@ -6,7 +6,7 @@
  * in-tree caller is gone (tcc_set_error_func/tcc_get_error_func/
  * tcc_get_error_opaque and the TCCErrorFunc typedef, tcc_compile_string,
  * tcc_add_symbol, tcc_get_symbol, tcc_list_symbols). What remains is
- * exactly what tcc.c's own main() and libtcc.c's option handling call.
+ * exactly what the command-line compiler calls.
  * See docs/compiler-file-review-2026-08-27.md section B. */
 
 #ifndef LIBTCCAPI

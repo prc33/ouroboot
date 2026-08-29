@@ -7,6 +7,15 @@ typedef struct CString {
     int size_allocated;
 } CString;
 
+PUB_FUNC void tcc_free(void *ptr);
+PUB_FUNC void *tcc_malloc(unsigned long size);
+PUB_FUNC void *tcc_mallocz(unsigned long size);
+PUB_FUNC void *tcc_realloc(void *ptr, unsigned long size);
+ST_FUNC void dynarray_add(void *ptab, int *nb_ptr, void *data);
+ST_FUNC void dynarray_reset(void *pp, int *n);
+ST_FUNC void strcat_vprintf(char *buf, int buf_size, const char *fmt, va_list ap);
+ST_FUNC void strcat_printf(char *buf, int buf_size, const char *fmt, ...) PRINTF_LIKE(3,4);
+
 ST_FUNC char *pstrcpy(char *buf, size_t buf_size, const char *s);
 ST_FUNC char *pstrcat(char *buf, size_t buf_size, const char *s);
 ST_FUNC char *pstrncpy(char *out, const char *in, size_t num);
