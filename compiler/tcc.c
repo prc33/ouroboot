@@ -304,7 +304,7 @@ static int tcc_compile(TCCState *s1, int filetype, const char *str, int fd)
 
 
 /* define a preprocessor symbol. value can be NULL, sym can be "sym=val" */
-LIBTCCAPI void tcc_define_symbol(TCCState *s1, const char *sym, const char *value)
+ST_FUNC void tcc_define_symbol(TCCState *s1, const char *sym, const char *value)
 {
     const char *eq;
     if (NULL == (eq = strchr(sym, '=')))
@@ -315,13 +315,13 @@ LIBTCCAPI void tcc_define_symbol(TCCState *s1, const char *sym, const char *valu
 }
 
 /* undefine a preprocessor symbol */
-LIBTCCAPI void tcc_undefine_symbol(TCCState *s1, const char *sym)
+ST_FUNC void tcc_undefine_symbol(TCCState *s1, const char *sym)
 {
     cstr_printf(&s1->cmdline_defs, "#undef %s\n", sym);
 }
 
 
-LIBTCCAPI TCCState *tcc_new(void)
+ST_FUNC TCCState *tcc_new(void)
 {
     TCCState *s;
 
@@ -444,7 +444,7 @@ LIBTCCAPI TCCState *tcc_new(void)
     return s;
 }
 
-LIBTCCAPI void tcc_delete(TCCState *s1)
+ST_FUNC void tcc_delete(TCCState *s1)
 {
     /* free sections */
     tccelf_delete(s1);
@@ -473,7 +473,7 @@ LIBTCCAPI void tcc_delete(TCCState *s1)
     tcc_free(s1);
 }
 
-LIBTCCAPI int tcc_set_output_type(TCCState *s, int output_type)
+ST_FUNC int tcc_set_output_type(TCCState *s, int output_type)
 {
     s->output_type = output_type;
 
@@ -518,13 +518,13 @@ LIBTCCAPI int tcc_set_output_type(TCCState *s, int output_type)
     return 0;
 }
 
-LIBTCCAPI int tcc_add_include_path(TCCState *s, const char *pathname)
+ST_FUNC int tcc_add_include_path(TCCState *s, const char *pathname)
 {
     tcc_split_path(s, &s->include_paths, &s->nb_include_paths, pathname);
     return 0;
 }
 
-LIBTCCAPI int tcc_add_sysinclude_path(TCCState *s, const char *pathname)
+ST_FUNC int tcc_add_sysinclude_path(TCCState *s, const char *pathname)
 {
     tcc_split_path(s, &s->sysinclude_paths, &s->nb_sysinclude_paths, pathname);
     return 0;
@@ -574,7 +574,7 @@ ST_FUNC int tcc_add_file_internal(TCCState *s1, const char *filename, int flags)
     return ret;
 }
 
-LIBTCCAPI int tcc_add_file(TCCState *s, const char *filename)
+ST_FUNC int tcc_add_file(TCCState *s, const char *filename)
 {
     int filetype = s->filetype;
     if (0 == (filetype & AFF_TYPE_MASK)) {
@@ -597,7 +597,7 @@ LIBTCCAPI int tcc_add_file(TCCState *s, const char *filename)
     return tcc_add_file_internal(s, filename, filetype | AFF_PRINT_ERROR);
 }
 
-LIBTCCAPI int tcc_add_library_path(TCCState *s, const char *pathname)
+ST_FUNC int tcc_add_library_path(TCCState *s, const char *pathname)
 {
     tcc_split_path(s, &s->library_paths, &s->nb_library_paths, pathname);
     return 0;
@@ -626,7 +626,7 @@ ST_FUNC int tcc_add_crt(TCCState *s1, const char *filename)
 }
 
 /* the library name is the same as the argument of the '-l' option */
-LIBTCCAPI int tcc_add_library(TCCState *s, const char *libraryname)
+ST_FUNC int tcc_add_library(TCCState *s, const char *libraryname)
 {
     int flags = s->filetype & AFF_WHOLE_ARCHIVE;
     return tcc_add_library_internal(s, "%s/lib%s.a", libraryname, flags,
@@ -650,7 +650,7 @@ ST_FUNC void tcc_add_pragma_libs(TCCState *s1)
 }
 
 
-LIBTCCAPI void tcc_set_lib_path(TCCState *s, const char *path)
+ST_FUNC void tcc_set_lib_path(TCCState *s, const char *path)
 {
     tcc_free(s->tcc_lib_path);
     s->tcc_lib_path = tcc_strdup(path);
@@ -1294,7 +1294,7 @@ unsupported_option:
     return OPT_HELP;
 }
 
-LIBTCCAPI void tcc_set_options(TCCState *s, const char *r)
+ST_FUNC void tcc_set_options(TCCState *s, const char *r)
 {
     char **argv = NULL;
     int argc = 0;

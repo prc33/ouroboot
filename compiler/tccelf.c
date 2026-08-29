@@ -2092,7 +2092,7 @@ static int elf_output_file(TCCState *s1, const char *filename)
     return ret;
 }
 
-LIBTCCAPI int tcc_output_file(TCCState *s, const char *filename)
+ST_FUNC int tcc_output_file(TCCState *s, const char *filename)
 {
     int ret;
 #ifdef TCC_TARGET_WASM32

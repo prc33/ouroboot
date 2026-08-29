@@ -131,14 +131,7 @@ extern long double strtold (const char *__nptr, char **__endptr);
 
 /* -------------------------------------------- */
 
-#include "libtcc.h"
 #include "tccelf.h"
-
-/* -------------------------------------------- */
-
-#ifndef PUB_FUNC /* functions used by tcc.c but not in libtcc.h */
-# define PUB_FUNC
-#endif
 
 #ifdef TCC_PROFILE /* profile all functions */
 # define static
@@ -175,6 +168,26 @@ extern long double strtold (const char *__nptr, char **__endptr);
 #define STRING_MAX_SIZE     1024
 
 typedef int nwchar_t;
+
+typedef struct TCCState TCCState;
+
+#define TCC_OUTPUT_EXE        2
+#define TCC_OUTPUT_OBJ        4
+#define TCC_OUTPUT_PREPROCESS 5
+
+ST_FUNC TCCState *tcc_new(void);
+ST_FUNC void tcc_delete(TCCState *s);
+ST_FUNC void tcc_set_lib_path(TCCState *s, const char *path);
+ST_FUNC void tcc_set_options(TCCState *s, const char *str);
+ST_FUNC int tcc_add_include_path(TCCState *s, const char *path);
+ST_FUNC int tcc_add_sysinclude_path(TCCState *s, const char *path);
+ST_FUNC void tcc_define_symbol(TCCState *s, const char *sym, const char *value);
+ST_FUNC void tcc_undefine_symbol(TCCState *s, const char *sym);
+ST_FUNC int tcc_add_file(TCCState *s, const char *filename);
+ST_FUNC int tcc_set_output_type(TCCState *s, int output_type);
+ST_FUNC int tcc_add_library_path(TCCState *s, const char *path);
+ST_FUNC int tcc_add_library(TCCState *s, const char *library);
+ST_FUNC int tcc_output_file(TCCState *s, const char *filename);
 
 #include "utils.h"
 #include "parsing.h"
@@ -377,7 +390,7 @@ struct TCCState {
     /* -include options */
     CString cmdline_incl;
 
-    /* error handling (no caller-installed callback -- see libtcc.h) */
+    /* error handling (no caller-installed callback) */
     int error_set_jmp_enabled;
     jmp_buf error_jmp_buf;
     int nb_errors;
