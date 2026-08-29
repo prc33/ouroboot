@@ -5641,7 +5641,7 @@ again:
         gjmp_addr(d);
         gsym_addr(b, d);
         gsym(a);
-        gjmp_hint_loop_range(d);
+        gjmp_hint_loop_range(d, d);   /* while: continue target is the condition */
 
     } else if (t == '{') {
         new_scope(&o);
@@ -5749,13 +5749,16 @@ again:
         gjmp_addr(d);
         gsym_addr(b, d);
         gsym(a);
-        gjmp_hint_loop_range(c);
+        /* d is the increment (or c again when the for-loop has none) --
+           the position `continue` and the body's own exit both jump to. */
+        gjmp_hint_loop_range(c, d);
         prev_scope(&o, 0);
 
     } else if (t == TOK_DO) {
         a = b = 0;
         d = gind();
         lblock(&a, &b);
+        e = gind();   /* do-while: continue target is the trailing test */
         gsym(b);
         skip(TOK_WHILE);
         skip('(');
@@ -5765,7 +5768,7 @@ again:
 	c = gvtst(0, 0);
 	gsym_addr(c, d);
         gsym(a);
-        gjmp_hint_loop_range(d);
+        gjmp_hint_loop_range(d, e);
 
     } else if (t == TOK_SWITCH) {
         struct switch_t *sw;

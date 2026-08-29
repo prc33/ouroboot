@@ -358,7 +358,7 @@ ST_FUNC void gsym_addr(int t, int a)
 
 /* Records one [start, ind) loop range on the current function -- see this
  * hint's own comment in tcc.h. */
-ST_FUNC void gjmp_hint_loop_range(int start)
+ST_FUNC void gjmp_hint_loop_range(int start, int cont)
 {
     WasmFuncIR *f = wasm_cur_func;
     WasmLoopRange *r;
@@ -371,6 +371,7 @@ ST_FUNC void gjmp_hint_loop_range(int start)
     r = &f->loops[f->nb_loops++];
     r->start_pc = start;
     r->end_pc = ind;
+    r->cont_pc = cont;
 }
 
 ST_FUNC void load(int r, SValue *sv)

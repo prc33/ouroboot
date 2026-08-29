@@ -564,7 +564,7 @@ ST_FUNC int gjmp(int t)
 
 /* i386 emits machine code directly and never needs to know a loop's
  * extent -- see this hint's own comment in tcc.h. */
-ST_FUNC void gjmp_hint_loop_range(int start) { (void)start; }
+ST_FUNC void gjmp_hint_loop_range(int start, int cont) { (void)start; (void)cont; }
 
 /* generate a jump to a fixed address */
 ST_FUNC void gjmp_addr(int a)

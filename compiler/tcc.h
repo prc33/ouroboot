@@ -1320,8 +1320,19 @@ ST_FUNC int gjmp_append(int n, int t);
  * one per repeat-edge also collapses a for-loop's rotated layout (whose
  * condition-test and increment are two separately-jumped-to positions,
  * but one loop) into the single genuine loop it is -- see
- * docs/wasm-codegen-rethink-2026-08-27.md. */
-ST_FUNC void gjmp_hint_loop_range(int start);
+ * docs/wasm-codegen-rethink-2026-08-27.md.
+ *
+ * `cont` is the loop's continue target -- where `continue` jumps and
+ * where the body falls out to. For a for-loop that is the increment,
+ * which tccgen.c emits BEFORE the body (with a jump over it on entry),
+ * so the body's own exit edge runs backwards by position. A backend
+ * reconstructing structured control flow cannot express that, and
+ * cannot tell it apart from a jump into an already-closed scope by
+ * looking at the jump graph -- it needs to be told which position is
+ * the continue target so it can put the increment back after the body
+ * where the source had it. i386/riscv64 branch to an address and do not
+ * care. */
+ST_FUNC void gjmp_hint_loop_range(int start, int cont);
 ST_FUNC void gen_opi(int op);
 ST_FUNC void gen_opf(int op);
 ST_FUNC void gen_cvt_ftoi(int t);

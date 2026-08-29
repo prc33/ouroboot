@@ -1301,6 +1301,49 @@ typedef struct WasmScope {
     int target;             /* block index this scope refers to */
 } WasmScope;
 
+/* Does this block end by saying where control goes next, rather than
+   just running into whatever block follows it in the emission order?
+   Only such a block is safe to move. */
+static int wasm_block_branches(WasmFuncIR *f, WasmBlock *b)
+{
+    int k = f->ops[b->end - 1].kind;
+    return k == WASM_OP_JMP || k == WASM_OP_JMP_CMP || k == WASM_OP_RET;
+}
+
+/* Re-emit blocks in `order` (order[new] = old). Op contents and the
+   loop's block range are untouched -- only which block is emitted when,
+   and every index that names a block, move. */
+static void wasm_permute_blocks(WasmBlock *blk, int nb_blocks, int *op_to_block,
+                                int nb_ops, const int *order)
+{
+    int *newidx = tcc_malloc(nb_blocks * sizeof(int));
+    WasmBlock *tmp = tcc_malloc(nb_blocks * sizeof(WasmBlock));
+    int i;
+
+    for (i = 0; i < nb_blocks; i++)
+        newidx[order[i]] = i;
+    for (i = 0; i < nb_blocks; i++)
+        tmp[i] = blk[order[i]];
+    memcpy(blk, tmp, nb_blocks * sizeof(WasmBlock));
+
+    for (i = 0; i < nb_blocks; i++) {
+        /* nb_blocks is the halt sentinel and must stay put. */
+        if (blk[i].succ0 >= 0 && blk[i].succ0 < nb_blocks)
+            blk[i].succ0 = newidx[blk[i].succ0];
+        if (blk[i].succ1 >= 0 && blk[i].succ1 < nb_blocks)
+            blk[i].succ1 = newidx[blk[i].succ1];
+        if (blk[i].is_loop_header && blk[i].loop_end >= 0
+            && blk[i].loop_end < nb_blocks)
+            blk[i].loop_end = newidx[blk[i].loop_end];
+    }
+    for (i = 0; i < nb_ops; i++)
+        if (op_to_block[i] >= 0 && op_to_block[i] < nb_blocks)
+            op_to_block[i] = newidx[op_to_block[i]];
+
+    tcc_free(tmp);
+    tcc_free(newidx);
+}
+
 static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
 {
     WasmBuf body;
@@ -1490,6 +1533,73 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
             int header = op_to_block[start_idx];
             blk[header].is_loop_header = 1;
             blk[header].loop_end = op_to_block[end_idx - 1];
+        }
+
+        /* --- Put each for-loop's increment back after its body ---
+         *
+         * tccgen.c emits a for-loop rotated: the increment comes BEFORE
+         * the body, with a jump over it on first entry, so the body's own
+         * exit edge -- and every `continue` -- runs backwards by position
+         * into the increment. Structured wasm cannot express a branch
+         * back into a scope, and the jump graph alone cannot tell that
+         * edge apart from a genuine jump into an already-closed scope
+         * (switch-case dispatch), so this used to reject the whole
+         * function and drop it onto the ~57%-slower dispatch fallback.
+         * Every loop in this project's own emulator hot path -- load(),
+         * store(), rv_run(), flush_tlb() -- was being rejected for
+         * exactly this, on a plain `for (i = 0; i < n; i++)`.
+         *
+         * The hint's cont_pc says which position IS the continue target
+         * (see gjmp_hint_loop_range() in tcc.h), so the rotation can just
+         * be undone: emit [condition][body][increment] the way the source
+         * wrote it, which turns the body's backward edge into a plain
+         * fallthrough and the increment's into the loop's one repeat
+         * edge. Only the emission ORDER of whole blocks changes; no op
+         * moves, and the loop keeps the same contiguous block range.
+         *
+         * Loops arrive innermost-first (the hint fires at each loop's
+         * end), so an inner loop is already settled before an outer one
+         * moves it, and it moves as one contiguous piece. */
+        for (i = 0; i < f->nb_loops; i++) {
+            int h = op_to_block[wasm_pc_to_index(f, f->loops[i].start_pc)];
+            int ct = op_to_block[wasm_pc_to_index(f, f->loops[i].cont_pc)];
+            int lend = blk[h].loop_end;
+            int seg_end, j, pos;
+            int *order;
+
+            /* while/do put the continue target at or after the body
+               already -- nothing rotated, nothing to undo. */
+            if (ct <= h || ct > lend)
+                continue;
+
+            /* The increment runs from ct up to whichever block jumps
+               back to the condition. */
+            for (seg_end = ct; seg_end <= lend; seg_end++)
+                if (blk[seg_end].succ0 == h && blk[seg_end].succ1 < 0)
+                    break;
+            if (seg_end >= lend)
+                continue;   /* no body after it: not the rotated shape */
+
+            /* Reordering only preserves meaning where the blocks that
+               end up adjacent to something new say where they go
+               explicitly, rather than falling through by position. */
+            if (!wasm_block_branches(f, &blk[ct - 1])
+                || !wasm_block_branches(f, &blk[seg_end])
+                || !wasm_block_branches(f, &blk[lend]))
+                continue;
+
+            order = tcc_malloc(nb_blocks * sizeof(int));
+            pos = 0;
+            for (j = 0; j < ct; j++) order[pos++] = j;
+            for (j = seg_end + 1; j <= lend; j++) order[pos++] = j;
+            for (j = ct; j <= seg_end; j++) order[pos++] = j;
+            for (j = lend + 1; j < nb_blocks; j++) order[pos++] = j;
+
+            wasm_permute_blocks(blk, nb_blocks, op_to_block, f->nb_ops, order);
+            /* The loop still spans exactly [h, lend]; only the inside was
+               reordered, so its own extent is unchanged. */
+            blk[h].loop_end = lend;
+            tcc_free(order);
         }
 
         int use_structured = 1;

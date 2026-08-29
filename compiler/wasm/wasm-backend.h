@@ -108,6 +108,7 @@ typedef struct WasmOp {
  * exactly one range, not two. */
 typedef struct WasmLoopRange {
     int start_pc, end_pc;
+    int cont_pc;        /* continue target -- see the hint's own comment */
 } WasmLoopRange;
 
 typedef struct WasmFuncIR {
