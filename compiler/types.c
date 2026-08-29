@@ -1,6 +1,12 @@
-#define USING_GLOBALS
-#include "tcc.h"
 #include "types.h"
+#include "target.h"
+#include "vstack.h"
+#include "symbols.h"
+#include "utils.h"
+
+extern const char *get_tok_str(int v, CValue *cv);
+extern void _tcc_error(const char *fmt, ...) NORETURN PRINTF_LIKE(1,2);
+extern void _tcc_warning(const char *fmt, ...) PRINTF_LIKE(1,2);
 
 #if PTR_SIZE == 4
 #define VT_SIZE_T (VT_INT | VT_UNSIGNED)
@@ -76,7 +82,7 @@ ST_FUNC int combine_types(CType *dest, SValue *op1, SValue *op2, int op)
                with a warning */
             if ((op == '?' || TOK_ISCOND(op))
                 && (is_integer_btype(bt1) || is_integer_btype(bt2)))
-              tcc_warning("pointer/integer mismatch in %s",
+              _tcc_warning("pointer/integer mismatch in %s",
                           op == '?' ? "conditional expression" : "comparison");
             else if (op != '-' || !is_integer_btype(bt2))
               ret = 0;
@@ -312,7 +318,7 @@ ST_FUNC void type_incompatibility_error(CType* st, CType* dt, const char* fmt)
     char buf1[256], buf2[256];
     type_to_str(buf1, sizeof(buf1), st, NULL);
     type_to_str(buf2, sizeof(buf2), dt, NULL);
-    tcc_error(fmt, buf1, buf2);
+    _tcc_error(fmt, buf1, buf2);
 }
 
 ST_FUNC void type_incompatibility_warning(CType* st, CType* dt, const char* fmt)
@@ -320,7 +326,7 @@ ST_FUNC void type_incompatibility_warning(CType* st, CType* dt, const char* fmt)
     char buf1[256], buf2[256];
     type_to_str(buf1, sizeof(buf1), st, NULL);
     type_to_str(buf2, sizeof(buf2), dt, NULL);
-    tcc_warning(fmt, buf1, buf2);
+    _tcc_warning(fmt, buf1, buf2);
 }
 
 
@@ -497,6 +503,5 @@ ST_FUNC int is_compatible_unqualified_types(CType *type1, CType *type2)
 {
     return compare_types(type1,type2,1);
 }
-
 
 

@@ -30,11 +30,29 @@ upstream build trees are not part of the repository count.
 |---|---:|---:|---|
 | Emulator | 1,000 hard limit | 939 | Within limit |
 | Kernel | 10,000 hard limit | 9,510 | Within limit |
-| Compiler | 25,000 target; 20,000 stretch | 30,413 | Not yet attained |
+| Compiler | 25,000 target; 20,000 stretch | 30,432 | Not yet attained |
 
 New functionality must stay within the emulator and kernel limits. Compiler
 work should reduce the current count while preserving standard C, ELF output
 for i386/RISC-V64, and the freestanding wasm32 backend.
+
+### Compiler interface cleanup
+
+This change reduces compiler source by 17 lines overall (30,449 to 30,432).
+The new headers replace broad `tcc.h` inclusion with the smallest shared
+platform and target-definition interfaces. `registers.c` deliberately remains
+on `tcc.h`: its code-generation/backend boundary has not yet been extracted.
+
+| File | Before | After | Change | Responsibility |
+|---|---:|---:|---:|---|
+| `common.h` | — | 48 | +48 | shared C/platform definitions |
+| `target.h` | — | 20 | +20 | selected target definitions |
+| `types.c` / `types.h` | 585 | 592 | +7 | C type rules and API |
+| `vstack.c` / `vstack.h` | 168 | 172 | +4 | value stack and temporary locals |
+| `symbols.c` / `symbols.h` | 565 | 474 | -91 | symbol scopes and attributes |
+| `tccelf.c` | 2,506 | 2,569 | +63 | ELF symbols and relocations |
+| `tcc.h` | 980 | 911 | -69 | remaining compiler-wide state/API |
+| `registers.h` | 14 | 15 | +1 | register allocator API |
 
 ## Quick start: build the browser system from scratch
 

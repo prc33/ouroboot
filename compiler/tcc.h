@@ -21,51 +21,11 @@
 #ifndef _TCC_H
 #define _TCC_H
 
-#define _GNU_SOURCE
-#define _DARWIN_C_SOURCE
-#include "config.h"
-
-#include <stdarg.h>
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-#include <errno.h>
-#include <math.h>
-#include <fcntl.h>
-#include <setjmp.h>
-#include <time.h>
-
-# define WIN32_LEAN_AND_MEAN 1
-# include <unistd.h>
-# include <sys/time.h>
-# ifndef CONFIG_TCC_STATIC
-#  include <dlfcn.h>
-# endif
+#include "common.h"
 /* XXX: need to define this to use them in non ISOC99 context */
 extern float strtof (const char *__nptr, char **__endptr);
 extern long double strtold (const char *__nptr, char **__endptr);
 
-
-#ifndef O_BINARY
-# define O_BINARY 0
-#endif
-
-#ifndef offsetof
-#define offsetof(type, field) ((size_t) &((type *)0)->field)
-#endif
-
-#ifndef countof
-#define countof(tab) (sizeof(tab) / sizeof((tab)[0]))
-#endif
-
-# define NORETURN __attribute__((noreturn))
-# define ALIGNED(x) __attribute__((aligned(x)))
-# define PRINTF_LIKE(x,y) __attribute__ ((format (printf, (x), (y))))
-
-/* gnu headers use to #define __attribute__ to empty for non-gcc compilers */
-#ifdef __TINYC__
-# undef __attribute__
-#endif
 
 # define IS_DIRSEP(c) (c == '/')
 # define IS_ABSPATH(p) IS_DIRSEP(p[0])
@@ -180,10 +140,6 @@ extern long double strtold (const char *__nptr, char **__endptr);
 # define PUB_FUNC
 #endif
 
-#define ST_INLN
-#define ST_FUNC
-#define ST_DATA extern
-
 #ifdef TCC_PROFILE /* profile all functions */
 # define static
 #endif
@@ -191,21 +147,7 @@ extern long double strtold (const char *__nptr, char **__endptr);
 /* -------------------------------------------- */
 /* include the target specific definitions */
 
-#define TARGET_DEFS_ONLY
-#ifdef TCC_TARGET_I386
-# include "i386/i386-gen.c"
-# include "i386/i386-link.c"
-#elif defined(TCC_TARGET_RISCV64)
-# include "risc/riscv64-gen.c"
-# include "risc/riscv64-link.c"
-# include "risc/riscv64-asm.c"
-#elif defined(TCC_TARGET_WASM32)
-# include "wasm/wasm-gen.c"
-# include "wasm/wasm-link.c"
-#else
-#error unknown target
-#endif
-#undef TARGET_DEFS_ONLY
+#include "target.h"
 
 /* -------------------------------------------- */
 
@@ -236,7 +178,6 @@ extern long double strtold (const char *__nptr, char **__endptr);
 
 /* -------------------------------------------- */
 
-#define VSTACK_SIZE         256
 #define STRING_MAX_SIZE     1024
 
 typedef int nwchar_t;
@@ -318,16 +259,6 @@ typedef struct TokenString {
     const int *prev_ptr;
     char alloc;
 } TokenString;
-
-/* GNUC attribute definition */
-typedef struct AttributeDef {
-    struct SymAttr a;
-    struct FuncAttr f;
-    struct Section *section;
-    Sym *cleanup_func;
-    int asm_label; /* associated asm label */
-    char attr_mode; /* __attribute__((__mode__(...))) */
-} AttributeDef;
 
 /* inline functions */
 typedef struct InlineFunc {

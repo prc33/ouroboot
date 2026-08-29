@@ -1,125 +1,27 @@
 
-#define USING_GLOBALS
-#include "tcc.h"
+#include "common.h"
+#include "target.h"
+#include "parsing.h"
+#include "vstack.h"
+#include "elf.h"
 #include "symbols.h"
+#include "utils.h"
+
+#define SYM_POOL_NB (8192 / sizeof(Sym))
+
+extern int tok_ident;
+extern TokenSym **table_ident;
+extern Sym *global_stack, *local_stack;
+extern int local_scope;
+extern const char *get_tok_str(int v, CValue *cv);
+extern void _tcc_error(const char *fmt, ...) NORETURN PRINTF_LIKE(1,2);
+extern void _tcc_warning(const char *fmt, ...) PRINTF_LIKE(1,2);
+extern void update_storage(Sym *sym);
 
 static Sym *sym_free_first;
 static void **sym_pools;
 static int nb_sym_pools;
 
-ST_FUNC ElfSym *elfsym(Sym *s)
-{
-  if (!s || !s->c)
-    return NULL;
-  return &((ElfSym *)symtab_section->data)[s->c];
-}
-
-/* apply storage attributes to Elf symbol */
-ST_FUNC void update_storage(Sym *sym)
-{
-    ElfSym *esym;
-    int sym_bind, old_sym_bind;
-
-    esym = elfsym(sym);
-    if (!esym)
-        return;
-
-    if (sym->a.visibility)
-        esym->st_other = (esym->st_other & ~ELFW(ST_VISIBILITY)(-1))
-            | sym->a.visibility;
-
-    if (sym->type.t & (VT_STATIC | VT_INLINE))
-        sym_bind = STB_LOCAL;
-    else if (sym->a.weak)
-        sym_bind = STB_WEAK;
-    else
-        sym_bind = STB_GLOBAL;
-    old_sym_bind = ELFW(ST_BIND)(esym->st_info);
-    if (sym_bind != old_sym_bind) {
-        esym->st_info = ELFW(ST_INFO)(sym_bind, ELFW(ST_TYPE)(esym->st_info));
-    }
-}
-
-/* ------------------------------------------------------------------------- */
-/* update sym->c so that it points to an external symbol in section
-   'section' with value 'value' */
-
-ST_FUNC void put_extern_sym2(Sym *sym, int sh_num,
-                            addr_t value, unsigned long size)
-{
-    int sym_type, sym_bind, info, other, t;
-    ElfSym *esym;
-    const char *name;
-
-    if (!sym->c) {
-        name = get_tok_str(sym->v, NULL);
-        t = sym->type.t;
-        if ((t & VT_BTYPE) == VT_FUNC) {
-            sym_type = STT_FUNC;
-        } else if ((t & VT_BTYPE) == VT_VOID) {
-            sym_type = STT_NOTYPE;
-        } else {
-            sym_type = STT_OBJECT;
-        }
-        if (t & (VT_STATIC | VT_INLINE))
-            sym_bind = STB_LOCAL;
-        else
-            sym_bind = STB_GLOBAL;
-        other = 0;
-
-
-        if (sym->asm_label) {
-            name = get_tok_str(sym->asm_label & ~SYM_FIELD, NULL);
-            /* with SYM_FIELD it was __attribute__((alias("..."))) actually */
-        }
-
-        info = ELFW(ST_INFO)(sym_bind, sym_type);
-        sym->c = put_elf_sym(symtab_section, value, size, info, other, sh_num, name);
-
-
-    } else {
-        esym = elfsym(sym);
-        esym->st_value = value;
-        esym->st_size = size;
-        esym->st_shndx = sh_num;
-    }
-    update_storage(sym);
-}
-
-ST_FUNC void put_extern_sym(Sym *sym, Section *section,
-                           addr_t value, unsigned long size)
-{
-    int sh_num = section ? section->sh_num : SHN_UNDEF;
-    put_extern_sym2(sym, sh_num, value, size);
-}
-
-/* add a new relocation entry to symbol 'sym' in section 's' */
-ST_FUNC void greloca(Section *s, Sym *sym, unsigned long offset, int type,
-                     addr_t addend)
-{
-    int c = 0;
-
-    if (nocode_wanted && s == cur_text_section)
-        return;
-
-    if (sym) {
-        if (0 == sym->c)
-            put_extern_sym(sym, NULL, 0, 0);
-        c = sym->c;
-    }
-
-    /* now we can add ELF relocation info */
-    put_elf_reloca(symtab_section, s, offset, type, c, addend);
-}
-
-#if PTR_SIZE == 4
-ST_FUNC void greloc(Section *s, Sym *sym, unsigned long offset, int type)
-{
-    greloca(s, sym, offset, type, 0);
-}
-#endif
-
-/* ------------------------------------------------------------------------- */
 /* symbol allocator */
 static Sym *__sym_malloc(void)
 {
@@ -253,7 +155,7 @@ ST_FUNC Sym *sym_push(int v, CType *type, int r, int c)
         *ps = s;
         s->sym_scope = local_scope;
         if (s->prev_tok && sym_scope(s->prev_tok) == s->sym_scope)
-            tcc_error("redeclaration of '%s'",
+        _tcc_error("redeclaration of '%s'",
                 get_tok_str(v & ~SYM_STRUCT, NULL));
     }
     return s;
@@ -324,7 +226,7 @@ static void patch_type(Sym *sym, CType *type)
 {
     if (!(type->t & VT_EXTERN) || IS_ENUM_VAL(sym->type.t)) {
         if (!(sym->type.t & VT_EXTERN))
-            tcc_error("redefinition of '%s'", get_tok_str(sym->v, NULL));
+            _tcc_error("redefinition of '%s'", get_tok_str(sym->v, NULL));
         sym->type.t &= ~VT_EXTERN;
     }
 
@@ -334,14 +236,14 @@ static void patch_type(Sym *sym, CType *type)
     }
 
     if (!is_compatible_types(&sym->type, type)) {
-        tcc_error("incompatible types for redefinition of '%s'",
+        _tcc_error("incompatible types for redefinition of '%s'",
                   get_tok_str(sym->v, NULL));
     } else if ((sym->type.t & VT_BTYPE) == VT_FUNC) {
         int static_proto = sym->type.t & VT_STATIC;
 
         if ((type->t & VT_STATIC) && !static_proto
             && !((type->t | sym->type.t) & VT_INLINE))
-            tcc_warning("static storage ignored for redefinition of '%s'",
+            _tcc_warning("static storage ignored for redefinition of '%s'",
                         get_tok_str(sym->v, NULL));
         if ((type->t | sym->type.t) & VT_INLINE) {
             if (!((type->t ^ sym->type.t) & VT_INLINE)
@@ -364,7 +266,7 @@ static void patch_type(Sym *sym, CType *type)
         if ((sym->type.t & VT_ARRAY) && type->ref->c >= 0)
             sym->type.ref->c = type->ref->c;
         if ((type->t ^ sym->type.t) & VT_STATIC)
-            tcc_warning("storage mismatch for redefinition of '%s'",
+            _tcc_warning("storage mismatch for redefinition of '%s'",
                         get_tok_str(sym->v, NULL));
     }
 }

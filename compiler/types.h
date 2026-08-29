@@ -1,6 +1,8 @@
 #ifndef TCC_TYPES_H
 #define TCC_TYPES_H
 
+#include "common.h"
+
 /* CType.t: basic type, qualifiers, storage, and bitfield metadata. */
 #define VT_BTYPE       0x000f
 #define VT_VOID             0

@@ -2,7 +2,10 @@
 #define TCC_VSTACK_H
 
 #include "types.h"
+#include "target.h"
 #include "parsing.h"
+
+#define VSTACK_SIZE 256
 
 #define VT_VALMASK   0x003f
 #define VT_CONST     0x0030
@@ -41,4 +44,5 @@ ST_FUNC int vstack_temp_local(int, int, int *);
 ST_FUNC void vstack_clear_temp_locals(void);
 ST_FUNC void vpushv(SValue *v);
 ST_FUNC void vdup(void);
+extern SValue *vtop;
 #endif

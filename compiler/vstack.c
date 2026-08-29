@@ -1,9 +1,9 @@
-#define USING_GLOBALS
-#include "tcc.h"
 #include "vstack.h"
 
 static SValue stack[1 + VSTACK_SIZE];
-ST_DATA SValue *vtop;
+SValue *vtop;
+
+extern void _tcc_error(const char *fmt, ...) NORETURN PRINTF_LIKE(1,2);
 
 #define MAX_TEMP_LOCAL_VARIABLE_NUMBER 8
 static struct {
@@ -32,7 +32,7 @@ ST_FUNC SValue *vstack_base(void)
 static void vstack_push(const SValue *v)
 {
     if (vtop >= stack + VSTACK_SIZE)
-        tcc_error("memory full (vstack)");
+        _tcc_error("memory full (vstack)");
     *++vtop = *v;
 }
 

@@ -20,6 +20,69 @@
 
 #include "tcc.h"
 
+ST_FUNC ElfSym *elfsym(Sym *s)
+{
+    TCCState *s1 = tcc_state;
+    return !s || !s->c ? NULL : &((ElfSym *)symtab_section->data)[s->c];
+}
+
+ST_FUNC void update_storage(Sym *sym)
+{
+    ElfSym *esym = elfsym(sym);
+    int bind;
+    if (!esym)
+        return;
+    if (sym->a.visibility)
+        esym->st_other = (esym->st_other & ~ELFW(ST_VISIBILITY)(-1)) | sym->a.visibility;
+    bind = sym->type.t & (VT_STATIC | VT_INLINE) ? STB_LOCAL :
+           sym->a.weak ? STB_WEAK : STB_GLOBAL;
+    if (bind != ELFW(ST_BIND)(esym->st_info))
+        esym->st_info = ELFW(ST_INFO)(bind, ELFW(ST_TYPE)(esym->st_info));
+}
+
+ST_FUNC void put_extern_sym2(Sym *sym, int sh_num, addr_t value, unsigned long size)
+{
+    TCCState *s1 = tcc_state;
+    ElfSym *esym;
+    const char *name;
+    int t, info;
+    if (sym->c) {
+        esym = elfsym(sym);
+        esym->st_value = value, esym->st_size = size, esym->st_shndx = sh_num;
+    } else {
+        t = sym->type.t;
+        name = sym->asm_label ? get_tok_str(sym->asm_label & ~SYM_FIELD, NULL) : get_tok_str(sym->v, NULL);
+        info = ELFW(ST_INFO)(t & (VT_STATIC | VT_INLINE) ? STB_LOCAL : STB_GLOBAL,
+            (t & VT_BTYPE) == VT_FUNC ? STT_FUNC : (t & VT_BTYPE) == VT_VOID ? STT_NOTYPE : STT_OBJECT);
+        sym->c = put_elf_sym(symtab_section, value, size, info, 0, sh_num, name);
+    }
+    update_storage(sym);
+}
+
+ST_FUNC void put_extern_sym(Sym *sym, Section *section, addr_t value, unsigned long size)
+{
+    put_extern_sym2(sym, section ? section->sh_num : SHN_UNDEF, value, size);
+}
+
+ST_FUNC void greloca(Section *s, Sym *sym, unsigned long offset, int type, addr_t addend)
+{
+    TCCState *s1 = tcc_state;
+    int c = 0;
+    if (nocode_wanted && s == cur_text_section)
+        return;
+    if (sym) {
+        if (!sym->c) put_extern_sym(sym, NULL, 0, 0);
+        c = sym->c;
+    }
+    put_elf_reloca(symtab_section, s, offset, type, c, addend);
+}
+#if PTR_SIZE == 4
+ST_FUNC void greloc(Section *s, Sym *sym, unsigned long offset, int type)
+{
+    greloca(s, sym, offset, type, 0);
+}
+#endif
+
 /* Define this to get some debug output during relocation processing.  */
 #undef DEBUG_RELOC
 

@@ -3,8 +3,6 @@
 
 #include "types.h"
 
-struct AttributeDef;
-
 /* symbol attributes */
 struct SymAttr {
     unsigned short
@@ -57,6 +55,15 @@ typedef struct Sym {
     struct Sym *prev; /* prev symbol in stack */
     struct Sym *prev_tok; /* previous symbol for this token */
 } Sym;
+
+typedef struct AttributeDef {
+    struct SymAttr a;
+    struct FuncAttr f;
+    struct Section *section;
+    Sym *cleanup_func;
+    int asm_label;
+    char attr_mode;
+} AttributeDef;
 #define SYM_STRUCT     0x40000000 /* struct/union/enum symbol space */
 #define SYM_FIELD      0x20000000 /* struct/union field symbol space */
 #define SYM_FIRST_ANOM 0x10000000 /* first anonymous sym */
@@ -94,8 +101,8 @@ ST_INLN Sym *struct_find(int v);
 ST_INLN Sym *sym_find(int v);
 ST_FUNC Sym *global_identifier_push(int v, int t, int c);
 ST_FUNC Sym *external_global_sym(int v, CType *type);
-ST_FUNC Sym *external_sym(int v, CType *type, int r, struct AttributeDef *ad);
-ST_FUNC void patch_storage(Sym *sym, struct AttributeDef *ad, CType *type);
+ST_FUNC Sym *external_sym(int v, CType *type, int r, AttributeDef *ad);
+ST_FUNC void patch_storage(Sym *sym, AttributeDef *ad, CType *type);
 ST_FUNC void merge_symattr(struct SymAttr *to, struct SymAttr *from);
 ST_FUNC void merge_funcattr(struct FuncAttr *to, struct FuncAttr *from);
 ST_FUNC void symbols_finish(void);
