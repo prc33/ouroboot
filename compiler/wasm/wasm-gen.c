@@ -2,8 +2,23 @@
    https://github.com/Blosc/minicc */
 #ifdef TARGET_DEFS_ONLY
 
-/* virtual register file for wasm backend */
-#define NB_REGS         12
+/* Value locals, not registers. The front end asks for a "register" to
+   hold a live value; on wasm that is just another local, which costs a
+   byte in the function header and nothing at runtime. So the pool is
+   sized for the deepest a C expression realistically nests rather than
+   for what a CPU has -- wasm/wasm-regalloc.c only spills to a frame slot
+   when a caller demands a specific local be vacated, never merely
+   because it ran out. The old four-per-class file ran out compiling an
+   ordinary nested arithmetic expression.
+
+   Indices are contiguous per class and must stay below VT_CONST (0x30),
+   where the value stack's own encoding begins. */
+#define WASM_NB_I32_REGS 20
+#define WASM_NB_I64_REGS 10
+#define WASM_NB_F64_REGS 10
+#define WASM_REG_I64_BASE WASM_NB_I32_REGS
+#define WASM_REG_F64_BASE (WASM_REG_I64_BASE + WASM_NB_I64_REGS)
+#define NB_REGS (WASM_REG_F64_BASE + WASM_NB_F64_REGS)
 #define ASM_DOLLAR_IN_IDENTIFIERS 0
 
 /* register classes: keep INT and FLOAT separate to match tccgen expectations */
@@ -23,17 +38,11 @@
 
 enum {
     TREG_I0 = 0,
-    TREG_I1,
-    TREG_I2,
-    TREG_I3,
-    TREG_L0,
-    TREG_L1,
-    TREG_L2,
-    TREG_L3,
-    TREG_F0,
-    TREG_F1,
-    TREG_F2,
-    TREG_F3
+    TREG_I1 = 1,
+    TREG_L0 = WASM_REG_I64_BASE,
+    TREG_L1 = WASM_REG_I64_BASE + 1,
+    TREG_F0 = WASM_REG_F64_BASE,
+    TREG_F1 = WASM_REG_F64_BASE + 1
 };
 
 #define REG_IRET TREG_I0
@@ -68,19 +77,18 @@ ST_DATA const char * const target_machine_defs =
     "__wasm__\0"
     ;
 
+/* One entry per value local: the class it belongs to, plus the singleton
+   classes the ABI needs in order to name a specific one (return values). */
+#define WASM_RC_I32(i) (RC_INT   | ((i) == 0 ? RC_I0 : (i) == 1 ? RC_I1 : 0))
+#define WASM_RC_I64(i) (RC_I64   | ((i) == 0 ? RC_L0 : 0))
+#define WASM_RC_F64(i) (RC_FLOAT | ((i) == 0 ? RC_F0 : (i) == 1 ? RC_F1 : 0))
+#define R4(m, i)  m(i), m((i) + 1), m((i) + 2), m((i) + 3)
+#define R10(m, i) R4(m, i), R4(m, (i) + 4), m((i) + 8), m((i) + 9)
+#define R20(m, i) R10(m, i), R10(m, (i) + 10)
 ST_DATA const int reg_classes[NB_REGS] = {
-    RC_INT | RC_I0,
-    RC_INT | RC_I1,
-    RC_INT,
-    RC_INT,
-    RC_I64 | RC_L0,
-    RC_I64,
-    RC_I64,
-    RC_I64,
-    RC_FLOAT | RC_F0,
-    RC_FLOAT | RC_F1,
-    RC_FLOAT,
-    RC_FLOAT,
+    R20(WASM_RC_I32, 0),
+    R10(WASM_RC_I64, 0),
+    R10(WASM_RC_F64, 0),
 };
 
 ST_DATA WasmFuncIR *tcc_wasm_funcs;

@@ -836,3 +836,49 @@ int test_switch_loops_inside_case(void)
     }
     return r;
 }
+
+/* ---------------------------------------------------------------- */
+/* Value-local pressure. wasm/wasm-regalloc.c hands out one wasm local
+ * per live value and never spills -- running out is a hard error, not
+ * slow code -- so the pool has to be deep enough for real expression
+ * nesting. With the four-per-class file the register targets use,
+ * test_vl_deep_nest below failed to compile outright. */
+
+static int vl_f(int x) { return x * 2 + 1; }
+
+int test_vl_deep_nest(void)
+{
+    int a=1,b=2,c=3,d=4,e=5,f=6,g=7,h=8;
+    return ((a+b)*(c+d)) + ((e+f)*(g+h))
+         + (((a*b)+(c*d))*((e*f)+(g*h)))
+         + (a+(b*(c+(d*(e+(f*(g+h)))))));
+}
+
+int test_vl_many_live(void)
+{
+    int v0=0,v1=1,v2=2,v3=3,v4=4,v5=5,v6=6,v7=7,v8=8,v9=9;
+    return (v0+v1)+(v2+v3)+(v4+v5)+(v6+v7)+(v8+v9)
+         + (v0*v9)+(v1*v8)+(v2*v7)+(v3*v6)+(v4*v5);
+}
+
+int test_vl_mixed_classes(void)
+{
+    /* int, double and long long live at once: exercises all three
+     * class ranges of the pool simultaneously. */
+    int i1=1,i2=2; double d1=1.5,d2=2.5; long long l1=10,l2=20;
+    return (int)((i1+i2) + (d1*d2) + (double)(l1+l2) + (i1*i2) + (d1-d2));
+}
+
+int test_vl_nested_calls(void)
+{
+    int a=1,b=2,c=3;
+    return vl_f(a+b) + vl_f(b+c) + vl_f(vl_f(a)+vl_f(b)) + vl_f(a*b*c);
+}
+
+int test_vl_ternary_chain(void)
+{
+    /* The ternary is the one place the front end calls move_reg() to make
+     * two branches agree on a location. */
+    int a=1,b=2,c=3,d=4;
+    return (a<b ? c+d : c-d) + (b<c ? a+d : a-d) + (c<d ? (a<b?1:2) : (a<b?3:4));
+}

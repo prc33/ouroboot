@@ -11,5 +11,8 @@ ST_FUNC int gv(int rc);
 ST_FUNC void gv2(int rc1, int rc2);
 ST_FUNC void gv_dup(void);
 ST_FUNC int adjust_bf(SValue *, int, int);
+/* Shared with regalloc.c's gv(), which is a separate translation unit
+   (and one wasm does not compile at all -- see registers.h's own note). */
+ST_FUNC void load_packed_bf(CType *type, int bit_pos, int bit_size);
 ST_FUNC void store_packed_bf(int, int);
 #endif

@@ -34,14 +34,19 @@ else ifeq ($(TARGET),riscv64)
 BACKEND_SRCS = risc/riscv64-gen.c risc/riscv64-link.c risc/riscv64-asm.c
 RUNTIME_SRCS = risc/riscv64-softquad.c
 else ifeq ($(TARGET),wasm32)
-BACKEND_SRCS = wasm/wasm-gen.c wasm/wasm-link.c wasm/tccwasm.c
+BACKEND_SRCS = wasm/wasm-gen.c wasm/wasm-link.c wasm/tccwasm.c wasm/wasm-regalloc.c
 else
 $(error unsupported TARGET '$(TARGET)')
 endif
 
 COMMON_SRCS = tcc.c utils.c tccpp.c tccgen.c expr.c symbols.c types.c vstack.c registers.c optimise.c tccelf.c tcctools.c
 ifneq ($(TARGET),wasm32)
-COMMON_SRCS += tccasm.c
+# The register machine (get_reg/save_reg/gv/gv2/gv_dup) and the integrated
+# assembler are both register-target only. wasm supplies its own
+# implementations of the former from wasm/wasm-regalloc.c -- see
+# registers.h -- so tccgen.c's gv() calls reach vstack-native code
+# instead of an allocator wasm has no use for.
+COMMON_SRCS += tccasm.c regalloc.c
 endif
 COMPILER_SRCS = $(COMMON_SRCS) $(BACKEND_SRCS)
 BUILD_DIR = build/$(TARGET)

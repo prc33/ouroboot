@@ -137,23 +137,23 @@ static void wb_memarg(WasmBuf *b, int align_log2)
 
 static int wasm_i32_reg_local(int reg, int local_i0)
 {
-    if (reg < 0 || reg > 3)
+    if (reg < 0 || reg >= WASM_NB_I32_REGS)
         tcc_error("wasm32 backend: invalid integer register %d", reg);
     return local_i0 + reg;
 }
 
 static int wasm_f64_reg_local(int reg, int local_f0)
 {
-    if (reg < 8 || reg > 11)
+    if (reg < WASM_REG_F64_BASE || reg >= NB_REGS)
         tcc_error("wasm32 backend: invalid floating register %d", reg);
-    return local_f0 + (reg - 8);
+    return local_f0 + (reg - WASM_REG_F64_BASE);
 }
 
 static int wasm_i64_reg_local(int reg, int local_tmp64)
 {
-    if (reg < 4 || reg > 7)
+    if (reg < WASM_REG_I64_BASE || reg >= WASM_REG_F64_BASE)
         tcc_error("wasm32 backend: invalid i64 register %d", reg);
-    return local_tmp64 - 4 + (reg - 4);
+    return local_tmp64 + (reg - WASM_REG_I64_BASE);
 }
 
 static int wasm_i32_bin_opcode(int op)
@@ -718,7 +718,7 @@ static void wasm_emit_case(const WasmEmitCtx *c, WasmBuf *b, WasmOp *op,
         break;
 
     case WASM_OP_MOV_I32:
-        if (op->r0 >= 4) {
+        if (op->r0 >= WASM_REG_I64_BASE) {
             dst = wasm_i64_reg_local(op->r0, local_tmp64);
             src = wasm_i32_reg_local(op->r1, local_i0);
             VS_BIND(src, VS_NO, dst);
@@ -728,7 +728,7 @@ static void wasm_emit_case(const WasmEmitCtx *c, WasmBuf *b, WasmOp *op,
             break;
         }
         dst = wasm_i32_reg_local(op->r0, local_i0);
-        if (op->r1 >= 4) {
+        if (op->r1 >= WASM_REG_I64_BASE) {
             src = wasm_i64_reg_local(op->r1, local_tmp64);
             VS_BIND(src, VS_NO, dst);
             VS_OP1(src, dst);
@@ -743,7 +743,7 @@ static void wasm_emit_case(const WasmEmitCtx *c, WasmBuf *b, WasmOp *op,
         break;
 
     case WASM_OP_MOV_I64:
-        if (op->r0 < 4) {
+        if (op->r0 < WASM_REG_I64_BASE) {
             dst = wasm_i32_reg_local(op->r0, local_i0);
             src = wasm_i64_reg_local(op->r1, local_tmp64);
             VS_BIND(src, VS_NO, dst);
@@ -753,7 +753,7 @@ static void wasm_emit_case(const WasmEmitCtx *c, WasmBuf *b, WasmOp *op,
             break;
         }
         dst = wasm_i64_reg_local(op->r0, local_tmp64);
-        if (op->r1 < 4) {
+        if (op->r1 < WASM_REG_I64_BASE) {
             src = wasm_i32_reg_local(op->r1, local_i0);
             VS_BIND(src, VS_NO, dst);
             VS_OP1(src, dst);
@@ -1357,17 +1357,18 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
     /* locals: control/i32 registers, f64 registers, native i64 registers
        plus one i64 scratch used by the remaining i32 carry helpers. */
     wb_uleb(&body, 3);
-    wb_uleb(&body, 8), wb_u8(&body, 0x7f);
-    wb_uleb(&body, 4), wb_u8(&body, 0x7c);
-    wb_uleb(&body, 5), wb_u8(&body, 0x7e);
+    /* pc/fp/cmp/carry, then the i32 value locals; then f64; then i64. */
+    wb_uleb(&body, 4 + WASM_NB_I32_REGS), wb_u8(&body, 0x7f);
+    wb_uleb(&body, WASM_NB_F64_REGS), wb_u8(&body, 0x7c);
+    wb_uleb(&body, WASM_NB_I64_REGS), wb_u8(&body, 0x7e);
 
     local_pc = f->nb_params;
     local_fp = local_pc + 1;
     local_cmp = local_fp + 1;
     local_carry = local_cmp + 1;
     local_i0 = local_carry + 1;
-    local_f0 = local_i0 + 4;
-    local_tmp64 = local_f0 + 8;
+    local_f0 = local_i0 + WASM_NB_I32_REGS;
+    local_tmp64 = local_f0 + WASM_NB_F64_REGS;
 
     /* Two emitter contexts, differing only in whether a block map is needed:
      * the structured path emits real wasm block/loop/br, the br_table
