@@ -131,6 +131,12 @@ $(RISCV64_USER_ELFS): user_test/%_riscv64.elf: user_test/%_riscv64.c
 		$(MUSL_DIR)/lib/crt1.o $(MUSL_DIR)/lib/crti.o $< \
 		$(MUSL_DIR)/lib/libc.a $(TCCDIR)/libtcc1.a $(MUSL_DIR)/lib/crtn.o
 
+# BusyBox is built by demo/build-busybox-riscv64.sh. Keep the generated
+# program out of Git, but make the initrd's dependency on that build output
+# explicit so a clean checkout needs no manual copy step.
+user_test/busybox_riscv64.elf: ../busybox-riscv64/busybox_unstripped
+	cp $< $@
+
 user_test/user_test_riscv64.elf: user_test/user_test_riscv64.c
 	$(TCC) -B$(TCCDIR) -nostdinc -nostdlib -static -Wl,-Ttext=0x800000 -o $@ $<
 
@@ -247,9 +253,9 @@ test-initrd: kernel.elf user_test/proc_fork_test_i386.elf
 # surface short of actually self-hosting TCC itself (that's
 # test-selfhost's own job, riscv64-only so far).
 #
-# user_test/busybox_i386.elf isn't built by this Makefile (same as
-# user_test/busybox_riscv64.elf never has been -- see .gitignore, both
-# are real ~500KB+ binaries, deliberately not committed): run
+# user_test/busybox_i386.elf isn't built by this Makefile (unlike the RISC-V
+# copy rule above, which takes demo/build-busybox-riscv64.sh's output). It is
+# a real ~500KB+ binary, deliberately not committed: run
 # `demo/build-busybox-i386.sh` (needs `../compiler/tcc` already built
 # TARGET=i386 and ../musl-i386 already built) and copy the resulting
 # demo/busybox/busybox_unstripped here first.

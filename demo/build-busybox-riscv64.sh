@@ -70,9 +70,8 @@ echo "SUCCESS"
 echo ""
 echo "=== smoke test: real applets via qemu-riscv64-static ==="
 if command -v qemu-riscv64-static >/dev/null; then
-	mv busybox_unstripped busybox 2>/dev/null || true
-	ln -sf busybox ash
-	echo "  echo:"; qemu-riscv64-static ./busybox echo "  it works"
+	ln -sf busybox_unstripped ash
+	echo "  echo:"; qemu-riscv64-static ./busybox_unstripped echo "  it works"
 	echo "  ash (shell, arithmetic, pipes):"
 	qemu-riscv64-static ./ash -c '
 	echo "line1" > /tmp/bbsmoke.txt; echo "line2" >> /tmp/bbsmoke.txt
@@ -83,4 +82,4 @@ else
 fi
 
 echo ""
-echo "busybox built at: $BB_DIR/busybox"
+echo "busybox built at: $BB_DIR/busybox_unstripped"
