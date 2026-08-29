@@ -77,6 +77,38 @@ enum {
 #define WASM_OP_FLAG_INVERT 0x0002
 #define WASM_OP_FLAG_UNSIGNED 0x0100
 
+typedef struct WasmBuf {
+    unsigned char *data;
+    int len;
+    int cap;
+} WasmBuf;
+
+ST_FUNC int wasm_align_up(int v, int a);
+ST_FUNC void wb_reserve(WasmBuf *b, int add);
+ST_FUNC void wb_u8(WasmBuf *b, int v);
+ST_FUNC void wb_mem(WasmBuf *b, const void *p, int n);
+ST_FUNC void wb_uleb(WasmBuf *b, unsigned v);
+ST_FUNC void wb_sleb(WasmBuf *b, int v);
+ST_FUNC void wb_sleb64(WasmBuf *b, int64_t v);
+ST_FUNC void wb_f64(WasmBuf *b, double x);
+ST_FUNC int wasm_valtype_byte(int t);
+ST_FUNC void wb_local_get(WasmBuf *b, int idx);
+ST_FUNC void wb_local_set(WasmBuf *b, int idx);
+ST_FUNC void wb_local_tee(WasmBuf *b, int idx);
+ST_FUNC void wb_global_get(WasmBuf *b, int idx);
+ST_FUNC void wb_global_set(WasmBuf *b, int idx);
+ST_FUNC void wb_i32_const(WasmBuf *b, int v);
+ST_FUNC void wb_i64_const(WasmBuf *b, int64_t v);
+ST_FUNC void wb_f64_const(WasmBuf *b, double v);
+ST_FUNC void wb_memarg(WasmBuf *b, int align_log2);
+ST_FUNC int wasm_i32_bin_opcode(int op);
+ST_FUNC int wasm_i32_cmp_opcode(int op);
+ST_FUNC int wasm_i64_bin_opcode(int op);
+ST_FUNC int wasm_i64_cmp_opcode(int op);
+ST_FUNC int wasm_f32_cmp_opcode(int op);
+ST_FUNC int wasm_f64_cmp_opcode(int op);
+ST_FUNC int wasm_f_bin_opcode(int op, int is_f32);
+
 #define WASM_MAX_CALL_ARGS 32
 typedef struct WasmOp {
     int pc;

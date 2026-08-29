@@ -34,7 +34,7 @@ else ifeq ($(TARGET),riscv64)
 BACKEND_SRCS = risc/riscv64-gen.c risc/riscv64-link.c risc/riscv64-asm.c
 RUNTIME_SRCS = risc/riscv64-softquad.c
 else ifeq ($(TARGET),wasm32)
-BACKEND_SRCS = wasm/wasm-gen.c wasm/wasm-link.c wasm/tccwasm.c wasm/wasm-regalloc.c
+BACKEND_SRCS = wasm/wasm-gen.c wasm/wasm-link.c wasm/tccwasm.c wasm/wasm-regalloc.c wasm/wasm-emit.c
 else
 $(error unsupported TARGET '$(TARGET)')
 endif
