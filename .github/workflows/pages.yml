@@ -26,6 +26,8 @@ jobs:
           ./demo/build-musl-riscv64.sh
           ./demo/build-busybox-riscv64.sh
           make -C kernel ARCH=riscv64 kernel.elf tcc-initrd
+          test -s kernel/kernel.elf
+          test -s kernel/tcc-initrd.tar
           make -C compiler TARGET=wasm32
           make -C emulator
           make -C emulator test
