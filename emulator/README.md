@@ -28,6 +28,11 @@ targets does not require a clean build.
 
 ## Browser demo
 
+The published demo is available at
+[prc33.github.io/ouroboot](https://prc33.github.io/ouroboot/). GitHub Actions
+builds and publishes the complete kernel, initrd, and WebAssembly emulator on
+every push to `main`.
+
 Build the freestanding Wasm module with this repository's wasm32 TCC backend:
 
 ```sh

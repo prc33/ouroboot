@@ -1,0 +1,51 @@
+name: Publish browser demo
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - name: Build compiler, userspace, kernel, and WebAssembly emulator
+        run: |
+          make -C compiler TARGET=riscv64
+          ./demo/build-musl-riscv64.sh
+          ./demo/build-busybox-riscv64.sh
+          make -C kernel ARCH=riscv64 kernel.elf tcc-initrd
+          make -C compiler TARGET=wasm32
+          make -C emulator
+          make -C emulator test
+      - name: Assemble Pages site
+        run: |
+          mkdir -p site/emulator site/kernel site/assets
+          cp -a emulator/web site/emulator/
+          cp kernel/kernel.elf kernel/tcc-initrd.tar site/kernel/
+          cp pages/index.html pages/.nojekyll site/
+          cp assets/ouroboot-logo.png site/assets/
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

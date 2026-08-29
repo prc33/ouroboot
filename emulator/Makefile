@@ -19,18 +19,16 @@ rv64-run: runner.c rv64.c
 
 test: test-boot test-shell
 
-# kernel.elf is the product boot (no historical checkpoint chain --
-# see docs/kernel-complexity-review.md section 1), so the smoke check
-# here is that it reaches a real interactive ash session, not the old
-# "P5 checkpoint 2 OK" milestone from before that boot existed.
+# kernel.elf is the direct product boot, so this smoke check reaches a real
+# interactive ash session using the same self-hosting initrd as the browser demo.
 test-boot: $(RV64_WASM)
 	node test/boot.mjs ../kernel/kernel.elf 200000000 '' 'built-in shell (ash)' \
-		../kernel/initrd.tar
+		../kernel/tcc-initrd.tar
 
 test-shell: $(RV64_WASM)
 	node test/boot.mjs ../kernel/kernel.elf 200000000 \
 		'\r\recho hello ash\rls\recho writable-fs-works > wtest\rls\rexit 7\r' \
-		'process: all processes exited' ../kernel/initrd.tar
+		'process: all processes exited' ../kernel/tcc-initrd.tar
 
 # Exercises the browser-hosted fetch device without relying on the public
 # network: Node's data: URL support follows the same asynchronous host path.

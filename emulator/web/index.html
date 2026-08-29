@@ -11,16 +11,22 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>riscv64 self-hosting-system -- browser emulator</title>
+<title>Ouroboot — self-hosting RISC-V64 in your browser</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5/css/xterm.css">
 <style>
-	body { background: #1e1e1e; margin: 0; padding: 16px; font-family: sans-serif; color: #ccc; }
-	h1 { font-size: 1rem; font-weight: normal; color: #888; }
-	#terminal { padding: 8px; background: #000; }
+	body { background: #101813; margin: 0; padding: 16px; font-family: system-ui, sans-serif; color: #d7e5da; }
+	header { display: flex; align-items: center; gap: 12px; max-width: 1000px; margin: 0 auto 12px; }
+	header img { width: 48px; height: 48px; }
+	h1 { font-size: 1rem; font-weight: 600; margin: 0; }
+	p { color: #91a99a; font-size: .85rem; margin: 3px 0 0; }
+	#terminal { max-width: 1000px; margin: auto; padding: 8px; background: #000; }
 </style>
 </head>
 <body>
-<h1>self-hosting-system / riscv64 -- C emulator compiled to WebAssembly</h1>
+<header>
+  <img src="../../assets/ouroboot-logo.png" alt="Ouroboot logo">
+  <div><h1>Ouroboot</h1><p>self-hosting RISC-V64, running in your browser</p></div>
+</header>
 <div id="terminal"></div>
 <script src="https://cdn.jsdelivr.net/npm/xterm@5/lib/xterm.js"></script>
 <script src="app.js"></script>
