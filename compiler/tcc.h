@@ -267,21 +267,6 @@ typedef struct CString {
     int size_allocated;
 } CString;
 
-#include "types.h"
-
-/* constant value */
-typedef union CValue {
-    long double ld;
-    double d;
-    float f;
-    uint64_t i;
-    struct {
-        const void *data;
-        int size;
-    } str;
-    int tab[LDOUBLE_SIZE/4];
-} CValue;
-
 #include "vstack.h"
 
 /* symbol attributes */

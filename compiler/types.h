@@ -60,6 +60,18 @@ typedef struct CType {
     struct Sym *ref;
 } CType;
 
+typedef union CValue {
+    long double ld;
+    double d;
+    float f;
+    uint64_t i;
+    struct {
+        const void *data;
+        int size;
+    } str;
+    int tab[LDOUBLE_SIZE / 4];
+} CValue;
+
 struct SValue;
 
 ST_INLN int is_float(int t);

@@ -1,6 +1,8 @@
 #ifndef TCC_VSTACK_H
 #define TCC_VSTACK_H
 
+#include "types.h"
+
 typedef struct SValue {
     CType type;
     unsigned short r;
