@@ -1,6 +1,10 @@
 #ifndef TCC_UTILS_H
 #define TCC_UTILS_H
 
+/* Available in C99, but some host headers hide them in older language modes. */
+extern float strtof(const char *str, char **endptr);
+extern long double strtold(const char *str, char **endptr);
+
 typedef int nwchar_t;
 
 #define IO_BUF_SIZE 8192
