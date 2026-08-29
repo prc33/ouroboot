@@ -30,7 +30,7 @@ upstream build trees are not part of the repository count.
 |---|---:|---:|---|
 | Emulator | 1,000 hard limit | 939 | Within limit |
 | Kernel | 10,000 hard limit | 9,510 | Within limit |
-| Compiler | 25,000 target; 20,000 stretch | 30,360 | Not yet attained |
+| Compiler | 25,000 target; 20,000 stretch | 30,353 | Not yet attained |
 
 New functionality must stay within the emulator and kernel limits. Compiler
 work should reduce the current count while preserving standard C, ELF output
@@ -38,7 +38,7 @@ for i386/RISC-V64, and the freestanding wasm32 backend.
 
 ### Compiler interface cleanup
 
-This change reduces compiler source by 89 lines overall (30,449 to 30,360).
+This change reduces compiler source by 96 lines overall (30,449 to 30,353).
 The new headers replace broad `tcc.h` inclusion with the smallest shared
 platform and target-definition interfaces. `registers.c` deliberately remains
 on `tcc.h`: its code-generation/backend boundary has not yet been extracted.
@@ -54,7 +54,9 @@ on `tcc.h`: its code-generation/backend boundary has not yet been extracted.
 | `tccelf.c` / `tccelf.h` | 2,506 | 2,591 | +85 | ELF and archive format/API |
 | `tcctools.c` | 317 | 270 | -47 | archive writer |
 | `tcc.c` | 1,553 | 1,580 | +27 | compiler driver and dependency output |
-| `tcc.h` | 980 | 918 | -62 | remaining compiler-wide state/API |
+| `tccpp.c` / `parsing.h` | 3,822 | 3,811 | -11 | preprocessor and token structures |
+| `utils.c` / `utils.h` | 259 | 304 | +45 | memory, strings, and input buffers |
+| `tcc.h` | 980 | 878 | -102 | remaining compiler-wide state/API |
 | `libtcc.h` | 79 | — | -79 | removed unused library API |
 | `registers.h` | 14 | 15 | +1 | register allocator API |
 

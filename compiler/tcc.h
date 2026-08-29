@@ -228,42 +228,6 @@ typedef struct DLLReference {
 #define TYPE_ABSTRACT  1 /* type without variable */
 #define TYPE_DIRECT    2 /* type with variable */
 
-#define IO_BUF_SIZE 8192
-
-typedef struct BufferedFile {
-    uint8_t *buf_ptr;
-    uint8_t *buf_end;
-    int fd;
-    struct BufferedFile *prev;
-    int line_num;    /* current line number - here to simplify code */
-    int line_ref;    /* tcc -E: last printed line */
-    int ifndef_macro;  /* #ifndef macro / #endif search */
-    int ifndef_macro_saved; /* saved ifndef_macro */
-    int *ifdef_stack_ptr; /* ifdef_stack value at the start of the file */
-    int include_next_index; /* next search path */
-    char filename[1024];    /* filename */
-    char *true_filename; /* filename not modified by # line directive */
-    unsigned char unget[4];
-    unsigned char buffer[1]; /* extra size for CH_EOB char */
-} BufferedFile;
-
-#define CH_EOB   '\\'       /* end of buffer or '\0' char in file */
-#define CH_EOF   (-1)   /* end of file */
-
-/* used to record tokens */
-typedef struct TokenString {
-    int *str;
-    int len;
-    int lastlen;
-    int allocated_len;
-    int last_line_num;
-    int save_line_num;
-    /* used to chain token-strings with begin/end_macro() */
-    struct TokenString *prev;
-    const int *prev_ptr;
-    char alloc;
-} TokenString;
-
 /* inline functions */
 typedef struct InlineFunc {
     TokenString *func_str;

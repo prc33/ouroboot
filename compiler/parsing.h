@@ -32,6 +32,18 @@ typedef union CValue {
     int tab[LDOUBLE_SIZE / 4];
 } CValue;
 
+typedef struct TokenString {
+    int *str;
+    int len;
+    int lastlen;
+    int allocated_len;
+    int last_line_num;
+    int save_line_num;
+    struct TokenString *prev;
+    const int *prev_ptr;
+    char alloc;
+} TokenString;
+
 
 /* token values */
 

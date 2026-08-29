@@ -207,6 +207,24 @@ ST_FUNC void cstr_reset(CString *cstr)
     cstr->size = 0;
 }
 
+ST_FUNC void add_char(CString *cstr, int c)
+{
+    if (c == '\'' || c == '\"' || c == '\\')
+        cstr_ccat(cstr, '\\');
+    if (c >= 32 && c <= 126)
+        cstr_ccat(cstr, c);
+    else {
+        cstr_ccat(cstr, '\\');
+        if (c == '\n')
+            cstr_ccat(cstr, 'n');
+        else {
+            cstr_ccat(cstr, '0' + ((c >> 6) & 7));
+            cstr_ccat(cstr, '0' + ((c >> 3) & 7));
+            cstr_ccat(cstr, '0' + (c & 7));
+        }
+    }
+}
+
 ST_FUNC int cstr_printf(CString *cstr, const char *fmt, ...)
 {
     va_list v;
