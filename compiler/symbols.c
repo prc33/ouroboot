@@ -320,6 +320,116 @@ ST_FUNC void merge_funcattr(struct FuncAttr *to, struct FuncAttr *from)
         to->func_dtor = 1;
 }
 
+static void patch_type(Sym *sym, CType *type)
+{
+    if (!(type->t & VT_EXTERN) || IS_ENUM_VAL(sym->type.t)) {
+        if (!(sym->type.t & VT_EXTERN))
+            tcc_error("redefinition of '%s'", get_tok_str(sym->v, NULL));
+        sym->type.t &= ~VT_EXTERN;
+    }
+
+    if (IS_ASM_SYM(sym)) {
+        sym->type.t = type->t & (sym->type.t | ~VT_STATIC);
+        sym->type.ref = type->ref;
+    }
+
+    if (!is_compatible_types(&sym->type, type)) {
+        tcc_error("incompatible types for redefinition of '%s'",
+                  get_tok_str(sym->v, NULL));
+    } else if ((sym->type.t & VT_BTYPE) == VT_FUNC) {
+        int static_proto = sym->type.t & VT_STATIC;
+
+        if ((type->t & VT_STATIC) && !static_proto
+            && !((type->t | sym->type.t) & VT_INLINE))
+            tcc_warning("static storage ignored for redefinition of '%s'",
+                        get_tok_str(sym->v, NULL));
+        if ((type->t | sym->type.t) & VT_INLINE) {
+            if (!((type->t ^ sym->type.t) & VT_INLINE)
+                || ((type->t | sym->type.t) & VT_STATIC))
+                static_proto |= VT_INLINE;
+        }
+
+        if (!(type->t & VT_EXTERN)) {
+            struct FuncAttr f = sym->type.ref->f;
+            sym->type.t = (type->t & ~(VT_STATIC | VT_INLINE)) | static_proto;
+            sym->type.ref = type->ref;
+            merge_funcattr(&sym->type.ref->f, &f);
+        } else {
+            sym->type.t &= ~VT_INLINE | static_proto;
+        }
+        if (sym->type.ref->f.func_type == FUNC_OLD
+            && type->ref->f.func_type != FUNC_OLD)
+            sym->type.ref = type->ref;
+    } else {
+        if ((sym->type.t & VT_ARRAY) && type->ref->c >= 0)
+            sym->type.ref->c = type->ref->c;
+        if ((type->t ^ sym->type.t) & VT_STATIC)
+            tcc_warning("storage mismatch for redefinition of '%s'",
+                        get_tok_str(sym->v, NULL));
+    }
+}
+
+ST_FUNC void patch_storage(Sym *sym, AttributeDef *ad, CType *type)
+{
+    if (type)
+        patch_type(sym, type);
+    merge_symattr(&sym->a, &ad->a);
+    if (ad->asm_label)
+        sym->asm_label = ad->asm_label;
+    update_storage(sym);
+}
+
+static Sym *sym_copy(Sym *source, Sym **stack)
+{
+    Sym *copy = sym_malloc();
+
+    *copy = *source;
+    copy->prev = *stack;
+    *stack = copy;
+    if (copy->v < SYM_FIRST_ANOM) {
+        stack = &table_ident[copy->v - TOK_IDENT]->sym_identifier;
+        copy->prev_tok = *stack;
+        *stack = copy;
+    }
+    return copy;
+}
+
+static void sym_copy_ref(Sym *sym, Sym **stack)
+{
+    int bt = sym->type.t & VT_BTYPE;
+
+    if (bt == VT_FUNC || bt == VT_PTR) {
+        Sym **next = &sym->type.ref;
+        for (sym = *next, *next = NULL; sym; sym = sym->next) {
+            Sym *copy = sym_copy(sym, stack);
+            next = &(*next = copy)->next;
+            sym_copy_ref(copy, stack);
+        }
+    }
+}
+
+ST_FUNC Sym *external_sym(int v, CType *type, int r, AttributeDef *ad)
+{
+    Sym *sym = sym_find(v);
+
+    while (sym && sym->sym_scope)
+        sym = sym->prev_tok;
+    if (!sym) {
+        sym = global_identifier_push(v, type->t, 0);
+        sym->r |= r;
+        sym->a = ad->a;
+        sym->asm_label = ad->asm_label;
+        sym->type.ref = type->ref;
+        if (local_stack)
+            sym_copy_ref(sym, &global_stack);
+    } else {
+        patch_storage(sym, ad, type);
+    }
+    if (local_stack && (sym->type.t & VT_BTYPE) != VT_FUNC)
+        sym = sym_copy(sym, &local_stack);
+    return sym;
+}
+
 /* pop symbols until top reaches 'b'.  If KEEP is non-zero don't really
    pop them yet from the list, but do remove them from the token array.  */
 ST_FUNC void sym_pop(Sym **ptop, Sym *b, int keep)

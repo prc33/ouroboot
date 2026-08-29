@@ -3,6 +3,8 @@
 
 #include "types.h"
 
+struct AttributeDef;
+
 /* symbol attributes */
 struct SymAttr {
     unsigned short
@@ -92,6 +94,8 @@ ST_INLN Sym *struct_find(int v);
 ST_INLN Sym *sym_find(int v);
 ST_FUNC Sym *global_identifier_push(int v, int t, int c);
 ST_FUNC Sym *external_global_sym(int v, CType *type);
+ST_FUNC Sym *external_sym(int v, CType *type, int r, struct AttributeDef *ad);
+ST_FUNC void patch_storage(Sym *sym, struct AttributeDef *ad, CType *type);
 ST_FUNC void merge_symattr(struct SymAttr *to, struct SymAttr *from);
 ST_FUNC void merge_funcattr(struct FuncAttr *to, struct FuncAttr *from);
 ST_FUNC void symbols_finish(void);
