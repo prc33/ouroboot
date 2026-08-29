@@ -65,3 +65,14 @@ static unsigned char byte_array[4096];
 unsigned int byte_array_ptr(void) { return (unsigned int)byte_array; }
 unsigned int byte_array_read(unsigned int i) { return byte_array[i]; }
 unsigned long long byte_array_read64(unsigned int i) { return *(unsigned long long *)(byte_array + i); }
+
+int dense_switch(int x)
+{
+    switch (x) {
+    case 2: return 20;
+    case 3: return 30;
+    case 5: return 50;
+    case 6: return 60;
+    default: return -1;
+    }
+}

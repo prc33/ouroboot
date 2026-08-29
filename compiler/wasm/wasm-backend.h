@@ -60,6 +60,7 @@ enum {
     WASM_OP_SET_I32_FROM_CMP,
     WASM_OP_JMP,
     WASM_OP_JMP_CMP,
+    WASM_OP_SWITCH,
     WASM_OP_ITOF_F32,
     WASM_OP_ITOF_F64,
     WASM_OP_I64_TOF_F32,
@@ -90,6 +91,9 @@ typedef struct WasmOp {
     int64_t i64;
     int op;
     int target_pc;
+    int switch_min;
+    int switch_count;
+    int *switch_targets;
     double f64;
     int sym_index;
     int sym_tok;

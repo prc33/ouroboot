@@ -979,6 +979,31 @@ static void wasm_emit_case(WasmBuf *b, WasmFuncIR *f, WasmOp *op,
         }
         return;
 
+    case WASM_OP_SWITCH:
+    {
+        int i, bi, depth;
+        wb_local_get(b, wasm_i32_reg_local(op->r0, local_i0));
+        if (op->switch_min) {
+            wb_i32_const(b, op->switch_min);
+            wb_u8(b, 0x6b); /* i32.sub */
+        }
+        wb_u8(b, 0x0e); /* br_table */
+        wb_uleb(b, op->switch_count);
+        for (i = 0; i < op->switch_count; ++i) {
+            int pc = op->switch_targets[i] >= 0 ? op->switch_targets[i]
+                                                 : op->target_pc;
+            target_index = wasm_pc_to_index(f, pc);
+            bi = target_index < f->nb_ops ? op_to_block[target_index] : nb_blocks;
+            depth = bi == nb_blocks ? loop_depth - 1 : cur_block - bi - 1;
+            wb_uleb(b, depth);
+        }
+        target_index = wasm_pc_to_index(f, op->target_pc);
+        bi = target_index < f->nb_ops ? op_to_block[target_index] : nb_blocks;
+        depth = bi == nb_blocks ? loop_depth - 1 : cur_block - bi - 1;
+        wb_uleb(b, depth);
+        return;
+    }
+
     case WASM_OP_ITOF_F32:
         dst = wasm_f64_reg_local(op->r0, local_f0);
         {
@@ -1176,6 +1201,17 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
                     is_leader[target] = 1;
                 if (i + 1 < f->nb_ops)
                     is_leader[i + 1] = 1;
+            } else if (op->kind == WASM_OP_SWITCH) {
+                int j, target;
+                target = wasm_pc_to_index(f, op->target_pc);
+                if (target >= 0 && target < f->nb_ops) is_leader[target] = 1;
+                for (j = 0; j < op->switch_count; ++j) {
+                    target = wasm_pc_to_index(f, op->switch_targets[j] >= 0
+                                                ? op->switch_targets[j]
+                                                : op->target_pc);
+                    if (target >= 0 && target < f->nb_ops) is_leader[target] = 1;
+                }
+                if (i + 1 < f->nb_ops) is_leader[i + 1] = 1;
             } else if (op->kind == WASM_OP_RET) {
                 if (i + 1 < f->nb_ops)
                     is_leader[i + 1] = 1;
@@ -1293,6 +1329,9 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
          * expressed in wasm structured control flow.  Fall back to the
          * switch-loop dispatch for such functions. */
         int use_structured = 1;
+        for (i = 0; i < f->nb_ops; ++i)
+            if (f->ops[i].kind == WASM_OP_SWITCH)
+                use_structured = 0;
         for (b_idx = 0; b_idx < nb_blocks && use_structured; b_idx++) {
             int succs[2], ns2 = 0;
             if (blk_succ0[b_idx] > b_idx && blk_succ0[b_idx] < nb_blocks)

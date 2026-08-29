@@ -2738,6 +2738,11 @@ static int case_cmp(const void *pa, const void *pb)
 
 static void gcase(struct case_t **base, int len, int *bsym)
 {
+#ifdef TCC_TARGET_WASM32
+    if (wasm_gen_switch((struct switch_case **)base, len, bsym,
+                        (vtop->type.t & VT_BTYPE) == VT_LLONG))
+        return;
+#endif
     struct switch_gen_ops ops = { gjmp_acs, gsym_addr, gsym,
                                   TOK_LE, TOK_GE, TOK_EQ };
     gen_switch((struct switch_case **)base, len, bsym,
