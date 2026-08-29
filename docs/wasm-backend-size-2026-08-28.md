@@ -435,3 +435,80 @@ loads-into shape — the arms a control-flow-weighted corpus never reached),
 plus the full 8-target regression suite on i386 and riscv64, including
 `test-wasm` booting the rebuilt module to `P10 checkpoint OK` through a
 live BusyBox shell.
+
+---
+
+## Addendum: the recovery pass wasn't just complex — it was wrong
+
+Prompted by: *"can we now remove the logic that looks for if statements and
+loops … I'm hoping the 'fallback' will be sufficient now that we have the
+extra info."*
+
+Measured first. Forcing every function onto the dispatch fallback is
+**correct but ~57% slower** (60M emulated instructions: 7.60s → 12.0s) and
+7.6% larger. The old "52% slower" figure still holds, so "sufficient"
+would have been a real regression on the browser demo.
+
+But the measurement turned up something worse. **Every one of the six
+functions taking the fallback was the emulator's hot path** — `execute`,
+`load`, `store`, `rv_run`, `rv_init`, `flush_tlb` — and five of them were
+being rejected over `for (i = 0; i < n; i++)`.
+
+### Two facts the front end had and wasn't passing on
+
+**1. A loop's continue target.** tccgen.c emits a for-loop rotated:
+increment *before* body, jump over it on entry. So the body's exit edge
+and every `continue` run backwards by position into the increment. The
+guard accepted a backward edge only when it targeted a loop *header*, and
+could not tell this apart from a jump into an already-closed scope. It
+rejected both — and with them the whole function. `flush_tlb()` is four
+lines long and was compiled the slow way.
+
+`gjmp_hint_loop_range()` now carries `cont`, which tccgen.c already had
+(it is the `d` that `gjmp_addr`/`gsym_addr` use). The backend undoes the
+rotation: emit `[condition][body][increment]`, and the backward edge
+becomes a fallthrough while the increment's becomes the one repeat edge.
+
+**2. A switch's layout.** tccgen.c emits `[jump to lookup][bodies][lookup]
+[break]`, because `gcase()` can only build the comparison chain once every
+case value is known. So every edge selecting a case runs backwards into a
+closed scope — not expressible in structured control flow at all. New
+`gjmp_hint_switch_range()` says which region is which; the backend swaps
+them, and each becomes a forward branch out of a block scope, which is
+exactly the nested-blocks shape a switch should compile to.
+
+Both are pure block-reordering: no op moves, ranges stay contiguous, and
+inner constructs travel as one piece (hints arrive innermost-first).
+
+### A latent bug this exposed
+
+Opening one scope per case target hit fixed 64-entry arrays that silently
+dropped everything past the 64th — not a missed optimization but a `br`
+with nowhere to land. Now sized to the block count, and pinned by a new
+80-case corpus test that fails with `no scope for JMP target block 195`
+against the old limit.
+
+### Measured, `emulator/rv64.c`, 60M instructions
+
+| | fallbacks | time | module |
+|---|---:|---:|---:|
+| Before | 6 of 33 | 7.60s | 29,113 B |
+| + loop continue target | 1 of 33 | 5.86s | 28,529 B |
+| + switch layout | **0 of 33** | **4.17s** | **24,190 B** |
+
+**45% faster and 17% smaller**, and the dispatch fallback is now
+unreachable for this program — the 373-block instruction decoder called
+~294.6M times per boot is structured code.
+
+### On the original question
+
+The recovery pass did not shrink, and deleting it was the wrong move: it
+pays for itself several times over. What was actually wrong is that it was
+*inferring* two things the parser knew for certain and threw away, and
+guessing wrong on the commonest loop in C. That is the same lesson as
+`gjmp_hint_loop_range` itself, twice more — and it is why the fallback
+still exists, since `goto` can still produce control flow no hint makes
+structured.
+
+Verified: differential corpus 57/57 (four new switch stress cases), full
+8-target regression on i386 and riscv64 including `test-wasm`.

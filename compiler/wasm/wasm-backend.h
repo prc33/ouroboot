@@ -106,6 +106,12 @@ typedef struct WasmOp {
  * layout (whose two individually-jumped-to positions -- the condition
  * test and the increment -- both belong to the SAME loop) still yields
  * exactly one range, not two. */
+/* One switch statement's three regions, as tccgen.c laid them out --
+   see gjmp_hint_switch_range()'s own comment in tcc.h. */
+typedef struct WasmSwitchRange {
+    int bodies_pc, lookup_pc, end_pc;
+} WasmSwitchRange;
+
 typedef struct WasmLoopRange {
     int start_pc, end_pc;
     int cont_pc;        /* continue target -- see the hint's own comment */
@@ -130,6 +136,9 @@ typedef struct WasmFuncIR {
     WasmLoopRange *loops;
     int nb_loops;
     int cap_loops;
+    WasmSwitchRange *switches;
+    int nb_switches;
+    int cap_switches;
 } WasmFuncIR;
 
 extern WasmFuncIR *tcc_wasm_funcs;

@@ -677,3 +677,162 @@ int test_ty_shift64(void)
     v <<= 40;
     return (int)(v >> 32); /* 256 */
 }
+
+/* ---------------------------------------------------------------- */
+/* Switch stress. tccgen.c emits a switch as [bodies][lookup], so every
+ * edge selecting a case runs backwards into an already-closed scope;
+ * gjmp_hint_switch_range() lets the backend put the lookup back in
+ * front, turning each into a forward branch out of a block scope. That
+ * means one open scope per case target, and the arrays holding them
+ * used to be a fixed 64 entries that silently dropped the rest -- so a
+ * switch needs to be big enough here to have caught that. */
+
+int test_switch_many_cases(void)
+{
+    int i, r = 0;
+    for (i = 0; i < 80; i++) {
+        switch (i) {
+    case 0: r += 1; break;
+    case 1: r += 4; break;
+    case 2: r += 7; break;
+    case 3: r += 3; break;
+    case 4: r += 6; break;
+    case 5: r += 2; break;
+    case 6: r += 5; break;
+    case 7: r += 1; break;
+    case 8: r += 4; break;
+    case 9: r += 7; break;
+    case 10: r += 3; break;
+    case 11: r += 6; break;
+    case 12: r += 2; break;
+    case 13: r += 5; break;
+    case 14: r += 1; break;
+    case 15: r += 4; break;
+    case 16: r += 7; break;
+    case 17: r += 3; break;
+    case 18: r += 6; break;
+    case 19: r += 2; break;
+    case 20: r += 5; break;
+    case 21: r += 1; break;
+    case 22: r += 4; break;
+    case 23: r += 7; break;
+    case 24: r += 3; break;
+    case 25: r += 6; break;
+    case 26: r += 2; break;
+    case 27: r += 5; break;
+    case 28: r += 1; break;
+    case 29: r += 4; break;
+    case 30: r += 7; break;
+    case 31: r += 3; break;
+    case 32: r += 6; break;
+    case 33: r += 2; break;
+    case 34: r += 5; break;
+    case 35: r += 1; break;
+    case 36: r += 4; break;
+    case 37: r += 7; break;
+    case 38: r += 3; break;
+    case 39: r += 6; break;
+    case 40: r += 2; break;
+    case 41: r += 5; break;
+    case 42: r += 1; break;
+    case 43: r += 4; break;
+    case 44: r += 7; break;
+    case 45: r += 3; break;
+    case 46: r += 6; break;
+    case 47: r += 2; break;
+    case 48: r += 5; break;
+    case 49: r += 1; break;
+    case 50: r += 4; break;
+    case 51: r += 7; break;
+    case 52: r += 3; break;
+    case 53: r += 6; break;
+    case 54: r += 2; break;
+    case 55: r += 5; break;
+    case 56: r += 1; break;
+    case 57: r += 4; break;
+    case 58: r += 7; break;
+    case 59: r += 3; break;
+    case 60: r += 6; break;
+    case 61: r += 2; break;
+    case 62: r += 5; break;
+    case 63: r += 1; break;
+    case 64: r += 4; break;
+    case 65: r += 7; break;
+    case 66: r += 3; break;
+    case 67: r += 6; break;
+    case 68: r += 2; break;
+    case 69: r += 5; break;
+    case 70: r += 1; break;
+    case 71: r += 4; break;
+    case 72: r += 7; break;
+    case 73: r += 3; break;
+    case 74: r += 6; break;
+    case 75: r += 2; break;
+    case 76: r += 5; break;
+    case 77: r += 1; break;
+    case 78: r += 4; break;
+    case 79: r += 7; break;
+        default: r += 100; break;
+        }
+    }
+    return r;
+}
+
+int test_switch_nested_in_switch(void)
+{
+    int i, j, r = 0;
+    for (i = 0; i < 4; i++)
+        for (j = 0; j < 4; j++) {
+            switch (i) {
+            case 0: r += 1; break;
+            case 1:
+                switch (j) {
+                case 0: r += 10; break;
+                case 1: r += 20; break;
+                default: r += 30; break;
+                }
+                break;
+            case 2: r += 5; /* fallthrough */
+            case 3: r += 7; break;
+            default: r += 1000; break;
+            }
+        }
+    return r;
+}
+
+int test_switch_goto_out(void)
+{
+    /* goto escaping a switch from inside a loop: the edge leaves both
+     * the case scope and the loop, which is where scope nesting has to
+     * be got right rather than merely opened. */
+    int i, r = 0;
+    for (i = 0; i < 10; i++) {
+        switch (i) {
+        case 3: goto done;
+        case 1: r += 2; break;
+        default: r += 1; break;
+        }
+    }
+done:
+    return r;
+}
+
+int test_switch_loops_inside_case(void)
+{
+    int i, k, r = 0;
+    for (i = 0; i < 3; i++) {
+        switch (i) {
+        case 0:
+            for (k = 0; k < 5; k++) r += k;
+            break;
+        case 1:
+            k = 0;
+            while (k < 4) { r += 2; k++; }
+            break;
+        default:
+            do { r += 100; } while (0);
+            break;
+        }
+    }
+    return r;
+}

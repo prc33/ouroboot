@@ -179,6 +179,7 @@ ST_FUNC void tcc_wasm_reset(void)
         tcc_free(tcc_wasm_funcs[i].param_offsets);
         tcc_free(tcc_wasm_funcs[i].ops);
         tcc_free(tcc_wasm_funcs[i].loops);
+        tcc_free(tcc_wasm_funcs[i].switches);
     }
     tcc_free(tcc_wasm_funcs);
     tcc_wasm_funcs = NULL;
@@ -372,6 +373,25 @@ ST_FUNC void gjmp_hint_loop_range(int start, int cont)
     r->start_pc = start;
     r->end_pc = ind;
     r->cont_pc = cont;
+}
+
+/* Records one switch statement's layout -- see this hint's own comment
+ * in tcc.h. */
+ST_FUNC void gjmp_hint_switch_range(int bodies, int lookup, int end)
+{
+    WasmFuncIR *f = wasm_cur_func;
+    WasmSwitchRange *r;
+    if (!f || nocode_wanted)
+        return;
+    if (f->nb_switches == f->cap_switches) {
+        f->cap_switches = f->cap_switches ? f->cap_switches * 2 : 4;
+        f->switches = tcc_realloc(f->switches,
+                                  f->cap_switches * sizeof(*f->switches));
+    }
+    r = &f->switches[f->nb_switches++];
+    r->bodies_pc = bodies;
+    r->lookup_pc = lookup;
+    r->end_pc = end;
 }
 
 ST_FUNC void load(int r, SValue *sv)

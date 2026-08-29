@@ -1535,6 +1535,52 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
             blk[header].loop_end = op_to_block[end_idx - 1];
         }
 
+        /* --- Put each switch's lookup back in front of its bodies ---
+         *
+         * tccgen.c emits [jump to lookup][case bodies][lookup][break],
+         * because gcase() can only build the comparison chain once every
+         * case value is known, which is after the body has been parsed.
+         * So every edge selecting a case runs backwards by position into
+         * a scope that has already closed -- not expressible in
+         * structured control flow at all, and the reason a switch used to
+         * take the whole enclosing function onto the dispatch fallback.
+         * emulator/rv64.c's execute(), a 373-block instruction decoder
+         * called ~294.6M times per boot test, is exactly this.
+         *
+         * Swapping the two regions makes every one of those edges a
+         * forward branch into a block scope that the existing
+         * forward-scope placement already knows how to open -- which is
+         * precisely the nested-blocks shape a switch is supposed to
+         * compile to. The hint says which region is which (see
+         * gjmp_hint_switch_range() in tcc.h); the jump graph cannot.
+         *
+         * Innermost-first, for the same reason as loops below. */
+        for (i = 0; i < f->nb_switches; i++) {
+            int bodies = op_to_block[wasm_pc_to_index(f, f->switches[i].bodies_pc)];
+            int lookup = op_to_block[wasm_pc_to_index(f, f->switches[i].lookup_pc)];
+            int end_idx = wasm_pc_to_index(f, f->switches[i].end_pc);
+            int last = (end_idx < f->nb_ops) ? op_to_block[end_idx] - 1 : nb_blocks - 1;
+            int j, pos;
+            int *order;
+
+            if (bodies <= 0 || bodies >= lookup || lookup > last || last >= nb_blocks)
+                continue;
+            if (!wasm_block_branches(f, &blk[bodies - 1])
+                || !wasm_block_branches(f, &blk[lookup - 1])
+                || !wasm_block_branches(f, &blk[last]))
+                continue;
+
+            order = tcc_malloc(nb_blocks * sizeof(int));
+            pos = 0;
+            for (j = 0; j < bodies; j++) order[pos++] = j;
+            for (j = lookup; j <= last; j++) order[pos++] = j;
+            for (j = bodies; j < lookup; j++) order[pos++] = j;
+            for (j = last + 1; j < nb_blocks; j++) order[pos++] = j;
+
+            wasm_permute_blocks(blk, nb_blocks, op_to_block, f->nb_ops, order);
+            tcc_free(order);
+        }
+
         /* --- Put each for-loop's increment back after its body ---
          *
          * tccgen.c emits a for-loop rotated: the increment comes BEFORE
@@ -1801,16 +1847,26 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
              * must be opened BEFORE the loop scope.  Block scopes whose
              * targets are INSIDE the loop are opened AFTER the loop scope. */
             {
-                int targets_outer[64], n_outer = 0;
-                int targets_inner[64], n_inner = 0;
+                /* One scope per forward-branch target opening here.
+                   These were fixed 64-entry arrays that silently dropped
+                   anything past the 64th, which a switch statement
+                   reaches easily -- a dropped scope is not a missed
+                   optimization, it is a br with nowhere to land, caught
+                   later only by wasm_emit_case()'s own "no scope for
+                   JMP" abort. Sized to the block count instead: a block
+                   cannot be the target of more distinct scopes than
+                   there are blocks. */
+                int *targets_outer = tcc_malloc(nb_blocks * sizeof(int));
+                int *targets_inner = tcc_malloc(nb_blocks * sizeof(int));
+                int n_outer = 0, n_inner = 0;
                 int t;
                 int le = blk[b_idx].is_loop_header ? blk[b_idx].loop_end : -1;
 
                 for (t = b_idx + 1; t < nb_blocks; t++) {
                     if (blk[t].needs_fwd_scope && blk[t].fwd_scope_open == b_idx) {
-                        if (blk[b_idx].is_loop_header && t <= le && n_inner < 64)
+                        if (blk[b_idx].is_loop_header && t <= le)
                             targets_inner[n_inner++] = t;
-                        else if (n_outer < 64)
+                        else
                             targets_outer[n_outer++] = t;
                     }
                 }
@@ -1838,6 +1894,8 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
                     scope[scope_depth].target = targets_inner[j];
                     scope_depth++;
                 }
+                tcc_free(targets_outer);
+                tcc_free(targets_inner);
             }
 
             /* Emit non-terminal ops of this block */

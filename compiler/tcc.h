@@ -1333,6 +1333,20 @@ ST_FUNC int gjmp_append(int n, int t);
  * where the source had it. i386/riscv64 branch to an address and do not
  * care. */
 ST_FUNC void gjmp_hint_loop_range(int start, int cont);
+/* Called once per switch statement, at its end, with the three positions
+ * that describe how tccgen.c laid it out: `bodies` where the case bodies
+ * begin, `lookup` where the comparison chain that selects among them
+ * begins, and `end` the break label just past both.
+ *
+ * tccgen.c emits them in that order -- bodies first, lookup second --
+ * because the case values are only all known once the body has been
+ * parsed (gcase() runs at the end). So every edge from the lookup into a
+ * case body runs backwards by position, into scopes that have already
+ * closed, which structured control flow cannot express at all. A backend
+ * that wants to emit a real switch needs to put the lookup back in
+ * front, and cannot work out from the jump graph alone which region is
+ * which. i386/riscv64 branch to an address and do not care. */
+ST_FUNC void gjmp_hint_switch_range(int bodies, int lookup, int end);
 ST_FUNC void gen_opi(int op);
 ST_FUNC void gen_opf(int op);
 ST_FUNC void gen_cvt_ftoi(int t);
