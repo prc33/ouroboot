@@ -588,6 +588,12 @@ static void wasm_emit_case(const WasmEmitCtx *c, WasmBuf *b, WasmOp *op,
     case WASM_OP_LOAD_S16:
     case WASM_OP_LOAD_U16:
         dst = wasm_i32_reg_local(op->r0, local_i0);
+        if (op->flags & WASM_OP_FLAG_PARAM) {
+            VS_BIND(VS_NO, VS_NO, dst);
+            wb_local_get(b, op->r1);
+            VS_DEF(dst);
+            break;
+        }
         VS_BIND(VS_ADDR(op), VS_NO, dst);
         wasm_emit_addr(b, op, local_fp, local_i0, vs_n, dst);
         switch (op->kind) {
@@ -602,6 +608,12 @@ static void wasm_emit_case(const WasmEmitCtx *c, WasmBuf *b, WasmOp *op,
 
     case WASM_OP_LOAD_I64:
         dst = wasm_i64_reg_local(op->r0, local_tmp64);
+        if (op->flags & WASM_OP_FLAG_PARAM) {
+            VS_BIND(VS_NO, VS_NO, dst);
+            wb_local_get(b, op->r1);
+            VS_DEF(dst);
+            break;
+        }
         VS_BIND(VS_ADDR(op), VS_NO, dst);
         wasm_emit_addr(b, op, local_fp, local_i0, vs_n, dst);
         wb_u8(b, 0x29), wb_memarg(b, 3);
@@ -619,6 +631,13 @@ static void wasm_emit_case(const WasmEmitCtx *c, WasmBuf *b, WasmOp *op,
 
     case WASM_OP_LOAD_F32:
         dst = wasm_f64_reg_local(op->r0, local_f0);
+        if (op->flags & WASM_OP_FLAG_PARAM) {
+            VS_BIND(VS_NO, VS_NO, dst);
+            wb_local_get(b, op->r1);
+            wb_u8(b, 0xbb); /* f64.promote_f32 */
+            VS_DEF(dst);
+            break;
+        }
         VS_BIND(VS_ADDR(op), VS_NO, dst);
         wasm_emit_addr(b, op, local_fp, local_i0, vs_n, dst);
         wb_u8(b, 0x2a), wb_memarg(b, 2);
@@ -628,6 +647,12 @@ static void wasm_emit_case(const WasmEmitCtx *c, WasmBuf *b, WasmOp *op,
 
     case WASM_OP_LOAD_F64:
         dst = wasm_f64_reg_local(op->r0, local_f0);
+        if (op->flags & WASM_OP_FLAG_PARAM) {
+            VS_BIND(VS_NO, VS_NO, dst);
+            wb_local_get(b, op->r1);
+            VS_DEF(dst);
+            break;
+        }
         VS_BIND(VS_ADDR(op), VS_NO, dst);
         wasm_emit_addr(b, op, local_fp, local_i0, vs_n, dst);
         wb_u8(b, 0x2b), wb_memarg(b, 3);
@@ -1139,11 +1164,39 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
 {
     WasmBuf body;
     int i;
+    unsigned char *direct_param;
     int local_pc, local_fp, local_cmp, local_carry, local_i0, local_f0, local_tmp64;
     WasmEmitCtx ctx_structured, ctx_dispatch;
     WasmVStack vs;
 
     memset(&body, 0, sizeof(body));
+
+    direct_param = tcc_mallocz(f->nb_params);
+    for (i = 0; i < f->nb_params; ++i) {
+        int j, safe = 1;
+        for (j = 0; j < f->nb_ops; ++j) {
+            WasmOp *op = &f->ops[j];
+            int kind_ok = (f->param_types[i] == WASM_VAL_I32 && op->kind == WASM_OP_LOAD_I32)
+                       || (f->param_types[i] == WASM_VAL_I64 && op->kind == WASM_OP_LOAD_I64)
+                       || (f->param_types[i] == WASM_VAL_F32 && op->kind == WASM_OP_LOAD_F32)
+                       || (f->param_types[i] == WASM_VAL_F64 && op->kind == WASM_OP_LOAD_F64);
+            if ((op->flags & 0xff) == WASM_ADDR_FP && op->imm == f->param_offsets[i]
+                && !kind_ok) {
+                safe = 0;
+                break;
+            }
+        }
+        if (!safe)
+            continue;
+        direct_param[i] = 1;
+        for (j = 0; j < f->nb_ops; ++j) {
+            WasmOp *op = &f->ops[j];
+            if ((op->flags & 0xff) == WASM_ADDR_FP && op->imm == f->param_offsets[i]) {
+                op->flags |= WASM_OP_FLAG_PARAM;
+                op->r1 = i;
+            }
+        }
+    }
 
     /* locals: control/i32 registers, f64 registers, native i64 registers
        plus one i64 scratch used by the remaining i32 carry helpers. */
@@ -1196,6 +1249,8 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
 
     /* spill wasm params to linear-memory frame slots */
     for (i = 0; i < f->nb_params; ++i) {
+        if (direct_param[i])
+            continue;
         wb_local_get(&body, local_fp);
         if (f->param_offsets[i])
             wb_i32_const(&body, f->param_offsets[i]), wb_u8(&body, 0x6a);
@@ -1864,6 +1919,7 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
     }
 
     if (s1->nb_errors) {
+        tcc_free(direct_param);
         tcc_free(body.data);
         return;
     }
@@ -1885,6 +1941,7 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
 
     wb_uleb(code, body.len);
     wb_mem(code, body.data, body.len);
+    tcc_free(direct_param);
     tcc_free(body.data);
 }
 
