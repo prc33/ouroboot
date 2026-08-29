@@ -74,6 +74,23 @@ ST_FUNC void strcat_printf(char *buf, int buf_size, const char *fmt, ...)
     va_end(ap);
 }
 
+ST_FUNC int exact_log2p1(int value)
+{
+    int result;
+
+    if (!value)
+        return 0;
+    for (result = 1; value >= 1 << 8; result += 8)
+        value >>= 8;
+    if (value >= 1 << 4)
+        result += 4, value >>= 4;
+    if (value >= 1 << 2)
+        result += 2, value >>= 2;
+    if (value >= 1 << 1)
+        ++result;
+    return result;
+}
+
 ST_FUNC char *pstrcpy(char *buf, size_t buf_size, const char *s)
 {
     char *q, *q_end;

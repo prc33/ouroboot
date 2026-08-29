@@ -703,7 +703,6 @@ ST_FUNC void tccgen_finish(TCCState *s1);
 ST_FUNC void check_vstack(void);
 #include "expr.h"
 ST_FUNC int ieee_finite(double d);
-ST_FUNC int exact_log2p1(int i);
 ST_FUNC void test_lvalue(void);
 ST_FUNC void vpushi(int v);
 ST_FUNC void vpush64(int ty, unsigned long long v);
