@@ -76,6 +76,7 @@ enum {
 #define WASM_OP_FLAG_IMM   0x0001
 #define WASM_OP_FLAG_INVERT 0x0002
 #define WASM_OP_FLAG_UNSIGNED 0x0100
+#define WASM_OP_FLAG_PARAM 0x0200
 
 #define WASM_MAX_CALL_ARGS 32
 typedef struct WasmOp {
