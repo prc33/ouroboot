@@ -8,22 +8,11 @@
 
 #if PTR_SIZE == 8
 # define ELFCLASSW ELFCLASS64
-# define ElfW(type) Elf##64##_##type
 # define ELFW(type) ELF##64_##type
-# define ElfW_Rel ElfW(Rela)
-# define SHT_RELX SHT_RELA
-# define REL_SECTION_FMT ".rela%s"
 #else
 # define ELFCLASSW ELFCLASS32
-# define ElfW(type) Elf##32##_##type
 # define ELFW(type) ELF##32_##type
-# define ElfW_Rel ElfW(Rel)
-# define SHT_RELX SHT_REL
-# define REL_SECTION_FMT ".rel%s"
 #endif
-
-#define addr_t ElfW(Addr)
-#define ElfSym ElfW(Sym)
 
 typedef struct TCCState TCCState;
 typedef struct Sym Sym;
