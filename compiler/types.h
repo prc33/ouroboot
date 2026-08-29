@@ -55,6 +55,13 @@
 #define BFGET(X, M) (((X) & (M)) / BFVAL(M, 1))
 #define BFSET(X, M, N) ((X) = ((X) & ~(M)) | BFVAL(M, N))
 
+typedef struct CType {
+    int t;
+    struct Sym *ref;
+} CType;
+
+struct SValue;
+
 ST_INLN int is_float(int t);
 ST_FUNC int is_integer_btype(int bt);
 ST_FUNC int btype_size(int bt);
@@ -64,8 +71,9 @@ ST_FUNC void mk_pointer(CType *type);
 ST_FUNC int compare_types(CType *type1, CType *type2, int unqualified);
 ST_FUNC int is_compatible_types(CType *type1, CType *type2);
 ST_FUNC int is_compatible_unqualified_types(CType *type1, CType *type2);
-ST_FUNC int combine_types(CType *dest, SValue *left, SValue *right, int op);
-ST_FUNC int is_null_pointer(SValue *value);
+ST_FUNC int combine_types(CType *dest, struct SValue *left,
+                          struct SValue *right, int op);
+ST_FUNC int is_null_pointer(struct SValue *value);
 ST_FUNC void type_to_str(char *buf, int size, CType *type, const char *name);
 ST_FUNC void type_incompatibility_error(CType *source, CType *dest,
                                         const char *message);

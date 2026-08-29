@@ -267,11 +267,7 @@ typedef struct CString {
     int size_allocated;
 } CString;
 
-/* type definition */
-typedef struct CType {
-    int t;
-    struct Sym *ref;
-} CType;
+#include "types.h"
 
 /* constant value */
 typedef union CValue {
@@ -1065,7 +1061,6 @@ ST_FUNC void tccgen_init(TCCState *s1);
 ST_FUNC int tccgen_compile(TCCState *s1);
 ST_FUNC void tccgen_finish(TCCState *s1);
 ST_FUNC void check_vstack(void);
-#include "types.h"
 #include "vstack.h"
 #include "expr.h"
 ST_FUNC int ieee_finite(double d);
