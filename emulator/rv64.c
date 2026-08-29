@@ -396,7 +396,11 @@ static void execute(u32 insn)
         if (!ok) { trap(fault == 2 ? 5 : 13, fault_addr, 0); return; }
         v = size == 4 ? (i64)(i32)old : old;
         if (fn == 2) goto write;                 /* lr */
-        if (fn == 3) { v = store(a, size, b) ? 0 : 1; goto write; } /* sc */
+        if (fn == 3) {                            /* sc: reservation always holds */
+            ok = store(a, size, b);
+            if (!ok) { trap(fault == 2 ? 7 : 15, fault_addr, 0); return; }
+            v = 0; goto write;
+        }
         if (size == 4) old = (u32)old, b = (u32)b;
         if (fn == 0) value = old + b;
         else if (fn == 1) value = b;
