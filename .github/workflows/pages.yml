@@ -18,8 +18,8 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/configure-pages@v5
+      - uses: actions/checkout@v5
+      - uses: actions/configure-pages@v6
       - name: Build compiler, userspace, kernel, and WebAssembly emulator
         run: |
           make -C compiler TARGET=riscv64
@@ -38,7 +38,7 @@ jobs:
           cp kernel/kernel.elf kernel/tcc-initrd.tar site/kernel/
           cp pages/index.html pages/.nojekyll site/
           cp assets/ouroboot-logo.png site/assets/
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v4
         with:
           path: site
 
@@ -50,4 +50,4 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
