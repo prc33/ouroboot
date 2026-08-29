@@ -713,7 +713,6 @@ ST_FUNC void gen_cast(CType *type);
 ST_FUNC void init_putv(CType *type, Section *sec, unsigned long c);
 ST_FUNC ElfSym *elfsym(Sym *);
 ST_FUNC void update_storage(Sym *sym);
-ST_FUNC Sym *external_global_sym(int v, CType *type);
 ST_FUNC void vset(CType *type, int r, int v);
 ST_FUNC void vset_VT_CMP(int op);
 ST_FUNC void vset_VT_JMP(void);

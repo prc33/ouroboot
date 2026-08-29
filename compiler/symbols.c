@@ -278,6 +278,48 @@ ST_FUNC Sym *global_identifier_push(int v, int t, int c)
     return s;
 }
 
+ST_FUNC Sym *external_global_sym(int v, CType *type)
+{
+    Sym *s = sym_find(v);
+
+    if (!s) {
+        s = global_identifier_push(v, type->t | VT_EXTERN, 0);
+        s->type.ref = type->ref;
+    } else if (IS_ASM_SYM(s)) {
+        s->type.t = type->t | (s->type.t & VT_EXTERN);
+        s->type.ref = type->ref;
+        update_storage(s);
+    }
+    return s;
+}
+
+ST_FUNC void merge_symattr(struct SymAttr *to, struct SymAttr *from)
+{
+    if (from->aligned && !to->aligned)
+        to->aligned = from->aligned;
+    to->packed |= from->packed;
+    to->weak |= from->weak;
+    if (from->visibility != STV_DEFAULT
+        && (to->visibility == STV_DEFAULT || to->visibility > from->visibility))
+        to->visibility = from->visibility;
+}
+
+ST_FUNC void merge_funcattr(struct FuncAttr *to, struct FuncAttr *from)
+{
+    if (from->func_call && !to->func_call)
+        to->func_call = from->func_call;
+    if (from->func_type && !to->func_type)
+        to->func_type = from->func_type;
+    if (from->func_args && !to->func_args)
+        to->func_args = from->func_args;
+    if (from->func_noreturn)
+        to->func_noreturn = 1;
+    if (from->func_ctor)
+        to->func_ctor = 1;
+    if (from->func_dtor)
+        to->func_dtor = 1;
+}
+
 /* pop symbols until top reaches 'b'.  If KEEP is non-zero don't really
    pop them yet from the list, but do remove them from the token array.  */
 ST_FUNC void sym_pop(Sym **ptop, Sym *b, int keep)

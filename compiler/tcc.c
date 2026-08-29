@@ -20,9 +20,6 @@
 
 #include "tcc.h"
 
-/* Implementation shared by the command-line driver. */
-#include "tcc.h"
-
 /********************************************************/
 /* global variables */
 

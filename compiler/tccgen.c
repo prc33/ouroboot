@@ -517,57 +517,6 @@ ST_FUNC void vpush_ref(CType *type, Section *sec, unsigned long offset, unsigned
     vpushsym(type, get_sym_ref(type, sec, offset, size));  
 }
 
-/* define a new external reference to a symbol 'v' of type 'u' */
-ST_FUNC Sym *external_global_sym(int v, CType *type)
-{
-    Sym *s;
-
-    s = sym_find(v);
-    if (!s) {
-        /* push forward reference */
-        s = global_identifier_push(v, type->t | VT_EXTERN, 0);
-        s->type.ref = type->ref;
-    } else if (IS_ASM_SYM(s)) {
-        s->type.t = type->t | (s->type.t & VT_EXTERN);
-        s->type.ref = type->ref;
-        update_storage(s);
-    }
-    return s;
-}
-
-/* Merge symbol attributes.  */
-static void merge_symattr(struct SymAttr *sa, struct SymAttr *sa1)
-{
-    if (sa1->aligned && !sa->aligned)
-      sa->aligned = sa1->aligned;
-    sa->packed |= sa1->packed;
-    sa->weak |= sa1->weak;
-    if (sa1->visibility != STV_DEFAULT) {
-	int vis = sa->visibility;
-	if (vis == STV_DEFAULT
-	    || vis > sa1->visibility)
-	  vis = sa1->visibility;
-	sa->visibility = vis;
-    }
-}
-
-/* Merge function attributes.  */
-static void merge_funcattr(struct FuncAttr *fa, struct FuncAttr *fa1)
-{
-    if (fa1->func_call && !fa->func_call)
-      fa->func_call = fa1->func_call;
-    if (fa1->func_type && !fa->func_type)
-      fa->func_type = fa1->func_type;
-    if (fa1->func_args && !fa->func_args)
-      fa->func_args = fa1->func_args;
-    if (fa1->func_noreturn)
-      fa->func_noreturn = 1;
-    if (fa1->func_ctor)
-      fa->func_ctor = 1;
-    if (fa1->func_dtor)
-      fa->func_dtor = 1;
-}
-
 /* Merge attributes.  */
 static void merge_attr(AttributeDef *ad, AttributeDef *ad1)
 {

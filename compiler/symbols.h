@@ -91,5 +91,8 @@ ST_FUNC void sym_pop(Sym **ptop, Sym *b, int keep);
 ST_INLN Sym *struct_find(int v);
 ST_INLN Sym *sym_find(int v);
 ST_FUNC Sym *global_identifier_push(int v, int t, int c);
+ST_FUNC Sym *external_global_sym(int v, CType *type);
+ST_FUNC void merge_symattr(struct SymAttr *to, struct SymAttr *from);
+ST_FUNC void merge_funcattr(struct FuncAttr *to, struct FuncAttr *from);
 ST_FUNC void symbols_finish(void);
 #endif
