@@ -180,6 +180,30 @@ ST_FUNC Sym *global_identifier_push(int v, int t, int c)
     return s;
 }
 
+ST_FUNC Sym *asm_label_find(int v)
+{
+    Sym *sym = sym_find(v);
+    while (sym && sym->sym_scope && !(sym->type.t & VT_STATIC))
+        sym = sym->prev_tok;
+    return sym;
+}
+
+ST_FUNC Sym *asm_label_push(int v)
+{
+    return global_identifier_push(v, VT_ASM | VT_EXTERN | VT_STATIC, 0);
+}
+
+ST_FUNC Sym *get_asm_sym(int name, Sym *csym)
+{
+    Sym *sym = asm_label_find(name);
+    if (!sym) {
+        sym = asm_label_push(name);
+        if (csym)
+            sym->c = csym->c;
+    }
+    return sym;
+}
+
 ST_FUNC Sym *external_global_sym(int v, CType *type)
 {
     Sym *s = sym_find(v);
