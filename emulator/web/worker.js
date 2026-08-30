@@ -67,7 +67,7 @@ function flushOutput() {
 function runChunk() {
     if (!running) return;
     try {
-        rv.rv_run(200000, 100);
+        rv.rv_run(2000000, 100);
         flushOutput();
         serviceFetch();
         setTimeout(runChunk, 0);

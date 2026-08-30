@@ -33,7 +33,7 @@ typedef signed long long i64;
 static u8 ram[RAM_SIZE];
 static u64 x[32], f[32], csr[4096];
 static u64 pc, ticks, timecmp;
-static u32 privilege, halted, fault;
+static u32 privilege, halted, fault, tick_step, timer_steps;
 static u64 fault_addr;
 
 static u8 uart_in[UART_CAP], uart_out[UART_CAP];
@@ -43,36 +43,30 @@ static u32 fetch_url_length, fetch_capacity, fetch_length, fetch_status;
 
 static u64 tlb_tag[512], tlb_ppage[512];
 static u64 fetch_vpage = ~0ULL, fetch_delta;
-
 /* Spell unsigned 64-bit float conversions in terms of signed ones so the
  * tiny wasm32 backend needs no compiler-rt conversion helpers. */
 static double i64_to_double(i64 n)
 {
     return (double)n;
 }
-
 static double u64_to_double(u64 n)
 {
     return i64_to_double((i64)(n >> 1)) * 2.0 + (u32)(n & 1);
 }
-
 static u64 double_to_u64(double n)
 {
     return n < 9223372036854775808.0 ? (u64)(i64)n :
         ((u64)(i64)(n - 9223372036854775808.0) | (1ULL << 63));
 }
-
 u32 rv_ram(void) { return (u32)(unsigned long)ram; }
 u32 rv_ram_size(void) { return RAM_SIZE; }
 u64 rv_pc(void) { return pc; }
-
 static void flush_tlb(void)
 {
     u32 i;
     for (i = 0; i < 512; ++i) tlb_tag[i] = 0;
     fetch_vpage = ~0ULL;
 }
-
 static int physical_read(u64 addr, u32 size, u64 *value)
 {
     u64 off = addr - RAM_BASE;
@@ -113,7 +107,6 @@ static int physical_read(u64 addr, u32 size, u64 *value)
     fault = 2;
     return 0;
 }
-
 static int physical_write(u64 addr, u32 size, u64 value)
 {
     u64 off = addr - RAM_BASE;
@@ -143,7 +136,6 @@ static int physical_write(u64 addr, u32 size, u64 value)
     fault = 2;
     return 0;
 }
-
 static int translate(u64 va, u32 access, u64 *pa)
 {
     u64 satp = csr[SATP], table, pte = 0;
@@ -181,7 +173,6 @@ static int translate(u64 va, u32 access, u64 *pa)
     tlb_ppage[slot] = *pa & ~4095ULL;
     return 1;
 }
-
 static int load(u64 va, u32 size, u32 access, u64 *v)
 {
     u64 pa, off, tag;
@@ -211,7 +202,6 @@ static int load(u64 va, u32 size, u32 access, u64 *v)
     }
     return physical_read(pa, size, v);
 }
-
 static int store(u64 va, u32 size, u64 v)
 {
     u64 pa, off, tag;
@@ -238,17 +228,18 @@ static int store(u64 va, u32 size, u64 v)
     }
     return physical_write(pa, size, v);
 }
-
 static void set_csr(u32 n, u64 v)
 {
     csr[n] = v;
     if (n == STIMECMP) {
+        u64 steps = v > ticks && tick_step ?
+            (v - ticks + tick_step - 1) / tick_step : !!v;
         timecmp = v;
         if (!v || ticks < v) csr[SIP] &= ~IP_STIP;
+        timer_steps = steps > 0xffffffffU ? 0xffffffffU : (u32)steps;
     }
     if (n == SATP || n == SSTATUS) flush_tlb();
 }
-
 static void trap(u64 cause, u64 value, int interrupt)
 {
     u64 status = csr[SSTATUS];
@@ -264,7 +255,6 @@ static void trap(u64 cause, u64 value, int interrupt)
     halted = 0;
     flush_tlb();
 }
-
 static u64 mulhu(u64 a, u64 b)
 {
     u64 a0 = (u32)a, a1 = a >> 32, b0 = (u32)b, b1 = b >> 32;
@@ -320,52 +310,55 @@ static int execute_system(u32 insn, u32 rd, u32 f3, u32 rs1, u64 next)
     }
 }
 
-static void execute(u32 insn)
+static u64 execute(u32 insn, u64 at)
 {
     u32 op = insn & 127, rd = insn >> 7 & 31, f3 = insn >> 12 & 7;
-    u32 rs1 = insn >> 15 & 31, rs2 = insn >> 20 & 31, f7 = insn >> 25;
-    u64 a = x[rs1], b = x[rs2], v = 0, next = pc + 4, addr;
+    u32 rs1 = insn >> 15 & 31;
+    u64 v = 0, next = at + 4, addr;
     i32 imm;
     int ok = 1;
 
-    switch (op) {
-    case 0x37: v = (i64)(i32)(insn & 0xfffff000); goto write;
-    case 0x17: v = pc + (i64)(i32)(insn & 0xfffff000); goto write;
-    case 0x6f:
-        imm = ((insn >> 21 & 1023) << 1) | ((insn >> 20 & 1) << 11) |
-              ((insn >> 12 & 255) << 12) | ((i32)insn >> 31 << 20);
-        v = next; next = pc + imm; goto write;
-    case 0x67: v = next; next = (a + ((i32)insn >> 20)) & ~1ULL; goto write;
-    case 0x63:
-        imm = ((insn >> 8 & 15) << 1) | ((insn >> 25 & 63) << 5) |
-              ((insn >> 7 & 1) << 11) | ((i32)insn >> 31 << 12);
-        if ((f3 == 0 && a == b) || (f3 == 1 && a != b) ||
-            (f3 == 4 && (i64)a < (i64)b) || (f3 == 5 && (i64)a >= (i64)b) ||
-            (f3 == 6 && a < b) || (f3 == 7 && a >= b)) next = pc + imm;
-        else if (f3 == 2 || f3 == 3) ok = 0;
-        break;
-    case 0x03:
-        addr = a + ((i32)insn >> 20);
+    if (op == 0x03) {
+        addr = x[rs1] + ((i32)insn >> 20);
         if (f3 == 0) ok = load(addr, 1, 1, &v), v = (i64)(signed char)v;
         else if (f3 == 1) ok = load(addr, 2, 1, &v), v = (i64)(short)v;
         else if (f3 == 2) ok = load(addr, 4, 1, &v), v = (i64)(i32)v;
-        else if (f3 == 3) ok = load(addr, 8, 1, &v);
-        else if (f3 == 4) ok = load(addr, 1, 1, &v);
-        else if (f3 == 5) ok = load(addr, 2, 1, &v);
-        else if (f3 == 6) ok = load(addr, 4, 1, &v);
+        else if (f3 <= 6) ok = load(addr, 1U << (f3 & 3), 1, &v);
         else ok = 0;
-        if (!ok) { trap(fault == 2 ? 5 : 13, fault_addr, 0); return; }
+        if (!ok) { pc = at; trap(fault == 2 ? 5 : 13, fault_addr, 0); return pc; }
         goto write;
-    case 0x23:
+    }
+    if (op == 0x13 && f3 == 0) { if (rd) x[rd] = x[rs1] +
+        ((i32)insn >> 20); x[0] = 0; return next; }
+    if (op == 0x23) {
+        u32 rs2 = insn >> 20 & 31;
         imm = sext32((insn >> 7 & 31) | (insn >> 25 << 5), 12);
-        addr = a + imm;
-        if (f3 <= 3) ok = store(addr, 1U << f3, b); else ok = 0;
-        if (!ok) { trap(fault == 2 ? 7 : 15, fault_addr, 0); return; }
-        break;
+        if (f3 <= 3) ok = store(x[rs1] + imm, 1U << f3, x[rs2]);
+        else ok = 0;
+        if (!ok) { pc = at; trap(fault == 2 ? 7 : 15, fault_addr, 0); return pc; }
+        x[0] = 0; return next; }
+    if (op == 0x6f) {
+        imm = ((insn >> 21 & 1023) << 1) | ((insn >> 20 & 1) << 11) |
+            ((insn >> 12 & 255) << 12) | ((i32)insn >> 31 << 20);
+        v = next; next = at + imm; goto write; }
+    if (op == 0x63) {
+        u64 a = x[rs1], b = x[insn >> 20 & 31];
+        imm = ((insn >> 8 & 15) << 1) | ((insn >> 25 & 63) << 5) |
+            ((insn >> 7 & 1) << 11) | ((i32)insn >> 31 << 12);
+        if ((f3 == 0 && a == b) || (f3 == 1 && a != b) ||
+            (f3 == 4 && (i64)a < (i64)b) || (f3 == 5 && (i64)a >= (i64)b) ||
+            (f3 == 6 && a < b) || (f3 == 7 && a >= b)) next = at + imm;
+        else if (f3 == 2 || f3 == 3) { pc = at; trap(2, insn, 0); return pc; }
+        x[0] = 0; return next; }
+    u32 rs2 = insn >> 20 & 31, f7 = insn >> 25;
+    u64 a = x[rs1], b = x[rs2];
+    switch (op) {
+    case 0x37: v = (i64)(i32)(insn & 0xfffff000); goto write;
+    case 0x17: v = at + (i64)(i32)(insn & 0xfffff000); goto write;
+    case 0x67: v = next; next = (a + ((i32)insn >> 20)) & ~1ULL; goto write;
     case 0x13:
         imm = (i32)insn >> 20;
-        if (f3 == 0) v = a + imm;
-        else if (f3 == 1) v = a << (insn >> 20 & 63);
+        if (f3 == 1) v = a << (insn >> 20 & 63);
         else if (f3 == 2) v = (i64)a < imm;
         else if (f3 == 3) v = a < (u64)(i64)imm;
         else if (f3 == 4) v = a ^ (i64)imm;
@@ -420,12 +413,12 @@ static void execute(u32 insn)
         u64 old, value;
         if (!size || (fn == 2 && rs2)) { ok = 0; break; }
         ok = load(a, size, 1, &old);
-        if (!ok) { trap(fault == 2 ? 5 : 13, fault_addr, 0); return; }
+        if (!ok) { pc = at; trap(fault == 2 ? 5 : 13, fault_addr, 0); return pc; }
         v = size == 4 ? (i64)(i32)old : old;
         if (fn == 2) goto write;                 /* lr */
         if (fn == 3) {                            /* sc: reservation always holds */
             ok = store(a, size, b);
-            if (!ok) { trap(fault == 2 ? 7 : 15, fault_addr, 0); return; }
+            if (!ok) { pc = at; trap(fault == 2 ? 7 : 15, fault_addr, 0); return pc; }
             v = 0; goto write;
         }
         if (size == 4) old = (u32)old, b = (u32)b;
@@ -440,7 +433,7 @@ static void execute(u32 insn)
         else if (fn == 28) value = old > b ? old : b;
         else { ok = 0; break; }
         ok = store(a, size, value);
-        if (!ok) { trap(fault == 2 ? 7 : 15, fault_addr, 0); return; }
+        if (!ok) { pc = at; trap(fault == 2 ? 7 : 15, fault_addr, 0); return pc; }
         goto write;
     }
     case 0x0f: break;
@@ -449,7 +442,7 @@ static void execute(u32 insn)
         if (f3 == 2) { ok = load(addr, 4, 1, &v); f[rd] = 0xffffffff00000000ULL | (u32)v; }
         else if (f3 == 3) ok = load(addr, 8, 1, &f[rd]);
         else ok = 0;
-        if (!ok) { trap(fault == 2 ? 5 : 13, fault_addr, 0); return; }
+        if (!ok) { pc = at; trap(fault == 2 ? 5 : 13, fault_addr, 0); return pc; }
         break;
     case 0x27:
         imm = sext32((insn >> 7 & 31) | (insn >> 25 << 5), 12);
@@ -457,7 +450,7 @@ static void execute(u32 insn)
         if (f3 == 2) ok = store(addr, 4, f[rs2]);
         else if (f3 == 3) ok = store(addr, 8, f[rs2]);
         else ok = 0;
-        if (!ok) { trap(fault == 2 ? 7 : 15, fault_addr, 0); return; }
+        if (!ok) { pc = at; trap(fault == 2 ? 7 : 15, fault_addr, 0); return pc; }
         break;
     case 0x53:
         if (f7 == 0x00) set_f32(rd, get_f32(rs1) + get_f32(rs2));
@@ -502,16 +495,17 @@ static void execute(u32 insn)
         else ok = 0;
         break;
     case 0x73:
+        pc = at;
         if (!execute_system(insn, rd, f3, rs1, next)) ok = 0;
-        return;
+        return pc;
     default: ok = 0;
     }
-    if (!ok) { trap(2, insn, 0); return; }
-    pc = next; x[0] = 0; return;
+    if (!ok) { pc = at; trap(2, insn, 0); return pc; }
+    x[0] = 0; return next;
 write:
-    if (!ok) { trap(2, insn, 0); return; }
+    if (!ok) { pc = at; trap(2, insn, 0); return pc; }
     if (rd) x[rd] = v;
-    pc = next; x[0] = 0;
+    x[0] = 0; return next;
 }
 
 void rv_init(u64 entry)
@@ -519,7 +513,7 @@ void rv_init(u64 entry)
     u32 i;
     for (i = 0; i < 32; ++i) x[i] = f[i] = 0;
     for (i = 0; i < 4096; ++i) csr[i] = 0;
-    pc = entry; ticks = timecmp = 0; privilege = halted = fault = 0;
+    pc = entry; ticks = timecmp = 0; privilege = halted = fault = timer_steps = 0;
     in_read = in_write = out_read = out_write = 0;
     fetch_url = fetch_destination = 0;
     fetch_url_length = fetch_capacity = fetch_length = fetch_status = 0;
@@ -528,35 +522,42 @@ void rv_init(u64 entry)
 
 u32 rv_run(u32 count, u32 time_advance)
 {
-    u32 i;
+    u32 i, until, stopped;
+    u64 now = ticks, here = pc;
+    tick_step = time_advance;
+    if (timecmp) set_csr(STIMECMP, timecmp);
+    until = timer_steps; stopped = halted;
     for (i = 0; i < count; ++i) {
         u64 raw, tag;
         u32 context, slot;
-        ticks += time_advance;
-        if (timecmp && ticks >= timecmp) {
+        now += time_advance;
+        if (until && !--until) {
             csr[SIP] |= IP_STIP;
-            if ((privilege || (csr[SSTATUS] & STATUS_SIE)) && (csr[SIP] & csr[SIE] & IP_STIP)) {
-                trap(5, 0, 1); continue;
-            }
+            if ((privilege || (csr[SSTATUS] & STATUS_SIE)) &&
+                (csr[SIP] & csr[SIE] & IP_STIP)) {
+                ticks = now; timer_steps = until; pc = here;
+                trap(5, 0, 1); here = pc; stopped = 0; continue;
+            } else until = 1;
         }
-        if (halted) continue;
-        if ((pc ^ fetch_vpage) >> 12) {
-            if (!load(pc, 4, 0, &raw)) {
-                trap(fault == 2 ? 1 : 12, fault_addr, 0);
-                continue;
-            }
+        if (stopped) continue;
+        if ((here ^ fetch_vpage) >> 12) {
+            if (!load(here, 4, 0, &raw)) { pc = here;
+                trap(fault == 2 ? 1 : 12, fault_addr, 0); here = pc; continue; }
             context = privilege | ((csr[SSTATUS] & STATUS_SUM) ? 2 : 0);
-            slot = (u32)(pc >> 12) & 255;
-            tag = (((pc >> 12) << 2) | context) + 1;
+            slot = (u32)(here >> 12) & 255;
+            tag = (((here >> 12) << 2) | context) + 1;
             if (tlb_tag[slot] == tag && tlb_ppage[slot] - RAM_BASE < RAM_SIZE) {
-                fetch_vpage = pc & ~4095ULL;
+                fetch_vpage = here & ~4095ULL;
                 fetch_delta = tlb_ppage[slot] - fetch_vpage;
             }
-        } else {
-            raw = *(u32 *)(ram + (u32)(pc + fetch_delta - RAM_BASE));
-        }
-        execute((u32)raw);
+        } else raw = *(u32 *)(ram + (u32)(here + fetch_delta - RAM_BASE));
+        if (((u32)raw & 127) == 0x73) {
+            ticks = now; timer_steps = until;
+            here = execute((u32)raw, here);
+            until = timer_steps; stopped = halted;
+        } else here = execute((u32)raw, here);
     }
+    ticks = now; timer_steps = until; halted = stopped; pc = here;
     return fault;
 }
 
