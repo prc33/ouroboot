@@ -9,6 +9,9 @@ ST_FUNC int64_t expr_const64(void);
 ST_FUNC void init_prec(void);
 ST_FUNC int gvtst(int inv, int t);
 ST_FUNC void gvtst_set(int inv, int t);
+ST_FUNC void gaddrof(void);
+ST_FUNC void load_packed_bf(CType *type, int bit_pos, int bit_size);
+ST_FUNC void store_packed_bf(int bit_pos, int bit_size);
 
 ST_DATA int in_sizeof;
 ST_DATA int in_generic;

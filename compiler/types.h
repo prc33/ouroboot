@@ -63,6 +63,7 @@ typedef struct CType {
 } CType;
 
 struct SValue;
+ST_FUNC int adjust_bf(struct SValue *sv, int bit_pos, int bit_size);
 
 ST_INLN int is_float(int t);
 ST_FUNC int is_integer_btype(int bt);
