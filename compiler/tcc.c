@@ -26,7 +26,6 @@
 /* XXX: get rid of this ASAP (or maybe not) */
 ST_DATA struct TCCState *tcc_state;
 
-
 static void tcc_split_path(TCCState *s, void *p_ary, int *p_nb_ary, const char *in)
 {
     const char *p;
@@ -302,7 +301,6 @@ static int tcc_compile(TCCState *s1, int filetype, const char *str, int fd)
     return s1->nb_errors != 0 ? -1 : 0;
 }
 
-
 /* define a preprocessor symbol. value can be NULL, sym can be "sym=val" */
 ST_FUNC void tcc_define_symbol(TCCState *s1, const char *sym, const char *value)
 {
@@ -319,7 +317,6 @@ ST_FUNC void tcc_undefine_symbol(TCCState *s1, const char *sym)
 {
     cstr_printf(&s1->cmdline_defs, "#undef %s\n", sym);
 }
-
 
 ST_FUNC TCCState *tcc_new(void)
 {
@@ -550,7 +547,6 @@ ST_FUNC int tcc_add_file_internal(TCCState *s1, const char *filename, int flags)
         obj_type = tcc_object_type(fd, &ehdr);
         lseek(fd, 0, SEEK_SET);
 
-
         switch (obj_type) {
         case AFF_BINTYPE_REL:
             ret = tcc_load_object_file(s1, fd, 0);
@@ -648,7 +644,6 @@ ST_FUNC void tcc_add_pragma_libs(TCCState *s1)
     for (i = 0; i < s1->nb_pragma_libs; i++)
         tcc_add_library_err(s1, s1->pragma_libs[i]);
 }
-
 
 ST_FUNC void tcc_set_lib_path(TCCState *s, const char *path)
 {
@@ -839,7 +834,6 @@ static int tcc_set_linker(TCCState *s, const char *option)
         } else if (p) {
             return 0;
         } else {
-    err:
             tcc_error("unsupported linker option '%s'", option);
         }
 

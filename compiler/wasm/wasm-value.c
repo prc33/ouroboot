@@ -1,6 +1,5 @@
 /* wasm's replacement for the register machine (regalloc.c), which this
    target never compiles -- see registers.h and the Makefile.
-
    The front end calls gv() to mean "materialise this value somewhere I
    can refer to". On a register machine that means picking one of a
    handful of real registers and spilling whatever was in it. wasm has no
@@ -8,7 +7,6 @@
    function cares to declare. Locals are free to add and calls do not
    clobber them, so nothing here ever has to spill, evict, or colour
    anything -- the whole reason regalloc.c is 289 lines.
-
    What replaces it: a "register" is just an index into a per-function
    pool of wasm locals, handed out to whichever value stack slot needs
    one. get_reg() picks the lowest index no live vstack entry is using,
@@ -18,29 +16,23 @@
    exist only to satisfy the shared interface and do nothing: a wasm
    local's value survives any call, and a value that is live is never
    handed out again.
-
    Values still reach the actual wasm operand stack, and mostly stay
    there -- but that happens later, in tccwasm.c's WasmVStack when the
    buffered IR is turned into bytecode. This file only decides which
    local a value would spill to if it needs one. */
-
 #define USING_GLOBALS
 #include "../tcc.h"
 #include "../registers.h"
-
 #define NODATA_WANTED (nocode_wanted > 0)
-
 /* Vacate local r: any live value sitting in it is written out to a frame
    slot and the value stack entry rewritten to refer to that slot, so the
    value is no longer in a local at all.
-
    Spilling to memory rather than to another local is not laziness -- it
    is the contract callers rely on. expr.c's ternary calls move_reg() to
    force both arms into one location and then assigns vtop->r itself;
    if save_reg() had merely relocated the old occupant to a different
    local, that assignment would silently point at the wrong one. (It
    does: `(a<b?c+d:c-d) + (c<d?...)` quietly returned 2 instead of 8.)
-
    Locals being free still buys something -- what is gone next to the
    register machine's version is the two-word register pair, the x87
    stack pop, and the second-register bookkeeping, none of which wasm
@@ -49,12 +41,10 @@ ST_FUNC void save_reg_upstack(int r, int n)
 {
     int l, size, align, bt;
     SValue *p, *p1, sv;
-
     if ((r &= VT_VALMASK) >= VT_CONST)
         return;
     if (nocode_wanted)
         return;
-
     l = 0;
     for (p = vstack_base(), p1 = vtop - n; p <= p1; ++p) {
         if ((p->r & VT_VALMASK) != r)
@@ -85,16 +75,13 @@ ST_FUNC void save_reg_upstack(int r, int n)
         p->c.i = l;
     }
 }
-
 ST_FUNC void save_reg(int r) { save_reg_upstack(r, 0); }
-
 ST_FUNC void save_regs(int n)
 {
     SValue *p, *p1;
     for (p = vstack_base(), p1 = vtop - n; p <= p1; ++p)
         save_reg(p->r);
 }
-
 /* Lowest local in class rc that no live value stack entry is holding.
    The scan is the whole allocator: with no eviction there is no cost
    model to weigh and no spill slot to choose. */
@@ -102,7 +89,6 @@ ST_FUNC int get_reg(int rc)
 {
     int r;
     SValue *p, *base = vstack_base();
-
     for (r = 0; r < NB_REGS; ++r) {
         if (!(reg_classes[r] & rc))
             continue;
@@ -118,11 +104,9 @@ ST_FUNC int get_reg(int rc)
     tcc_error("wasm32 backend: out of value locals (raise NB_REGS)");
     return 0;
 }
-
 ST_FUNC void move_reg(int r, int s, int t)
 {
     SValue sv;
-
     if (r == s)
         return;
     /* Cannot recurse: r is either already free, or comes straight from
@@ -135,7 +119,6 @@ ST_FUNC void move_reg(int r, int s, int t)
     sv.sym = NULL;
     load(r, &sv);
 }
-
 /* Materialise vtop. Compare with regalloc.c's gv(): gone are the
    two-word register pairs (wasm has a native i64, so USING_TWO_WORDS is
    never true here), the spill-and-reload dance, and the second register
@@ -144,29 +127,23 @@ ST_FUNC void move_reg(int r, int s, int t)
    one load. */
 ST_FUNC int gv(int rc)
 {
-    int r, bt;
+    int r;
     int bit_pos, bit_size, size, align;
-
     if (vtop->type.t & VT_BITFIELD) {
         CType type;
-
         bit_pos = BIT_POS(vtop->type.t);
         bit_size = BIT_SIZE(vtop->type.t);
         /* remove bit field info to avoid loops */
         vtop->type.t &= ~VT_STRUCT_MASK;
-
         type.ref = NULL;
         type.t = vtop->type.t & VT_UNSIGNED;
         if ((vtop->type.t & VT_BTYPE) == VT_BOOL)
             type.t |= VT_UNSIGNED;
-
         r = adjust_bf(vtop, bit_pos, bit_size);
-
         if ((vtop->type.t & VT_BTYPE) == VT_LLONG)
             type.t |= VT_LLONG;
         else
             type.t |= VT_INT;
-
         if (r == VT_STRUCT) {
             tcc_error("wasm32 backend: packed bitfield load is not supported");
         } else {
@@ -182,7 +159,6 @@ ST_FUNC int gv(int rc)
         }
         return gv(rc);
     }
-
     if (is_float(vtop->type.t)
         && (vtop->r & (VT_VALMASK | VT_LVAL)) == VT_CONST) {
         /* A float constant has no immediate form, here or on any other
@@ -197,10 +173,7 @@ ST_FUNC int gv(int rc)
         init_putv(&vtop->type, data_section, offset);
         vtop->r |= VT_LVAL;
     }
-
-    bt = vtop->type.t & VT_BTYPE;
-    rc = TARGET_ADJUST_REG_CLASS(bt, rc);
-
+    rc = TARGET_ADJUST_REG_CLASS(vtop->type.t & VT_BTYPE, rc);
     /* Reload unless it is already sitting in a local of the right class
        and is not an lvalue (which would still need dereferencing). */
     r = vtop->r & VT_VALMASK;
@@ -217,7 +190,6 @@ ST_FUNC int gv(int rc)
     vtop->r = r;
     return r;
 }
-
 /* Both operands into locals. regalloc.c has to order these carefully so
    that materialising the second cannot evict the first; nothing can be
    evicted here, so the only ordering that matters is the front end's own
@@ -236,18 +208,15 @@ ST_FUNC void gv2(int rc1, int rc2)
         vswap();
     }
 }
-
 /* Materialise vtop and leave a second copy of it in another local. */
 ST_FUNC void gv_dup(void)
 {
     int t = vtop->type.t;
     int rc = RC_TYPE(t);
     int r;
-
     gv(rc);
     r = get_reg(rc);
     vdup();
     load(r, vtop);
     vtop->r = r;
 }
-

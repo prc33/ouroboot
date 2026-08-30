@@ -141,8 +141,6 @@ ST_FUNC void tccelf_new(TCCState *s)
     get_sym_attr(s, 0, 1);
 }
 
-
-
 static void free_section(Section *s)
 {
     tcc_free(s->data);
@@ -519,9 +517,6 @@ ST_FUNC addr_t get_sym_addr(TCCState *s1, const char *name, int err, int forc)
     }
     return sym->st_value;
 }
-
-
-
 
 static void
 version_add (TCCState *s1)
@@ -1152,7 +1147,6 @@ ST_FUNC void add_array (TCCState *s1, const char *sec, int c)
     section_ptr_add(s, PTR_SIZE);
 }
 
-
 /* add tcc runtime libraries */
 ST_FUNC void tcc_add_runtime(TCCState *s1)
 {
@@ -1264,17 +1258,8 @@ ST_FUNC void fill_got(TCCState *s1)
         /* no need to handle got relocations */
         if (s->link != symtab_section)
             continue;
-        for_each_elem(s, 0, rel, ElfW_Rel) {
-            switch (ELFW(R_TYPE) (rel->r_info)) {
-                case R_X86_64_GOT32:
-                case R_X86_64_GOTPCREL:
-		case R_X86_64_GOTPCRELX:
-		case R_X86_64_REX_GOTPCRELX:
-                case R_X86_64_PLT32:
-                    fill_got_entry(s1, rel);
-                    break;
-            }
-        }
+        for_each_elem(s, 0, rel, ElfW_Rel)
+            fill_got_entry(s1, rel);
     }
 }
 
@@ -1410,27 +1395,6 @@ static void bind_libs_dynsyms(TCCState *s1)
     }
 }
 
-/* Export all non local symbols. This is used by shared libraries so that the
-   non local symbols they define can resolve a reference in another shared
-   library or in the executable. Correspondingly, it allows undefined local
-   symbols to be resolved by other shared libraries or by the executable. */
-static void export_global_syms(TCCState *s1)
-{
-    int dynindex, index;
-    const char *name;
-    ElfW(Sym) *sym;
-
-    for_each_elem(symtab_section, 1, sym, ElfW(Sym)) {
-        if (ELFW(ST_BIND)(sym->st_info) != STB_LOCAL) {
-	    name = (char *) symtab_section->link->data + sym->st_name;
-	    dynindex = put_elf_sym(s1->dynsym, sym->st_value, sym->st_size,
-				   sym->st_info, 0, sym->st_shndx, name);
-	    index = sym - (ElfW(Sym) *) symtab_section->data;
-            get_sym_attr(s1, index, 1)->dyn_index = dynindex;
-        }
-    }
-}
-
 /* Allocate strings for section names and decide if an unallocated section
    should be output.
    NOTE: the strsec section comes last, so its size is also correct ! */
@@ -1472,14 +1436,13 @@ static int layout_sections(TCCState *s1, ElfW(Phdr) *phdr, int phnum,
                            Section *interp, Section* strsec,
                            struct dyn_inf *dyninf, int *sec_order)
 {
-    int i, j, k, file_type, sh_order_index, file_offset;
+    int i, j, k, sh_order_index, file_offset;
     unsigned long s_align;
     long long tmp;
     addr_t addr;
     ElfW(Phdr) *ph;
     Section *s;
 
-    file_type = s1->output_type;
     sh_order_index = 1;
     file_offset = 0;
     file_offset = sizeof(ElfW(Ehdr)) + phnum * sizeof(ElfW(Phdr));
@@ -1931,7 +1894,6 @@ static void tidy_section_headers(TCCState *s1, int *sec_order)
     tcc_free(backmap);
 }
 
-
 /* Output an ELF file. */
 /* XXX: suppress unneeded sections */
 static int elf_output_file(TCCState *s1, const char *filename)
@@ -1940,7 +1902,6 @@ static int elf_output_file(TCCState *s1, const char *filename)
     struct dyn_inf dyninf = {0};
     ElfW(Phdr) *phdr;
     Section *strsec, *interp, *dynamic, *dynstr;
-
 
     file_type = s1->output_type;
     s1->nb_errors = 0;

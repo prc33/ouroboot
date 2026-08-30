@@ -65,7 +65,7 @@ subsystem README prose are not.
 |---|---:|---:|
 | Emulator | 1,000 hard limit | 998 |
 | Kernel | 10,000 hard limit | 9,510 |
-| Compiler | 25,000 target; 20,000 stretch | 30,203 |
+| Compiler | 25,000 target; 20,000 stretch | 29,909 |
 
 ## Origins
 

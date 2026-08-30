@@ -1,7 +1,6 @@
 /* Adapted from Blosc/MiniCC's LGPL-2.1 WebAssembly backend:
    https://github.com/Blosc/minicc */
 #ifdef TARGET_DEFS_ONLY
-
 /* Value locals, not registers. The front end asks for a "register" to
    hold a live value; on wasm that is just another local, which costs a
    byte in the function header and nothing at runtime. So the pool is
@@ -10,7 +9,6 @@
    when a caller demands a specific local be vacated, never merely
    because it ran out. The old four-per-class file ran out compiling an
    ordinary nested arithmetic expression.
-
    Indices are contiguous per class and must stay below VT_CONST (0x30),
    where the value stack's own encoding begins. */
 #define WASM_NB_I32_REGS 20
@@ -20,7 +18,6 @@
 #define WASM_REG_F64_BASE (WASM_REG_I64_BASE + WASM_NB_I64_REGS)
 #define NB_REGS (WASM_REG_F64_BASE + WASM_NB_F64_REGS)
 #define ASM_DOLLAR_IN_IDENTIFIERS 0
-
 /* register classes: keep INT and FLOAT separate to match tccgen expectations */
 #define RC_INT          0x0001
 #define RC_FLOAT        0x0002
@@ -30,12 +27,10 @@
 #define RC_F1           0x0020
 #define RC_I64          0x0040
 #define RC_L0           0x0080
-
 #define RC_IRET         RC_I0
 #define RC_IRE2         RC_I1
 #define RC_FRET         RC_F0
 #define RC_FRE2         RC_F1
-
 enum {
     TREG_I0 = 0,
     TREG_I1 = 1,
@@ -44,39 +39,31 @@ enum {
     TREG_F0 = WASM_REG_F64_BASE,
     TREG_F1 = WASM_REG_F64_BASE + 1
 };
-
 #define REG_IRET TREG_I0
 #define REG_IRE2 TREG_I1
 #define REG_LRET TREG_L0
 #define REG_FRET TREG_F0
 #define REG_FRE2 TREG_F1
-
 #define TARGET_RETURN_REG(t) (((t) & VT_BTYPE) == VT_LLONG ? REG_LRET : is_float(t) ? REG_FRET : REG_IRET)
 #define TARGET_SECOND_RETURN_REG(t) VT_CONST
 #define TARGET_REG_CLASS(t) (((t) & VT_BTYPE) == VT_LLONG ? RC_I64 : is_float(t) ? RC_FLOAT : RC_INT)
 #define TARGET_RETURN_REG_CLASS(t) (reg_classes[TARGET_RETURN_REG(t)] & ~(RC_FLOAT | RC_INT | RC_I64))
 #define TARGET_ADJUST_REG_CLASS(t, rc) (rc)
-
 #define PTR_SIZE 4
 #define LDOUBLE_SIZE 8
 #define LDOUBLE_ALIGN 8
 #define MAX_ALIGN 16
-
 #define TCC_USING_DOUBLE_FOR_LDOUBLE 1
 #define PROMOTE_RET
 #define TCC_NATIVE_I64
-
 #else /* !TARGET_DEFS_ONLY */
-
 #define USING_GLOBALS
 #include "../tcc.h"
 #include "wasm-backend.h"
-
 ST_DATA const char * const target_machine_defs =
     "__wasm32__\0"
     "__wasm__\0"
     ;
-
 /* One entry per value local: the class it belongs to, plus the singleton
    classes the ABI needs in order to name a specific one (return values). */
 #define WASM_RC_I32(i) (RC_INT   | ((i) == 0 ? RC_I0 : (i) == 1 ? RC_I1 : 0))
@@ -90,37 +77,29 @@ ST_DATA const int reg_classes[NB_REGS] = {
     R10(WASM_RC_I64, 0),
     R10(WASM_RC_F64, 0),
 };
-
 ST_DATA WasmFuncIR *tcc_wasm_funcs;
 ST_DATA int tcc_wasm_nb_funcs;
-
 static int tcc_wasm_cap_funcs;
 static WasmFuncIR *wasm_cur_func;
-
 typedef struct WasmPatch {
     WasmFuncIR *func;
     int op_index;
     int next;
 } WasmPatch;
-
 static WasmPatch *wasm_patches;
 static int wasm_nb_patches;
 static int wasm_cap_patches;
-
 static int wasm_last_cmp_valid;
 static int wasm_last_cmp_op;
-
 static NORETURN void wasm_unimp(const char *feature)
 {
     tcc_error("wasm32 backend: %s is not supported in the restricted backend", feature);
 }
-
 static int wasm_is_float_type(int t)
 {
     int bt = t & VT_BTYPE;
     return bt == VT_FLOAT || bt == VT_DOUBLE || bt == VT_LDOUBLE;
 }
-
 static void wasm_grow(void **pp, int *cap, int new_count, int elem_size)
 {
     int n;
@@ -132,11 +111,9 @@ static void wasm_grow(void **pp, int *cap, int new_count, int elem_size)
     *pp = tcc_realloc(*pp, (unsigned long)n * elem_size);
     *cap = n;
 }
-
 static int wasm_type_to_val(int t, int for_ret)
 {
     int bt = t & VT_BTYPE;
-
     switch (bt) {
     case VT_VOID:
         return WASM_VAL_VOID;
@@ -164,7 +141,6 @@ static int wasm_type_to_val(int t, int for_ret)
     wasm_unimp("type in wasm type mapping");
     return WASM_VAL_VOID;
 }
-
 static char *wasm_tok_strdup(int tok)
 {
     const char *s;
@@ -173,7 +149,6 @@ static char *wasm_tok_strdup(int tok)
     s = get_tok_str(tok, NULL);
     return s ? tcc_strdup(s) : NULL;
 }
-
 ST_FUNC void tcc_wasm_reset(void)
 {
     int i, j;
@@ -193,17 +168,14 @@ ST_FUNC void tcc_wasm_reset(void)
     tcc_wasm_funcs = NULL;
     tcc_wasm_nb_funcs = 0;
     tcc_wasm_cap_funcs = 0;
-
     tcc_free(wasm_patches);
     wasm_patches = NULL;
     wasm_nb_patches = 0;
     wasm_cap_patches = 0;
-
     wasm_cur_func = NULL;
     wasm_last_cmp_valid = 0;
     wasm_last_cmp_op = 0;
 }
-
 static WasmFuncIR *wasm_new_func(Sym *sym)
 {
     WasmFuncIR *f;
@@ -215,7 +187,6 @@ static WasmFuncIR *wasm_new_func(Sym *sym)
     f->ret_type = WASM_VAL_VOID;
     return f;
 }
-
 static void wasm_func_add_param(WasmFuncIR *f, int type, int offset)
 {
     int n = f->nb_params + 1;
@@ -225,7 +196,6 @@ static void wasm_func_add_param(WasmFuncIR *f, int type, int offset)
     f->param_offsets[f->nb_params] = offset;
     f->nb_params = n;
 }
-
 /* raw byte output used for section size accounting and generic helpers */
 ST_FUNC void o(unsigned int c)
 {
@@ -237,7 +207,6 @@ ST_FUNC void o(unsigned int c)
     cur_text_section->data[ind] = c & 0xff;
     ind = ind1;
 }
-
 static WasmOp *wasm_emit_op(int kind)
 {
     WasmOp *op;
@@ -253,7 +222,6 @@ static WasmOp *wasm_emit_op(int kind)
     o(0);
     return op;
 }
-
 static int wasm_add_patch(int op_index, int next)
 {
     WasmPatch *p;
@@ -267,7 +235,6 @@ static int wasm_add_patch(int op_index, int next)
     p->next = next;
     return idx + 1;
 }
-
 static int wasm_cmp_invert(int op)
 {
     if (!wasm_last_cmp_valid) {
@@ -285,7 +252,6 @@ static int wasm_cmp_invert(int op)
        comparison — which matches the requested op.  No inversion. */
     return 0;
 }
-
 static void wasm_set_addr(WasmOp *op, int fr, Sym *sym, int fc)
 {
     unsigned value_flags;
@@ -313,7 +279,6 @@ static void wasm_set_addr(WasmOp *op, int fr, Sym *sym, int fc)
         tcc_error("wasm32 backend: unsupported address mode");
     }
 }
-
 static void wasm_emit_cmp_set_i32(int op, int lhs_reg, int rhs_reg, int rhs_imm, int is_imm)
 {
     WasmOp *wo = wasm_emit_op(WASM_OP_SET_CMP_I32);
@@ -330,7 +295,6 @@ static void wasm_emit_cmp_set_i32(int op, int lhs_reg, int rhs_reg, int rhs_imm,
     wasm_last_cmp_valid = 1;
     wasm_last_cmp_op = op;
 }
-
 static void wasm_emit_cmp_set_i64(int op, int lhs_reg, int rhs_reg,
                                   int64_t rhs_imm, int is_imm)
 {
@@ -348,7 +312,6 @@ static void wasm_emit_cmp_set_i64(int op, int lhs_reg, int rhs_reg,
     wasm_last_cmp_valid = 1;
     wasm_last_cmp_op = op;
 }
-
 ST_FUNC void gsym_addr(int t, int a)
 {
     while (t) {
@@ -364,7 +327,6 @@ ST_FUNC void gsym_addr(int t, int a)
         t = next;
     }
 }
-
 /* Records one [start, ind) loop range on the current function -- see this
  * hint's own comment in tcc.h. */
 ST_FUNC void gjmp_hint_loop_range(int start, int cont)
@@ -382,7 +344,6 @@ ST_FUNC void gjmp_hint_loop_range(int start, int cont)
     r->end_pc = ind;
     r->cont_pc = cont;
 }
-
 /* Records one switch statement's layout -- see this hint's own comment
  * in tcc.h. */
 ST_FUNC void gjmp_hint_switch_range(int bodies, int lookup, int end)
@@ -401,23 +362,19 @@ ST_FUNC void gjmp_hint_switch_range(int bodies, int lookup, int end)
     r->lookup_pc = lookup;
     r->end_pc = end;
 }
-
 ST_FUNC void load(int r, SValue *sv)
 {
     int v, ft, fr, fc, bt;
     SValue v1;
     WasmOp *wo;
-
     fr = sv->r;
     ft = sv->type.t & ~VT_DEFSIGN;
     fc = sv->c.i;
     ft &= ~(VT_VOLATILE | VT_CONSTANT);
     v = fr & VT_VALMASK;
     bt = ft & VT_BTYPE;
-
     if (bt == VT_STRUCT)
         wasm_unimp("struct load");
-
     if (fr & VT_LVAL) {
         if (v == VT_LLOCAL) {
             int tr = r;
@@ -433,7 +390,6 @@ ST_FUNC void load(int r, SValue *sv)
             v = tr;
             fc = 0;
         }
-
         if (bt == VT_FLOAT) wo = wasm_emit_op(WASM_OP_LOAD_F32);
         else if (bt == VT_DOUBLE || bt == VT_LDOUBLE) wo = wasm_emit_op(WASM_OP_LOAD_F64);
         else if (bt == VT_LLONG)
@@ -449,7 +405,6 @@ ST_FUNC void load(int r, SValue *sv)
         else if ((ft & VT_TYPE) == VT_SHORT) wo = wasm_emit_op(WASM_OP_LOAD_S16);
         else if ((ft & VT_TYPE) == (VT_SHORT | VT_UNSIGNED)) wo = wasm_emit_op(WASM_OP_LOAD_U16);
         else wo = wasm_emit_op(WASM_OP_LOAD_I32);
-
         if (!wo)
             return;
         wo->r0 = r;
@@ -523,7 +478,6 @@ ST_FUNC void load(int r, SValue *sv)
     } else if (v == VT_JMP || v == VT_JMPI) {
         int t = v & 1;
         int j;
-
         wo = wasm_emit_op(WASM_OP_I32_CONST);
         if (wo) {
             wo->r0 = r;
@@ -551,20 +505,16 @@ ST_FUNC void load(int r, SValue *sv)
        be applied again if that register is later dereferenced. */
     sv->c.i = 0;
 }
-
 ST_FUNC void store(int r, SValue *v)
 {
     int ft, bt, fr, fc;
     WasmOp *wo;
-
     ft = v->type.t;
     bt = ft & VT_BTYPE;
     fr = v->r & VT_VALMASK;
     fc = v->c.i;
-
     if (bt == VT_STRUCT)
         wasm_unimp("struct store");
-
     if (fr == VT_CONST || fr == VT_LOCAL || (v->r & VT_LVAL)) {
         if (bt == VT_FLOAT) wo = wasm_emit_op(WASM_OP_STORE_F32);
         else if (bt == VT_DOUBLE || bt == VT_LDOUBLE) wo = wasm_emit_op(WASM_OP_STORE_F64);
@@ -572,7 +522,6 @@ ST_FUNC void store(int r, SValue *v)
         else if (bt == VT_SHORT) wo = wasm_emit_op(WASM_OP_STORE_I16);
         else if (bt == VT_BYTE || bt == VT_BOOL) wo = wasm_emit_op(WASM_OP_STORE_I8);
         else wo = wasm_emit_op(WASM_OP_STORE_I32);
-
         if (!wo)
             return;
         wo->r0 = r;
@@ -588,7 +537,6 @@ ST_FUNC void store(int r, SValue *v)
             wo->flags |= WASM_OP_FLAG_UNSIGNED;
     }
 }
-
 ST_FUNC int gfunc_sret(CType *vt, int variadic, CType *ret, int *ret_align, int *regsize)
 {
     (void)variadic;
@@ -599,7 +547,6 @@ ST_FUNC int gfunc_sret(CType *vt, int variadic, CType *ret, int *ret_align, int 
         return 0;
     return 1;
 }
-
 ST_FUNC void gfunc_call(int nb_args)
 {
     Sym *func_sym;
@@ -609,12 +556,9 @@ ST_FUNC void gfunc_call(int nb_args)
     int arg_off[WASM_MAX_CALL_ARGS];
     int ret_type;
     int is_direct;
-
     if (nb_args > WASM_MAX_CALL_ARGS)
         tcc_error("wasm32 backend: too many call arguments (%d)", nb_args);
-
     save_regs(nb_args + 1);
-
     for (i = nb_args - 1; i >= 0; --i) {
         int bt = vtop->type.t & VT_BTYPE;
         int size, align, slot;
@@ -654,13 +598,11 @@ ST_FUNC void gfunc_call(int nb_args)
         arg_off[i] = slot;
         vtop--;
     }
-
     func_sym = vtop->type.ref;
     if (!func_sym)
         tcc_error("wasm32 backend: invalid function call target");
     if (func_sym->f.func_type == FUNC_ELLIPSIS)
         wasm_unimp("variadic call");
-
     is_direct = ((vtop->r & (VT_VALMASK | VT_LVAL | VT_SYM)) == (VT_CONST | VT_SYM)
                  && vtop->c.i == 0);
     if (!is_direct)
@@ -681,33 +623,26 @@ ST_FUNC void gfunc_call(int nb_args)
             ret_type = wasm_type_to_val(func_sym->type.t, 1);
         wo->type = (unsigned char)ret_type;
     }
-
     wasm_last_cmp_valid = 0;
     vtop--;
 }
-
 ST_FUNC void gfunc_prolog(Sym *func_sym)
 {
     CType *func_type = &func_sym->type;
     Sym *sym;
-
     if (!func_type->ref)
         tcc_error("wasm32 backend: malformed function type");
-
     sym = func_type->ref;
     if (sym->f.func_type == FUNC_ELLIPSIS)
         wasm_unimp("variadic function definition");
     if (sym->f.func_call != FUNC_CDECL)
         wasm_unimp("non-cdecl calling convention");
-
     wasm_cur_func = wasm_new_func(func_sym);
     wasm_cur_func->is_static = !!(func_sym->type.t & VT_STATIC);
     wasm_cur_func->name = tcc_strdup(get_tok_str(func_sym->v, NULL));
     wasm_cur_func->start_pc = ind;
-
     loc = 0;
     func_vc = 0;
-
     if ((func_vt.t & VT_BTYPE) == VT_STRUCT) {
         loc -= PTR_SIZE;
         func_vc = loc;
@@ -718,53 +653,41 @@ ST_FUNC void gfunc_prolog(Sym *func_sym)
     } else {
         wasm_cur_func->ret_type = (unsigned char)wasm_type_to_val(func_vt.t, 1);
     }
-
     while ((sym = sym->next) != NULL) {
         CType *type = &sym->type;
         int size, align;
         int val_type;
-
         if ((type->t & VT_BTYPE) == VT_STRUCT)
             wasm_unimp("struct parameters");
-
         size = type_size(type, &align);
         if (align < 1)
             align = 1;
         size = (size + 3) & ~3;
         loc = (loc - size) & -align;
         sym_push(sym->v & ~SYM_FIELD, &sym->type, VT_LOCAL | VT_LVAL, loc);
-
         val_type = wasm_type_to_val(type->t, 0);
         wasm_func_add_param(wasm_cur_func, val_type, loc);
     }
-
     wasm_last_cmp_valid = 0;
 }
-
 ST_FUNC void gfunc_epilog(void)
 {
     WasmOp *wo;
-
     if (!wasm_cur_func)
         return;
-
     wasm_cur_func->frame_size = (-loc + 15) & -16;
-
     wo = wasm_emit_op(WASM_OP_RET);
     if (wo)
         wo->type = wasm_cur_func->ret_type;
-
     wasm_cur_func->end_pc = ind;
     wasm_cur_func = NULL;
     wasm_last_cmp_valid = 0;
 }
-
 ST_FUNC void gen_fill_nops(int bytes)
 {
     while (bytes-- > 0)
         o(0);
 }
-
 ST_FUNC int gjmp(int t)
 {
     WasmOp *wo;
@@ -775,7 +698,6 @@ ST_FUNC int gjmp(int t)
         return t;
     return wasm_add_patch(wasm_cur_func->nb_ops - 1, t);
 }
-
 ST_FUNC void gjmp_addr(int a)
 {
     WasmOp *wo;
@@ -786,7 +708,6 @@ ST_FUNC void gjmp_addr(int a)
         return;
     wo->target_pc = a;
 }
-
 ST_FUNC int gjmp_cond(int op, int t)
 {
     WasmOp *wo;
@@ -801,7 +722,6 @@ ST_FUNC int gjmp_cond(int op, int t)
         wo->flags |= WASM_OP_FLAG_INVERT;
     return wasm_add_patch(wasm_cur_func->nb_ops - 1, t);
 }
-
 ST_FUNC int gjmp_append(int n, int t)
 {
     if (n) {
@@ -813,7 +733,6 @@ ST_FUNC int gjmp_append(int n, int t)
     }
     return t;
 }
-
 static void wasm_emit_i32_bin(int op, int dst, int src_reg, int src_imm, int is_imm)
 {
     WasmOp *wo = wasm_emit_op(WASM_OP_I32_BIN);
@@ -828,12 +747,10 @@ static void wasm_emit_i32_bin(int op, int dst, int src_reg, int src_imm, int is_
         wo->r1 = src_reg;
     }
 }
-
 ST_FUNC void gen_opi(int op)
 {
     int r, fr, c;
     WasmOp *wo;
-
     switch (op) {
     case TOK_MID:
         wo = wasm_emit_op(WASM_OP_I32_NEG);
@@ -841,7 +758,6 @@ ST_FUNC void gen_opi(int op)
         if (wo)
             wo->r0 = r;
         break;
-
     case '+':
     case '-':
     case '&':
@@ -871,7 +787,6 @@ ST_FUNC void gen_opi(int op)
         wasm_last_cmp_valid = 0;
         vtop--;
         break;
-
     case TOK_EQ:
     case TOK_NE:
     case TOK_LT:
@@ -897,26 +812,22 @@ ST_FUNC void gen_opi(int op)
         vtop--;
         vset_VT_CMP(op);
         break;
-
     default:
         tcc_error("wasm32 backend: unsupported integer op token %d", op);
         break;
     }
 }
-
 ST_FUNC void gen_opl(int op)
 {
     int r, fr;
     int64_t c;
     WasmOp *wo;
-
     if (op == TOK_MID) {
         r = gv(RC_I64);
         wo = wasm_emit_op(WASM_OP_I64_NEG);
         if (wo) wo->r0 = r;
         return;
     }
-
     switch (op) {
     case '+': case '-': case '&': case '^': case '|': case '*':
     case TOK_SHL: case TOK_SHR: case TOK_SAR:
@@ -938,7 +849,6 @@ ST_FUNC void gen_opl(int op)
         wasm_last_cmp_valid = 0;
         vtop--;
         return;
-
     case TOK_EQ: case TOK_NE: case TOK_LT: case TOK_GT: case TOK_LE:
     case TOK_GE: case TOK_ULT: case TOK_UGT: case TOK_ULE: case TOK_UGE:
         if ((vtop->r & (VT_VALMASK | VT_LVAL | VT_SYM)) == VT_CONST) {
@@ -955,7 +865,6 @@ ST_FUNC void gen_opl(int op)
     }
     tcc_error("wasm32 backend: unsupported i64 op token %d", op);
 }
-
 ST_FUNC void gen_cvt_i32_i64(int is_unsigned)
 {
     int src = gv(RC_INT);
@@ -964,7 +873,6 @@ ST_FUNC void gen_cvt_i32_i64(int is_unsigned)
     if (wo) { wo->r0 = dst; wo->r1 = src; wo->flags = is_unsigned; }
     vtop->r = dst;
 }
-
 ST_FUNC void gen_cvt_i64_i32(void)
 {
     int src = gv(RC_I64);
@@ -973,12 +881,10 @@ ST_FUNC void gen_cvt_i64_i32(void)
     if (wo) { wo->r0 = dst; wo->r1 = src; }
     vtop->r = dst;
 }
-
 ST_FUNC void gen_opf(int op)
 {
     int r, fr, bt;
     WasmOp *wo;
-
     if (op == TOK_MID) {
         r = gv(RC_FLOAT);
         bt = vtop->type.t & VT_BTYPE;
@@ -988,12 +894,10 @@ ST_FUNC void gen_opf(int op)
         wasm_last_cmp_valid = 0;
         return;
     }
-
     gv2(RC_FLOAT, RC_FLOAT);
     r = vtop[-1].r;
     fr = vtop[0].r;
     bt = vtop[-1].type.t & VT_BTYPE;
-
     if (op >= TOK_ULT && op <= TOK_GT) {
         if (bt == VT_FLOAT)
             wo = wasm_emit_op(WASM_OP_SET_CMP_F32);
@@ -1022,13 +926,11 @@ ST_FUNC void gen_opf(int op)
         vtop--;
     }
 }
-
 ST_FUNC void gen_cvt_itof(int t)
 {
     int r, fr, bt;
     WasmOp *wo;
     bt = vtop->type.t & VT_BTYPE;
-
     fr = get_reg(RC_FLOAT);
     if (bt == VT_LLONG) {
         r = gv(RC_I64);
@@ -1049,18 +951,15 @@ ST_FUNC void gen_cvt_itof(int t)
                 wo->flags |= WASM_OP_FLAG_INVERT;
         }
     }
-
     vtop->r = fr;
     vtop->r2 = VT_CONST;
     wasm_last_cmp_valid = 0;
 }
-
 ST_FUNC void gen_cvt_ftoi(int t)
 {
     int r, fr;
     WasmOp *wo;
     int bt = t & VT_BTYPE;
-
     fr = gv(RC_FLOAT);
     if (bt == VT_LLONG) {
         r = get_reg(RC_I64);
@@ -1083,15 +982,12 @@ ST_FUNC void gen_cvt_ftoi(int t)
         }
         vtop->r2 = VT_CONST;
     }
-
     vtop->r = r;
     wasm_last_cmp_valid = 0;
 }
-
 ST_FUNC void gen_cvt_ftof(int t)
 {
     WasmOp *wo;
-
     gv(RC_FLOAT);
     if ((t & VT_BTYPE) == VT_FLOAT) {
         wo = wasm_emit_op(WASM_OP_FTOF_TO_F32);
@@ -1100,29 +996,24 @@ ST_FUNC void gen_cvt_ftof(int t)
     }
     wasm_last_cmp_valid = 0;
 }
-
 ST_FUNC void ggoto(void)
 {
     wasm_unimp("computed goto / indirect branch");
 }
-
 ST_FUNC void gen_vla_sp_save(int addr)
 {
     (void)addr;
     wasm_unimp("VLA/alloca");
 }
-
 ST_FUNC void gen_vla_sp_restore(int addr)
 {
     (void)addr;
     wasm_unimp("VLA/alloca");
 }
-
 ST_FUNC void gen_vla_alloc(CType *type, int align)
 {
     (void)type;
     (void)align;
     wasm_unimp("VLA/alloca");
 }
-
 #endif /* !TARGET_DEFS_ONLY */

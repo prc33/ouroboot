@@ -2,9 +2,7 @@
    https://github.com/Blosc/minicc */
 #ifndef TCC_WASM_BACKEND_H
 #define TCC_WASM_BACKEND_H
-
 /* Shared IR definitions between wasm-gen.c and tccwasm.c */
-
 enum {
     WASM_VAL_VOID = 0,
     WASM_VAL_I32,
@@ -12,14 +10,12 @@ enum {
     WASM_VAL_F32,
     WASM_VAL_F64,
 };
-
 enum {
     WASM_ADDR_REG = 0,
     WASM_ADDR_FP,
     WASM_ADDR_ABS,
     WASM_ADDR_SYM,
 };
-
 enum {
     WASM_OP_NOP = 0,
     WASM_OP_I32_CONST,
@@ -72,18 +68,15 @@ enum {
     WASM_OP_CALL,
     WASM_OP_RET,
 };
-
 #define WASM_OP_FLAG_IMM   0x0001
 #define WASM_OP_FLAG_INVERT 0x0002
 #define WASM_OP_FLAG_UNSIGNED 0x0100
 #define WASM_OP_FLAG_PARAM 0x0200
-
 typedef struct WasmBuf {
     unsigned char *data;
     int len;
     int cap;
 } WasmBuf;
-
 ST_FUNC int wasm_align_up(int v, int a);
 ST_FUNC void wb_reserve(WasmBuf *b, int add);
 ST_FUNC void wb_u8(WasmBuf *b, int v);
@@ -109,7 +102,6 @@ ST_FUNC int wasm_i64_cmp_opcode(int op);
 ST_FUNC int wasm_f32_cmp_opcode(int op);
 ST_FUNC int wasm_f64_cmp_opcode(int op);
 ST_FUNC int wasm_f_bin_opcode(int op, int is_f32);
-
 #define WASM_MAX_CALL_ARGS 32
 typedef struct WasmOp {
     int pc;
@@ -133,7 +125,6 @@ typedef struct WasmOp {
     int call_arg_off[WASM_MAX_CALL_ARGS];
     int call_arg_local[WASM_MAX_CALL_ARGS];
 } WasmOp;
-
 /* One while/for/do loop's exact extent, as tccgen.c itself knows it --
  * see gjmp_hint_loop_range()'s own comment in tcc.h. Recorded once per
  * loop construct, not once per repeat-edge, so a for-loop's rotated
@@ -145,12 +136,10 @@ typedef struct WasmOp {
 typedef struct WasmSwitchRange {
     int bodies_pc, lookup_pc, end_pc;
 } WasmSwitchRange;
-
 typedef struct WasmLoopRange {
     int start_pc, end_pc;
     int cont_pc;        /* continue target -- see the hint's own comment */
 } WasmLoopRange;
-
 typedef struct WasmFuncIR {
     int sym_tok;
     char *name;
@@ -174,10 +163,7 @@ typedef struct WasmFuncIR {
     int nb_switches;
     int cap_switches;
 } WasmFuncIR;
-
 extern WasmFuncIR *tcc_wasm_funcs;
 extern int tcc_wasm_nb_funcs;
-
 ST_FUNC void tcc_wasm_reset(void);
-
 #endif /* TCC_WASM_BACKEND_H */

@@ -49,7 +49,6 @@ static int pp_expr;
 static int pp_counter;
 static void tok_print(const char *msg, const int *str);
 
-
 static const char tcc_keywords[] = 
 #define DEF(id, str) str "\0"
 #include "tcctok.h"
@@ -743,7 +742,6 @@ static int expr_preprocess(void)
     end_macro();
     return c != 0;
 }
-
 
 /* parse after #define */
 ST_FUNC void parse_define(void)
@@ -1783,7 +1781,6 @@ static void parse_number(const char *p)
         tcc_error("invalid number\n");
 }
 
-
 #define PARSE2(c1, tok1, c2, tok2)              \
     case c1:                                    \
         PEEKC(c, p);                            \
@@ -1801,7 +1798,6 @@ static inline void next_nomacro1(void)
     int t, c, is_long, len;
     TokenSym *ts;
     uint8_t *p, *p1;
-    unsigned int h;
 
     p = file->buf_ptr;
  redo_no_start:

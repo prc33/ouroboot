@@ -1,16 +1,13 @@
 /* Encoding primitives for the wasm binary format: the growable byte
    buffer, LEB128 and float encoders, the instruction shorthands, and the
    opcode tables.
-
    These used to be private to tccwasm.c, which was the only place bytes
    were produced -- wasm-gen.c recorded a symbolic op and tccwasm.c later
    interpreted it. wasm-gen.c now encodes instructions as it generates
    them, so both files need these. */
-
 #define USING_GLOBALS
 #include "../tcc.h"
 #include "wasm-backend.h"
-
 ST_FUNC int wasm_align_up(int v, int a)
 {
     return (v + a - 1) & -a;
@@ -215,4 +212,3 @@ ST_FUNC int wasm_f_bin_opcode(int op, int is_f32)
     tcc_error("wasm32 backend: unsupported floating binop token %d", op);
     return is_f32 ? 0x92 : 0xa0;
 }
-
