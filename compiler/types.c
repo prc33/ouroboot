@@ -25,6 +25,19 @@ ST_INLN int is_float(int t)
         || bt == VT_QFLOAT;
 }
 
+ST_FUNC int adjust_bf(SValue *sv, int bit_pos, int bit_size)
+{
+    int t;
+    (void)bit_pos; (void)bit_size;
+    if (!sv->type.ref) return 0;
+    t = sv->type.ref->auxtype;
+    if (t != -1 && t != VT_STRUCT) {
+        sv->type.t = (sv->type.t & ~(VT_BTYPE | VT_LONG)) | t;
+        sv->r |= VT_LVAL;
+    }
+    return t;
+}
+
 ST_FUNC int is_integer_btype(int bt)
 {
     return bt == VT_BYTE
@@ -503,4 +516,3 @@ ST_FUNC int is_compatible_unqualified_types(CType *type1, CType *type2)
 {
     return compare_types(type1,type2,1);
 }
-

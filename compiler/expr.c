@@ -6,6 +6,71 @@
 #define CODE_OFF() (nocode_wanted |= 0x20000000)
 #define USING_TWO_WORDS(t) (TARGET_SECOND_RETURN_REG(t) != VT_CONST)
 
+ST_FUNC void gaddrof(void)
+{
+    vtop->r &= ~VT_LVAL;
+    if ((vtop->r & VT_VALMASK) == VT_LLOCAL)
+        vtop->r = (vtop->r & ~VT_VALMASK) | VT_LOCAL | VT_LVAL;
+}
+
+static void incr_bf_adr(int o)
+{
+    vtop->type = char_pointer_type;
+    gaddrof();
+    vpushs(o);
+    gen_op('+');
+    vtop->type.t = VT_BYTE | VT_UNSIGNED;
+    vtop->r |= VT_LVAL;
+}
+
+ST_FUNC void load_packed_bf(CType *type, int bit_pos, int bit_size)
+{
+    int n, o, bits;
+    save_reg_upstack(vtop->r, 1);
+    vpush64(type->t & VT_BTYPE, 0);
+    bits = 0, o = bit_pos >> 3, bit_pos &= 7;
+    do {
+        vswap(); incr_bf_adr(o); vdup();
+        n = 8 - bit_pos;
+        if (n > bit_size) n = bit_size;
+        if (bit_pos) vpushi(bit_pos), gen_op(TOK_SHR), bit_pos = 0;
+        if (n < 8) vpushi((1 << n) - 1), gen_op('&');
+        gen_cast(type);
+        if (bits) vpushi(bits), gen_op(TOK_SHL);
+        vrotb(3); gen_op('|');
+        bits += n, bit_size -= n, o = 1;
+    } while (bit_size);
+    vswap(), vpop();
+    if (!(type->t & VT_UNSIGNED)) {
+        n = ((type->t & VT_BTYPE) == VT_LLONG ? 64 : 32) - bits;
+        vpushi(n), gen_op(TOK_SHL); vpushi(n), gen_op(TOK_SAR);
+    }
+}
+
+ST_FUNC void store_packed_bf(int bit_pos, int bit_size)
+{
+    int bits, n, o, m, c;
+    c = (vtop->r & (VT_VALMASK | VT_LVAL | VT_SYM)) == VT_CONST;
+    vswap(); save_reg_upstack(vtop->r, 1);
+    bits = 0, o = bit_pos >> 3, bit_pos &= 7;
+    do {
+        incr_bf_adr(o); vswap(); c ? vdup() : gv_dup(); vrott(3);
+        if (bits) vpushi(bits), gen_op(TOK_SHR);
+        if (bit_pos) vpushi(bit_pos), gen_op(TOK_SHL);
+        n = 8 - bit_pos;
+        if (n > bit_size) n = bit_size;
+        if (n < 8) {
+            m = ((1 << n) - 1) << bit_pos;
+            vpushi(m), gen_op('&'); vpushv(vtop-1);
+            vpushi(m & 0x80 ? ~m & 0x7f : ~m);
+            gen_op('&'); gen_op('|');
+        }
+        vdup(), vtop[-1] = vtop[-2]; vstore(), vpop();
+        bits += n, bit_size -= n, bit_pos = 0, o = 1;
+    } while (bit_size);
+    vpop(), vpop();
+}
+
 static int expr_return_reg(int t) { return TARGET_RETURN_REG(t); }
 static int expr_return_class(int t) { return reg_classes[expr_return_reg(t)]; }
 static void expr_set_return(SValue *sv, int t)
