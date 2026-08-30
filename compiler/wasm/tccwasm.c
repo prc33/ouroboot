@@ -1177,7 +1177,7 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
     unsigned char *direct_param;
     int *direct_offset, *direct_type, *direct_local;
     int nb_direct = 0, nb_direct_i32 = 0, nb_direct_i64 = 0;
-    int has_local_address = 0, use_frame = 0;
+    int use_frame = 0;
     int local_pc, local_fp, local_cmp, local_carry, local_i0, local_f0, local_tmp64;
     WasmEmitCtx ctx_structured, ctx_dispatch;
     WasmVStack vs;
@@ -1215,12 +1215,9 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
     }
 
     /* Promote fixed, non-aliased i32 frame slots to real wasm locals. */
-    for (i = 0; i < f->nb_ops; ++i)
-        if (f->ops[i].kind == WASM_OP_ADDR_LOCAL)
-            has_local_address = 1;
     for (i = 0; i < f->nb_ops; ++i) {
         WasmOp *op = &f->ops[i];
-        int j, k, safe = 1, off, is_call_arg = 0;
+        int j, k, safe = 1, off;
         int type = (op->kind == WASM_OP_LOAD_I32 || op->kind == WASM_OP_STORE_I32)
                  ? WASM_VAL_I32
                  : (op->kind == WASM_OP_LOAD_I64 || op->kind == WASM_OP_STORE_I64)
@@ -1229,13 +1226,6 @@ static void wasm_emit_function_body(WasmBuf *code, WasmFuncIR *f, TCCState *s1)
             || (op->flags & WASM_OP_FLAG_PARAM))
             continue;
         off = op->imm;
-        for (j = 0; j < f->nb_ops; ++j)
-            if (f->ops[j].kind == WASM_OP_CALL)
-                for (k = 0; k < f->ops[j].call_nb_args; ++k)
-                    if (f->ops[j].call_arg_off[k] == off)
-                        is_call_arg = 1;
-        if (has_local_address && !is_call_arg)
-            continue;
         for (j = 0; j < nb_direct; ++j)
             if (direct_offset[j] == off)
                 break;
