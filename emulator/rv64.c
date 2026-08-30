@@ -41,8 +41,7 @@ static u32 in_read, in_write, out_read, out_write;
 static u64 fetch_url, fetch_destination;
 static u32 fetch_url_length, fetch_capacity, fetch_length, fetch_status;
 
-static u64 tlb_vpage[512], tlb_ppage[512], tlb_satp[512];
-static u8 tlb_context[512], tlb_valid[512];
+static u64 tlb_tag[512], tlb_ppage[512];
 
 /* Spell unsigned 64-bit float conversions in terms of signed ones so the
  * tiny wasm32 backend needs no compiler-rt conversion helpers. */
@@ -69,7 +68,7 @@ u64 rv_pc(void) { return pc; }
 static void flush_tlb(void)
 {
     u32 i;
-    for (i = 0; i < 512; ++i) tlb_valid[i] = 0;
+    for (i = 0; i < 512; ++i) tlb_tag[i] = 0;
 }
 
 static int physical_read(u64 addr, u32 size, u64 *value)
@@ -146,14 +145,15 @@ static int physical_write(u64 addr, u32 size, u64 value)
 static int translate(u64 va, u32 access, u64 *pa)
 {
     u64 satp = csr[SATP], table, pte = 0;
+    u64 tag;
     u32 mode = satp >> 60, level, context, slot;
     if (mode == 0) { *pa = va; return 1; }
     if (mode != 8) { fault_addr = va; fault = 1; return 0; }
 
     context = privilege | ((csr[SSTATUS] & STATUS_SUM) ? 2 : 0);
     slot = ((u32)(va >> 12) & 255) + (access == 2 ? 256 : 0);
-    if (tlb_valid[slot] && tlb_vpage[slot] == (va >> 12) &&
-        tlb_satp[slot] == satp && tlb_context[slot] == context) {
+    tag = (((va >> 12) << 2) | context) + 1;
+    if (tlb_tag[slot] == tag) {
         *pa = tlb_ppage[slot] | (va & 4095);
         return 1;
     }
@@ -175,17 +175,15 @@ static int translate(u64 va, u32 access, u64 *pa)
         return 0;
     }
     *pa = ((pte >> 10) << 12) | (va & 4095);
-    tlb_valid[slot] = 1;
-    tlb_vpage[slot] = va >> 12;
+    tlb_tag[slot] = tag;
     tlb_ppage[slot] = *pa & ~4095ULL;
-    tlb_satp[slot] = satp;
-    tlb_context[slot] = context;
     return 1;
 }
 
 static int load(u64 va, u32 size, u32 access, u64 *v)
 {
-    u64 pa;
+    u64 pa, off, tag;
+    u32 context, slot;
     if ((va & 4095) + size > 4096) {
         u64 byte;
         *v = 0;
@@ -195,20 +193,47 @@ static int load(u64 va, u32 size, u32 access, u64 *v)
         }
         return 1;
     }
-    if (!translate(va, access, &pa)) return 0;
+    context = privilege | ((csr[SSTATUS] & STATUS_SUM) ? 2 : 0);
+    slot = ((u32)(va >> 12) & 255) + (access == 2 ? 256 : 0);
+    tag = (((va >> 12) << 2) | context) + 1;
+    if (tlb_tag[slot] == tag) pa = tlb_ppage[slot] | (va & 4095);
+    else if (!translate(va, access, &pa)) return 0;
+    off = pa - RAM_BASE;
+    if (off < RAM_SIZE && off + size <= RAM_SIZE) {
+        const u8 *p = ram + (u32)off;
+        if (size == 1) *v = *p;
+        else if (size == 2) *v = *(u16 *)p;
+        else if (size == 4) *v = *(u32 *)p;
+        else *v = *(u64 *)p;
+        return 1;
+    }
     return physical_read(pa, size, v);
 }
 
 static int store(u64 va, u32 size, u64 v)
 {
-    u64 pa;
+    u64 pa, off, tag;
+    u32 context, slot;
     if ((va & 4095) + size > 4096) {
         for (u32 i = 0; i < size; i++) {
             if (!translate(va + i, 2, &pa) || !physical_write(pa, 1, v >> (i * 8))) return 0;
         }
         return 1;
     }
-    if (!translate(va, 2, &pa)) return 0;
+    context = privilege | ((csr[SSTATUS] & STATUS_SUM) ? 2 : 0);
+    slot = ((u32)(va >> 12) & 255) + 256;
+    tag = (((va >> 12) << 2) | context) + 1;
+    if (tlb_tag[slot] == tag) pa = tlb_ppage[slot] | (va & 4095);
+    else if (!translate(va, 2, &pa)) return 0;
+    off = pa - RAM_BASE;
+    if (off < RAM_SIZE && off + size <= RAM_SIZE) {
+        u8 *p = ram + (u32)off;
+        if (size == 1) *p = v;
+        else if (size == 2) *(u16 *)p = v;
+        else if (size == 4) *(u32 *)p = v;
+        else *(u64 *)p = v;
+        return 1;
+    }
     return physical_write(pa, size, v);
 }
 
@@ -503,7 +528,8 @@ u32 rv_run(u32 count, u32 time_advance)
 {
     u32 i;
     for (i = 0; i < count; ++i) {
-        u64 raw;
+        u64 raw, pa, tag, off;
+        u32 context, slot;
         ticks += time_advance;
         if (timecmp && ticks >= timecmp) {
             csr[SIP] |= IP_STIP;
@@ -512,7 +538,17 @@ u32 rv_run(u32 count, u32 time_advance)
             }
         }
         if (halted) continue;
-        if (!load(pc, 4, 0, &raw)) { trap(fault == 2 ? 1 : 12, fault_addr, 0); continue; }
+        context = privilege | ((csr[SSTATUS] & STATUS_SUM) ? 2 : 0);
+        slot = (u32)(pc >> 12) & 255;
+        tag = (((pc >> 12) << 2) | context) + 1;
+        pa = tlb_ppage[slot] | (pc & 4095);
+        off = pa - RAM_BASE;
+        if (tlb_tag[slot] == tag && off < RAM_SIZE - 3)
+            raw = *(u32 *)(ram + (u32)off);
+        else if (!load(pc, 4, 0, &raw)) {
+            trap(fault == 2 ? 1 : 12, fault_addr, 0);
+            continue;
+        }
         execute((u32)raw);
     }
     return fault;
