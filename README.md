@@ -64,7 +64,7 @@ subsystem README prose are not.
 | Component | Limit or target | Current |
 |---|---:|---:|
 | Emulator | 1,000 hard limit | 998 |
-| Kernel | 10,000 hard limit | 9,510 |
+| Kernel | 10,000 hard limit | 9,537 |
 | Compiler | 25,000 target; 20,000 stretch | 30,405 |
 
 ## Origins
