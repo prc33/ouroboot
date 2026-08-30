@@ -137,10 +137,7 @@ static void parse_operand(TCCState *s1, Operand *op) {
             op->type = OP_IM12S;
     } else if (op->e.sym->type.t & (VT_EXTERN | VT_STATIC)) {
         label.type.t = VT_VOID | VT_STATIC;
-        if (op->e.sym->type.t & VT_STATIC)
-            greloca(cur_text_section, op->e.sym, ind, R_RISCV_PCREL_HI20, 0);
-        else
-            greloca(cur_text_section, op->e.sym, ind, R_RISCV_GOT_HI20, 0);
+        greloca(cur_text_section, op->e.sym, ind, R_RISCV_PCREL_HI20, 0);
         put_extern_sym(&label, cur_text_section, ind, 0);
         greloca(cur_text_section, &label, ind+4, R_RISCV_PCREL_LO12_I, 0);
         op->type = OP_IM12S;

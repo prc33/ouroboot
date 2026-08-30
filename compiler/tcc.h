@@ -29,94 +29,10 @@
 
 /* -------------------------------------------- */
 
-/* parser debug */
-/* #define PARSE_DEBUG */
-/* preprocessor debug */
-/* #define PP_DEBUG */
-/* include file debug */
-/* #define INC_DEBUG */
-/* memory leak debug (only for single threaded usage) */
-/* assembler debug */
-/* #define ASM_DEBUG */
-
 /* The build selects one of the three backends; retain i386 as the default. */
 #if !defined(TCC_TARGET_I386) && !defined(TCC_TARGET_RISCV64) && \
     !defined(TCC_TARGET_WASM32)
 # define TCC_TARGET_I386
-#endif
-
-/* ------------ path configuration ------------ */
-
-#ifndef CONFIG_SYSROOT
-# define CONFIG_SYSROOT ""
-#endif
-#ifndef CONFIG_TCCDIR
-# define CONFIG_TCCDIR "/usr/local/lib/tcc"
-#endif
-#ifndef CONFIG_LDDIR
-# define CONFIG_LDDIR "lib"
-#endif
-#ifdef CONFIG_TRIPLET
-# define USE_TRIPLET(s) s "/" CONFIG_TRIPLET
-# define ALSO_TRIPLET(s) USE_TRIPLET(s) ":" s
-#else
-# define USE_TRIPLET(s) s
-# define ALSO_TRIPLET(s) s
-#endif
-
-/* path to find crt1.o, crti.o and crtn.o */
-#ifndef CONFIG_TCC_CRTPREFIX
-# define CONFIG_TCC_CRTPREFIX USE_TRIPLET(CONFIG_SYSROOT "/usr/" CONFIG_LDDIR)
-#endif
-
-#ifndef CONFIG_USR_INCLUDE
-# define CONFIG_USR_INCLUDE "/usr/include"
-#endif
-
-/* Below: {B} is substituted by CONFIG_TCCDIR (rsp. -B option) */
-
-/* system include paths */
-#ifndef CONFIG_TCC_SYSINCLUDEPATHS
-#  define CONFIG_TCC_SYSINCLUDEPATHS \
-        "{B}/include" \
-    ":" ALSO_TRIPLET(CONFIG_SYSROOT "/usr/local/include") \
-    ":" ALSO_TRIPLET(CONFIG_SYSROOT CONFIG_USR_INCLUDE)
-#endif
-
-/* library search paths */
-#ifndef CONFIG_TCC_LIBPATHS
-#  define CONFIG_TCC_LIBPATHS \
-        ALSO_TRIPLET(CONFIG_SYSROOT "/usr/" CONFIG_LDDIR) \
-    ":" ALSO_TRIPLET(CONFIG_SYSROOT "/" CONFIG_LDDIR) \
-    ":" ALSO_TRIPLET(CONFIG_SYSROOT "/usr/local/" CONFIG_LDDIR)
-#endif
-
-/* name of ELF interpreter */
-#ifndef CONFIG_TCC_ELFINTERP
-# if defined __DragonFly__
-#  define CONFIG_TCC_ELFINTERP "/usr/libexec/ld-elf.so.2"
-# elif defined __GNU__
-#  define CONFIG_TCC_ELFINTERP "/lib/ld.so"
-# elif defined(TCC_TARGET_RISCV64)
-#  define CONFIG_TCC_ELFINTERP "/lib/ld-linux-riscv64-lp64d.so.1"
-# else
-#  if defined(TCC_MUSL)
-#   if defined(TCC_TARGET_I386)
-#     define CONFIG_TCC_ELFINTERP "/lib/ld-musl-i386.so.1"
-#    else
-#     define CONFIG_TCC_ELFINTERP "/lib/ld-musl-arm.so.1"
-#    endif
-#  else
-#   define CONFIG_TCC_ELFINTERP "/lib/ld-linux.so.2"
-#  endif
-# endif
-#endif
-
-/* var elf_interp dans *-gen.c */
-#ifdef CONFIG_TCC_ELFINTERP
-# define DEFAULT_ELFINTERP(s) CONFIG_TCC_ELFINTERP
-#else
-# define DEFAULT_ELFINTERP(s) default_elfinterp(s)
 #endif
 
 /* (target specific) libtcc1.a */
@@ -127,10 +43,6 @@
 /* -------------------------------------------- */
 
 #include "tccelf.h"
-
-#ifdef TCC_PROFILE /* profile all functions */
-# define static
-#endif
 
 /* -------------------------------------------- */
 /* include the target specific definitions */
@@ -151,7 +63,6 @@ typedef struct TCCState TCCState;
 ST_FUNC TCCState *tcc_new(void);
 ST_FUNC void tcc_delete(TCCState *s);
 ST_FUNC void tcc_set_lib_path(TCCState *s, const char *path);
-ST_FUNC void tcc_set_options(TCCState *s, const char *str);
 ST_FUNC int tcc_add_include_path(TCCState *s, const char *path);
 ST_FUNC int tcc_add_sysinclude_path(TCCState *s, const char *path);
 ST_FUNC void tcc_define_symbol(TCCState *s, const char *sym, const char *value);
@@ -166,12 +77,6 @@ ST_FUNC int tcc_output_file(TCCState *s, const char *filename);
 #include "parsing.h"
 #include "vstack.h"
 #include "symbols.h"
-
-typedef struct DLLReference {
-    int level;
-    void *handle;
-    char name[1];
-} DLLReference;
 
 /* -------------------------------------------------- */
 
@@ -221,12 +126,8 @@ typedef struct ASMOperand {
 } ASMOperand;
 #endif
 
-/* extra symbol attributes (not in symbol table) */
 struct sym_attr {
     unsigned got_offset;
-    unsigned plt_offset;
-    int plt_sym;
-    int dyn_index;
 };
 
 struct TCCState {
@@ -234,54 +135,28 @@ struct TCCState {
     unsigned char nostdinc; /* if true, no standard headers are added */
     unsigned char nostdlib; /* if true, no standard libraries are added */
     unsigned char nocommon; /* if true, do not use common symbols for .bss data */
-    unsigned char static_link; /* if true, static linking is performed */
-    unsigned char symbolic; /* if true, resolve symbols in the current module first */
     unsigned char filetype; /* file type for compilation (NONE,C,ASM) */
     unsigned char optimize; /* only to #define __OPTIMIZE__ */
     unsigned char option_pthread; /* -pthread option */
-    unsigned char enable_new_dtags; /* -Wl,--enable-new-dtags */
     unsigned int  cversion; /* supported C ISO version, 199901 (the default), 201112, ... */
 
     char *tcc_lib_path; /* CONFIG_TCCDIR or -B option */
-    char *rpath; /* as specified on the command line (-Wl,-rpath=) */
 
     /* output type, see TCC_OUTPUT_XXX */
     int output_type;
     /* C language options */
     unsigned char char_is_unsigned;
-    unsigned char ms_extensions; /* allow nested named struct w/o identifier behave like unnamed */
-    unsigned char dollars_in_identifiers;  /* allows '$' char in identifiers */
-    unsigned char ms_bitfields; /* if true, emulate MS algorithm for aligning bitfields */
 
     /* warning switches */
-    unsigned char warn_write_strings;
-    unsigned char warn_unsupported;
     unsigned char warn_error;
     unsigned char warn_none;
     unsigned char warn_implicit_function_declaration;
-    unsigned char warn_gcc_compat;
 
     /* compile with debug symbol (and use them if error during execution) */
     addr_t text_addr; /* address of text section */
     unsigned char has_text_addr;
 
     unsigned section_align; /* section alignment */
-
-    /* use GNU C extensions */
-    unsigned char gnu_ext;
-    /* use TinyCC extensions */
-    unsigned char tcc_ext;
-
-    char *init_symbol; /* symbols to call at load-time (not used currently) */
-    char *fini_symbol; /* symbols to call at unload-time (not used currently) */
-
-#ifdef TCC_TARGET_I386
-    int seg_size; /* 32. Can be 16 with i386 assembler (.code16) */
-#endif
-
-    /* array of all loaded dlls (including those referenced by loaded dlls) */
-    DLLReference **loaded_dlls;
-    int nb_loaded_dlls;
 
     /* include paths */
     char **include_paths;
@@ -313,10 +188,8 @@ struct TCCState {
     enum {
 	LINE_MACRO_OUTPUT_FORMAT_GCC,
 	LINE_MACRO_OUTPUT_FORMAT_NONE,
-	LINE_MACRO_OUTPUT_FORMAT_STD,
-    LINE_MACRO_OUTPUT_FORMAT_P10 = 11
+	LINE_MACRO_OUTPUT_FORMAT_STD
     } Pflag; /* -P switch */
-    char dflag; /* -dX value */
 
     /* for -MD/-MF: collected dependencies for this compilation */
     char **target_deps;
@@ -335,10 +208,6 @@ struct TCCState {
     int nb_cached_includes;
 
     /* #pragma pack stack */
-    int pack_stack[PACK_STACK_SIZE];
-    int *pack_stack_ptr;
-    char **pragma_libs;
-    int nb_pragma_libs;
 
     /* inline functions are stored as token lists and compiled last
        only if referenced */
@@ -352,9 +221,7 @@ struct TCCState {
     Section **priv_sections;
     int nb_priv_sections; /* number of private sections */
 
-    /* got & plt handling */
     Section *got;
-    Section *plt;
 
     /* predefined sections */
     Section *text_section, *data_section, *bss_section;
@@ -363,40 +230,14 @@ struct TCCState {
     /* symbol sections */
     Section *symtab_section;
     /* debug sections */
-    /* Is there a new undefined sym since last new_undef_sym() */
-    int new_undef_sym;
-
-    /* temporary dynamic symbol sections (for dll loading) */
-    Section *dynsymtab_section;
-    /* exported dynamic symbol section */
-    Section *dynsym;
     /* copy of the global symtab_section variable */
     Section *symtab;
-    /* extra attributes (eg. GOT/PLT value) for symtab symbols */
     struct sym_attr *sym_attrs;
     int nb_sym_attrs;
     /* ptr to next reloc entry reused */
     ElfW_Rel *qrel;
 #   define qrel s1->qrel
 
-
-    int nb_sym_versions;
-    struct sym_version *sym_versions;
-    int nb_sym_to_version;
-    int *sym_to_version;
-    int dt_verneednum;
-    Section *versym_section;
-    Section *verneed_section;
-
-    int fd, cc; /* used by tcc_load_ldscript */
-
-    /* benchmark info */
-    int total_idents;
-    int total_lines;
-    int total_bytes;
-
-    /* option -dnum (for general development purposes) */
-    int g_debug;
 
     /* for warnings/errors for object files*/
     const char *current_filename;
@@ -407,11 +248,8 @@ struct TCCState {
     int nb_libraries; /* number of libs thereof */
     char *outfile; /* output filename */
     unsigned char option_r; /* option -r */
-    unsigned char do_bench; /* option -bench */
     int gen_deps; /* option -MD  */
     char *deps_outfile; /* option -MF */
-    int argc;
-    char **argv;
 };
 
 struct filespec {
@@ -444,12 +282,9 @@ ST_FUNC int tcc_add_file_internal(TCCState *s1, const char *filename, int flags)
 #define AFF_TYPE_MASK   (15 | AFF_TYPE_BIN)
 /* values from tcc_object_type(...) */
 #define AFF_BINTYPE_REL 1
-#define AFF_BINTYPE_DYN 2
 #define AFF_BINTYPE_AR  3
 ST_FUNC int tcc_add_crt(TCCState *s, const char *filename);
-ST_FUNC void tcc_add_pragma_libs(TCCState *s1);
 PUB_FUNC int tcc_add_library_err(TCCState *s, const char *f);
-PUB_FUNC void tcc_print_stats(TCCState *s, unsigned total_time);
 PUB_FUNC int tcc_parse_args(TCCState *s, int *argc, char ***argv, int optind);
 ST_FUNC int tcc_tool_ar(int argc, char **argv);
 ST_FUNC void gen_makedeps(TCCState *s, const char *target, const char *filename);
@@ -458,7 +293,6 @@ ST_FUNC void gen_makedeps(TCCState *s, const char *target, const char *filename)
 #define OPT_HELP 1
 #define OPT_HELP2 2
 #define OPT_V 3
-#define OPT_PRINT_DIRS 4
 #define OPT_AR 5
 
 /* ------------ tccpp.c ------------ */
@@ -491,7 +325,6 @@ ST_FUNC NORETURN void expect(const char *msg);
 
 ST_DATA Sym *global_stack;
 ST_DATA Sym *local_stack;
-ST_DATA Sym *local_label_stack;
 ST_DATA Sym *global_label_stack;
 ST_DATA Sym *define_stack;
 ST_DATA CType int_type, func_old_type, char_pointer_type;
@@ -506,10 +339,6 @@ ST_DATA CType func_vt; /* current function return type (used by return instructi
 ST_DATA int func_var; /* true if current function is variadic */
 ST_DATA int func_vc;
 ST_DATA const char *funcname;
-
-ST_FUNC void tcc_debug_funcstart(TCCState *s1, Sym *sym);
-ST_FUNC void tcc_debug_funcend(TCCState *s1, int size);
-ST_FUNC void tcc_debug_line(TCCState *s1);
 
 ST_FUNC void tccgen_init(TCCState *s1);
 ST_FUNC int tccgen_compile(TCCState *s1);
@@ -582,14 +411,10 @@ ST_FUNC void asm_clobber(uint8_t *clobber_regs, const char *str);
 #define common_section      TCC_STATE_VAR(common_section)
 #define cur_text_section    TCC_STATE_VAR(cur_text_section)
 #define symtab_section      TCC_STATE_VAR(symtab_section)
-#define gnu_ext             TCC_STATE_VAR(gnu_ext)
 #define tcc_error_noabort   TCC_SET_STATE(_tcc_error_noabort)
 #define tcc_error           TCC_SET_STATE(_tcc_error)
 #define tcc_warning         TCC_SET_STATE(_tcc_warning)
 
-#define total_idents        TCC_STATE_VAR(total_idents)
-#define total_lines         TCC_STATE_VAR(total_lines)
-#define total_bytes         TCC_STATE_VAR(total_bytes)
 
 PUB_FUNC void tcc_enter_state(TCCState *s1);
 PUB_FUNC void tcc_exit_state(void);

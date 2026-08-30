@@ -39,15 +39,12 @@ ST_DATA TokenSym **table_ident;
 
 /* ------------------------------------------------------------------------- */
 
-static char token_buf[STRING_MAX_SIZE + 1];
 static CString macro_equal_buf;
 static TokenString tokstr_buf;
 static unsigned char isidnum_table[256 - CH_EOF];
-static int pp_debug_tok, pp_debug_symv;
 static int pp_once;
 static int pp_expr;
 static int pp_counter;
-static void tok_print(const char *msg, const int *str);
 
 static const char tcc_keywords[] = 
 #define DEF(id, str) str "\0"
@@ -79,18 +76,13 @@ static int handle_eob(void)
     /* only tries to read if really end of buffer */
     if (bf->buf_ptr >= bf->buf_end) {
         if (bf->fd >= 0) {
-#if defined(PARSE_DEBUG)
-            len = 1;
-#else
             len = IO_BUF_SIZE;
-#endif
             len = read(bf->fd, bf->buffer, len);
             if (len < 0)
                 len = 0;
         } else {
             len = 0;
         }
-        total_bytes += len;
         bf->buf_ptr = bf->buffer;
         bf->buf_end = bf->buffer + len;
         *bf->buf_end = CH_EOB;
@@ -652,24 +644,15 @@ ST_FUNC Sym *label_push(Sym **ptop, int v, int flags)
     return s;
 }
 
-/* pop labels until element last is reached. Look if any labels are
-   undefined. Define symbols if '&&label' was used. */
+/* pop labels until element last is reached and reject undefined labels */
 ST_FUNC void label_pop(Sym **ptop, Sym *slast, int keep)
 {
     Sym *s, *s1;
     for(s = *ptop; s != slast; s = s1) {
         s1 = s->prev;
-        if (s->r == LABEL_DECLARED) {
-            tcc_warning("label '%s' declared but not used", get_tok_str(s->v, NULL));
-        } else if (s->r == LABEL_FORWARD) {
+        if (s->r == LABEL_FORWARD) {
                 tcc_error("label '%s' used but not defined",
                       get_tok_str(s->v, NULL));
-        } else {
-            if (s->c) {
-                /* define corresponding symbol. A size of
-                   1 is put. */
-                put_extern_sym(s, cur_text_section, s->jnext, 1);
-            }
         }
         /* remove label */
         if (s->r != LABEL_GONE)
@@ -775,7 +758,7 @@ ST_FUNC void parse_define(void)
             if (varg == TOK_DOTS) {
                 varg = TOK___VA_ARGS__;
                 is_vaargs = 1;
-            } else if (tok == TOK_DOTS && gnu_ext) {
+            } else if (tok == TOK_DOTS) {
                 is_vaargs = 1;
                 next_nomacro();
             }
@@ -874,35 +857,7 @@ static CachedInclude *search_cached_include(TCCState *s1, const char *filename, 
 static void pragma_parse(TCCState *s1)
 {
     next_nomacro();
-    if (tok == TOK_push_macro || tok == TOK_pop_macro) {
-        int t = tok, v;
-        Sym *s;
-
-        if (next(), tok != '(')
-            goto pragma_err;
-        if (next(), tok != TOK_STR)
-            goto pragma_err;
-        v = tok_alloc(tokc.str.data, tokc.str.size - 1)->tok;
-        if (next(), tok != ')')
-            goto pragma_err;
-        if (t == TOK_push_macro) {
-            while (NULL == (s = define_find(v)))
-                define_push(v, 0, NULL, NULL);
-            s->type.ref = s; /* set push boundary */
-        } else {
-            for (s = define_stack; s; s = s->prev)
-                if (s->v == v && s->type.ref == s) {
-                    s->type.ref = NULL;
-                    break;
-                }
-        }
-        if (s)
-            table_ident[v - TOK_IDENT]->sym_define = s->d ? s : NULL;
-        else
-            tcc_warning("unbalanced #pragma pop_macro");
-        pp_debug_tok = t, pp_debug_symv = v;
-
-    } else if (tok == TOK_once) {
+    if (tok == TOK_once) {
         search_cached_include(s1, file->filename, 1)->once = pp_once;
 
     } else if (s1->output_type == TCC_OUTPUT_PREPROCESS) {
@@ -912,71 +867,7 @@ static void pragma_parse(TCCState *s1)
         unget_tok('#');
         unget_tok(TOK_LINEFEED);
 
-    } else if (tok == TOK_pack) {
-        /* This may be:
-           #pragma pack(1) // set
-           #pragma pack() // reset to default
-           #pragma pack(push,1) // push & set
-           #pragma pack(pop) // restore previous */
-        next();
-        skip('(');
-        if (tok == TOK_ASM_pop) {
-            next();
-            if (s1->pack_stack_ptr <= s1->pack_stack) {
-            stk_error:
-                tcc_error("out of pack stack");
-            }
-            s1->pack_stack_ptr--;
-        } else {
-            int val = 0;
-            if (tok != ')') {
-                if (tok == TOK_ASM_push) {
-                    next();
-                    if (s1->pack_stack_ptr >= s1->pack_stack + PACK_STACK_SIZE - 1)
-                        goto stk_error;
-                    s1->pack_stack_ptr++;
-                    skip(',');
-                }
-                if (tok != TOK_CINT)
-                    goto pragma_err;
-                val = tokc.i;
-                if (val < 1 || val > 16 || (val & (val - 1)) != 0)
-                    goto pragma_err;
-                next();
-            }
-            *s1->pack_stack_ptr = val;
-        }
-        if (tok != ')')
-            goto pragma_err;
-
-    } else if (tok == TOK_comment) {
-        char *p; int t;
-        next();
-        skip('(');
-        t = tok;
-        next();
-        skip(',');
-        if (tok != TOK_STR)
-            goto pragma_err;
-        p = tcc_strdup((char *)tokc.str.data);
-        next();
-        if (tok != ')')
-            goto pragma_err;
-        if (t == TOK_lib) {
-            dynarray_add(&s1->pragma_libs, &s1->nb_pragma_libs, p);
-        } else {
-            if (t == TOK_option)
-                tcc_set_options(s1, p);
-            tcc_free(p);
-        }
-
-    } else if (s1->warn_unsupported) {
-        tcc_warning("#pragma %s is ignored", get_tok_str(tok, &tokc));
     }
-    return;
-
-pragma_err:
-    tcc_error("malformed #pragma directive");
     return;
 }
 
@@ -1000,15 +891,11 @@ ST_FUNC void preprocess(int is_bof)
  redo:
     switch(tok) {
     case TOK_DEFINE:
-        pp_debug_tok = tok;
         next_nomacro();
-        pp_debug_symv = tok;
         parse_define();
         break;
     case TOK_UNDEF:
-        pp_debug_tok = tok;
         next_nomacro();
-        pp_debug_symv = tok;
         s = define_find(tok);
         /* undefine symbol by putting an invalid name */
         if (s)
@@ -1222,8 +1109,6 @@ include_done:
                 goto _line_err;
             --n;
         }
-        if (file->fd > 0)
-            total_lines += file->line_num - n;
         file->line_num = n;
         break;
     case TOK_ERROR:
@@ -1343,8 +1228,6 @@ static void parse_escape_string(CString *outstr, const uint8_t *buf, int is_long
                 c = '\v';
                 break;
             case 'e':
-                if (!gnu_ext)
-                    goto invalid_escape;
                 c = 27;
                 break;
             case '\'':
@@ -1478,308 +1361,82 @@ static void parse_string(const char *s, int len)
     }
 }
 
-/* we use 64 bit numbers */
-#define BN_SIZE 2
-
-/* bn = (bn << shift) | or_val */
-static void bn_lshift(unsigned int *bn, int shift, int or_val)
-{
-    int i;
-    unsigned int v;
-    for(i=0;i<BN_SIZE;i++) {
-        v = bn[i];
-        bn[i] = (v << shift) | or_val;
-        or_val = v >> (32 - shift);
-    }
-}
-
-static void bn_zero(unsigned int *bn)
-{
-    int i;
-    for(i=0;i<BN_SIZE;i++) {
-        bn[i] = 0;
-    }
-}
-
-/* parse number in null terminated string 'p' and return it in the
-   current token */
 static void parse_number(const char *p)
 {
-    int b, t, shift, frac_bits, s, exp_val, ch;
-    char *q;
-    unsigned int bn[BN_SIZE];
-    double d;
+    const char *s;
+    char *end;
+    unsigned long long n;
+    int base, ch, floating, lcount, ucount, overflow;
 
-    /* number */
-    q = token_buf;
-    ch = *p++;
-    t = ch;
-    ch = *p++;
-    *q++ = t;
-    b = 10;
-    if (t == '.') {
-        goto float_frac_parse;
-    } else if (t == '0') {
-        if (ch == 'x' || ch == 'X') {
-            q--;
-            ch = *p++;
-            b = 16;
-        } else if (tcc_state->tcc_ext && (ch == 'b' || ch == 'B')) {
-            q--;
-            ch = *p++;
-            b = 2;
-        }
+    base = p[0] == '0' && (p[1] == 'x' || p[1] == 'X') ? 16 : 10;
+    floating = 0;
+    for (s = p; *s; s++) {
+        if (*s == '.' || ((base == 16 ? *s == 'p' || *s == 'P'
+                                     : *s == 'e' || *s == 'E')))
+            floating = 1;
     }
-    /* parse all digits. cannot check octal numbers at this stage
-       because of floating point constants */
-    while (1) {
-        if (ch >= 'a' && ch <= 'f')
-            t = ch - 'a' + 10;
-        else if (ch >= 'A' && ch <= 'F')
-            t = ch - 'A' + 10;
-        else if (isnum(ch))
-            t = ch - '0';
-        else
-            break;
-        if (t >= b)
-            break;
-        if (q >= token_buf + STRING_MAX_SIZE) {
-        num_too_long:
-            tcc_error("number too long");
-        }
-        *q++ = ch;
-        ch = *p++;
-    }
-    if (ch == '.' ||
-        ((ch == 'e' || ch == 'E') && b == 10) ||
-        ((ch == 'p' || ch == 'P') && (b == 16 || b == 2))) {
-        if (b != 10) {
-            /* NOTE: strtox should support that for hexa numbers, but
-               non ISOC99 libcs do not support it, so we prefer to do
-               it by hand */
-            /* hexadecimal or binary floats */
-            /* XXX: handle overflows */
-            *q = '\0';
-            if (b == 16)
-                shift = 4;
-            else 
-                shift = 1;
-            bn_zero(bn);
-            q = token_buf;
-            while (1) {
-                t = *q++;
-                if (t == '\0') {
-                    break;
-                } else if (t >= 'a') {
-                    t = t - 'a' + 10;
-                } else if (t >= 'A') {
-                    t = t - 'A' + 10;
-                } else {
-                    t = t - '0';
-                }
-                bn_lshift(bn, shift, t);
-            }
-            frac_bits = 0;
-            if (ch == '.') {
-                ch = *p++;
-                while (1) {
-                    t = ch;
-                    if (t >= 'a' && t <= 'f') {
-                        t = t - 'a' + 10;
-                    } else if (t >= 'A' && t <= 'F') {
-                        t = t - 'A' + 10;
-                    } else if (t >= '0' && t <= '9') {
-                        t = t - '0';
-                    } else {
-                        break;
-                    }
-                    if (t >= b)
-                        tcc_error("invalid digit");
-                    bn_lshift(bn, shift, t);
-                    frac_bits += shift;
-                    ch = *p++;
-                }
-            }
-            if (ch != 'p' && ch != 'P')
-                expect("exponent");
-            ch = *p++;
-            s = 1;
-            exp_val = 0;
-            if (ch == '+') {
-                ch = *p++;
-            } else if (ch == '-') {
-                s = -1;
-                ch = *p++;
-            }
-            if (ch < '0' || ch > '9')
-                expect("exponent digits");
-            while (ch >= '0' && ch <= '9') {
-                exp_val = exp_val * 10 + ch - '0';
-                ch = *p++;
-            }
-            exp_val = exp_val * s;
-            
-            /* now we can generate the number */
-            /* XXX: should patch directly float number */
-            d = (double)bn[1] * 4294967296.0 + (double)bn[0];
-            d = ldexp(d, exp_val - frac_bits);
-            t = toup(ch);
-            if (t == 'F') {
-                ch = *p++;
-                tok = TOK_CFLOAT;
-                /* float : should handle overflow */
-                tokc.f = (float)d;
-            } else if (t == 'L') {
-                ch = *p++;
-                tok = TOK_CLDOUBLE;
-                /* XXX: not large enough */
-                tokc.ld = (long double)d;
-            } else {
-                tok = TOK_CDOUBLE;
-                tokc.d = d;
-            }
+
+    errno = 0;
+    if (floating) {
+        long double value = strtold(p, &end);
+        ch = toup(*end);
+        if (ch == 'F') {
+            tok = TOK_CFLOAT;
+            tokc.f = value;
+            end++;
+        } else if (ch == 'L') {
+            tok = TOK_CLDOUBLE;
+            tokc.ld = value;
+            end++;
         } else {
-            /* decimal floats */
-            if (ch == '.') {
-                if (q >= token_buf + STRING_MAX_SIZE)
-                    goto num_too_long;
-                *q++ = ch;
-                ch = *p++;
-            float_frac_parse:
-                while (ch >= '0' && ch <= '9') {
-                    if (q >= token_buf + STRING_MAX_SIZE)
-                        goto num_too_long;
-                    *q++ = ch;
-                    ch = *p++;
-                }
-            }
-            if (ch == 'e' || ch == 'E') {
-                if (q >= token_buf + STRING_MAX_SIZE)
-                    goto num_too_long;
-                *q++ = ch;
-                ch = *p++;
-                if (ch == '-' || ch == '+') {
-                    if (q >= token_buf + STRING_MAX_SIZE)
-                        goto num_too_long;
-                    *q++ = ch;
-                    ch = *p++;
-                }
-                if (ch < '0' || ch > '9')
-                    expect("exponent digits");
-                while (ch >= '0' && ch <= '9') {
-                    if (q >= token_buf + STRING_MAX_SIZE)
-                        goto num_too_long;
-                    *q++ = ch;
-                    ch = *p++;
-                }
-            }
-            *q = '\0';
-            t = toup(ch);
-            errno = 0;
-            if (t == 'F') {
-                ch = *p++;
-                tok = TOK_CFLOAT;
-                tokc.f = strtof(token_buf, NULL);
-            } else if (t == 'L') {
-                ch = *p++;
-                tok = TOK_CLDOUBLE;
-                tokc.ld = strtold(token_buf, NULL);
-            } else {
-                tok = TOK_CDOUBLE;
-                tokc.d = strtod(token_buf, NULL);
-            }
+            tok = TOK_CDOUBLE;
+            tokc.d = value;
         }
+        if (*end)
+            tcc_error("invalid number");
+        return;
+    }
+
+    base = p[0] == '0' ? (p[1] == 'x' || p[1] == 'X' ? 16 : 8) : 10;
+    n = strtoull(p, &end, base);
+    overflow = errno == ERANGE;
+    lcount = ucount = 0;
+    while ((ch = toup(*end))) {
+        if (ch == 'L') {
+            if (++lcount > 2)
+                tcc_error("three 'l's in integer constant");
+        } else if (ch == 'U') {
+            if (++ucount > 1)
+                tcc_error("two 'u's in integer constant");
+        } else {
+            tcc_error("invalid number");
+        }
+        end++;
+    }
+
+    if (!ucount && base == 10) {
+        if (lcount <= (LONG_SIZE == 4) && n >= 0x80000000U)
+            lcount = (LONG_SIZE == 4) + 1;
+        if (n >= 0x8000000000000000ULL)
+            overflow = ucount = 1;
     } else {
-        unsigned long long n, n1;
-        int lcount, ucount, ov = 0;
-        const char *p1;
-
-        /* integer number */
-        *q = '\0';
-        q = token_buf;
-        if (b == 10 && *q == '0') {
-            b = 8;
-            q++;
-        }
-        n = 0;
-        while(1) {
-            t = *q++;
-            /* no need for checks except for base 10 / 8 errors */
-            if (t == '\0')
-                break;
-            else if (t >= 'a')
-                t = t - 'a' + 10;
-            else if (t >= 'A')
-                t = t - 'A' + 10;
-            else
-                t = t - '0';
-            if (t >= b)
-                tcc_error("invalid digit");
-            n1 = n;
-            n = n * b + t;
-            /* detect overflow */
-            if (n1 >= 0x1000000000000000ULL && n / b != n1)
-                ov = 1;
-        }
-
-        /* Determine the characteristics (unsigned and/or 64bit) the type of
-           the constant must have according to the constant suffix(es) */
-        lcount = ucount = 0;
-        p1 = p;
-        for(;;) {
-            t = toup(ch);
-            if (t == 'L') {
-                if (lcount >= 2)
-                    tcc_error("three 'l's in integer constant");
-                if (lcount && *(p - 1) != ch)
-                    tcc_error("incorrect integer suffix: %s", p1);
-                lcount++;
-                ch = *p++;
-            } else if (t == 'U') {
-                if (ucount >= 1)
-                    tcc_error("two 'u's in integer constant");
-                ucount++;
-                ch = *p++;
-            } else {
-                break;
-            }
-        }
-
-        /* Determine if it needs 64 bits and/or unsigned in order to fit */
-        if (ucount == 0 && b == 10) {
-            if (lcount <= (LONG_SIZE == 4)) {
-                if (n >= 0x80000000U)
-                    lcount = (LONG_SIZE == 4) + 1;
-            }
-            if (n >= 0x8000000000000000ULL)
-                ov = 1, ucount = 1;
-        } else {
-            if (lcount <= (LONG_SIZE == 4)) {
-                if (n >= 0x100000000ULL)
-                    lcount = (LONG_SIZE == 4) + 1;
-                else if (n >= 0x80000000U)
-                    ucount = 1;
-            }
-            if (n >= 0x8000000000000000ULL)
+        if (lcount <= (LONG_SIZE == 4)) {
+            if (n >= 0x100000000ULL)
+                lcount = (LONG_SIZE == 4) + 1;
+            else if (n >= 0x80000000U)
                 ucount = 1;
         }
-
-        if (ov)
-            tcc_warning("integer constant overflow");
-
-        tok = TOK_CINT;
-	if (lcount) {
-            tok = TOK_CLONG;
-            if (lcount == 2)
-                tok = TOK_CLLONG;
-	}
-	if (ucount)
-	    ++tok; /* TOK_CU... */
-        tokc.i = n;
+        if (n >= 0x8000000000000000ULL)
+            ucount = 1;
     }
-    if (ch)
-        tcc_error("invalid number\n");
+    if (overflow)
+        tcc_warning("integer constant overflow");
+    tok = lcount ? (lcount == 2 ? TOK_CLLONG : TOK_CLONG) : TOK_CINT;
+    if (ucount)
+        ++tok;
+    tokc.i = n;
 }
+
 
 #define PARSE2(c1, tok1, c2, tok2)              \
     case c1:                                    \
@@ -2173,9 +1830,6 @@ maybe_newline:
     tok_flags = 0;
 keep_tok_flags:
     file->buf_ptr = p;
-#if defined(PARSE_DEBUG)
-    printf("token = %d %s\n", tok, get_tok_str(tok, &tokc));
-#endif
 }
 
 static void macro_subst(
@@ -2230,9 +1884,6 @@ static int *macro_arg_subst(Sym **nested_list, const int *macro_str, Sym *args)
                 cstr.size -= spc;
                 cstr_ccat(&cstr, '\"');
                 cstr_ccat(&cstr, '\0');
-#ifdef PP_DEBUG
-                printf("\nstringize: <%s>\n", (char *)cstr.data);
-#endif
                 /* add string */
                 cval.str.size = cstr.size;
                 cval.str.data = cstr.data;
@@ -2251,7 +1902,7 @@ static int *macro_arg_subst(Sym **nested_list, const int *macro_str, Sym *args)
                 if (*macro_str == TOK_PPJOIN || t1 == TOK_PPJOIN) {
                     /* special case for var arg macros : ## eats the ','
                        if empty VA_ARGS variable. */
-                    if (t1 == TOK_PPJOIN && t0 == ',' && gnu_ext && s->type.t) {
+                    if (t1 == TOK_PPJOIN && t0 == ',' && s->type.t) {
                         if (*st <= 0) {
                             /* suppress ',' '##' */
                             str.len -= 2;
@@ -2358,7 +2009,6 @@ static inline int *macro_twosharps(const int *ptr0)
 
     tok_str_new(&macro_str1);
 
-    //tok_print(" $$$", ptr0);
     for (ptr = ptr0;;) {
         TOK_GET(&t, &ptr, &cval);
         if (t == 0)
@@ -2394,7 +2044,6 @@ static inline int *macro_twosharps(const int *ptr0)
         tok_str_add2(&macro_str1, t, &cval);
     }
     tok_str_add(&macro_str1, 0);
-    //tok_print(" ###", macro_str1.str);
     return macro_str1.str;
 }
 
@@ -2590,7 +2239,7 @@ static int macro_subst_tok(
                 if (tok == ')') {
                     /* special case for gcc var args: add an empty
                        var arg argument if it is omitted */
-                    if (sa && sa->type.t && gnu_ext)
+                    if (sa && sa->type.t)
                         goto empty_arg;
                     break;
                 }
@@ -2873,13 +2522,9 @@ ST_FUNC void preprocess_start(TCCState *s1, int filetype)
     file->ifdef_stack_ptr = s1->ifdef_stack_ptr;
     pp_expr = 0;
     pp_counter = 0;
-    pp_debug_tok = pp_debug_symv = 0;
     pp_once++;
-    s1->pack_stack[0] = 0;
-    s1->pack_stack_ptr = s1->pack_stack;
 
-    set_idnum('$', (!is_asm || ASM_DOLLAR_IN_IDENTIFIERS)
-                       && s1->dollars_in_identifiers ? IS_ID : 0);
+    set_idnum('$', is_asm && ASM_DOLLAR_IN_IDENTIFIERS ? IS_ID : 0);
     set_idnum('.', is_asm ? IS_ID : 0);
 
     if (!(filetype & AFF_TYPE_ASM)) {
@@ -2967,8 +2612,6 @@ ST_FUNC void tccpp_delete(TCCState *s)
     dynarray_reset(&s->cached_includes, &s->nb_cached_includes);
 
     n = token_syms_free();
-    if (n > total_idents)
-        total_idents = n;
 
     /* free static buffers */
     cstr_free(&tokcstr);
@@ -2980,29 +2623,9 @@ ST_FUNC void tccpp_delete(TCCState *s)
 /* ------------------------------------------------------------------------- */
 /* tcc -E [-P[1]] [-dD} support */
 
-static void tok_print(const char *msg, const int *str)
-{
-    FILE *fp;
-    int t, s = 0;
-    CValue cval;
-
-    fp = tcc_state->ppfp;
-    fprintf(fp, "%s", msg);
-    while (str) {
-	TOK_GET(&t, &str, &cval);
-	if (!t)
-	    break;
-	fprintf(fp, &" %s"[s], get_tok_str(t, &cval)), s = 1;
-    }
-    fprintf(fp, "\n");
-}
-
 static void pp_line(TCCState *s1, BufferedFile *f, int level)
 {
     int d = f->line_num - f->line_ref;
-
-    if (s1->dflag & 4)
-	return;
 
     if (s1->Pflag == LINE_MACRO_OUTPUT_FORMAT_NONE) {
         ;
@@ -3016,68 +2639,6 @@ static void pp_line(TCCState *s1, BufferedFile *f, int level)
 	    level > 0 ? " 1" : level < 0 ? " 2" : "");
     }
     f->line_ref = f->line_num;
-}
-
-static void define_print(TCCState *s1, int v)
-{
-    FILE *fp;
-    Sym *s;
-
-    s = define_find(v);
-    if (NULL == s || NULL == s->d)
-        return;
-
-    fp = s1->ppfp;
-    fprintf(fp, "#define %s", get_tok_str(v, NULL));
-    if (s->type.t == MACRO_FUNC) {
-        Sym *a = s->next;
-        fprintf(fp,"(");
-        if (a)
-            for (;;) {
-                fprintf(fp,"%s", get_tok_str(a->v & ~SYM_FIELD, NULL));
-                if (!(a = a->next))
-                    break;
-                fprintf(fp,",");
-            }
-        fprintf(fp,")");
-    }
-    tok_print("", s->d);
-}
-
-static void pp_debug_defines(TCCState *s1)
-{
-    int v, t;
-    const char *vs;
-    FILE *fp;
-
-    t = pp_debug_tok;
-    if (t == 0)
-        return;
-
-    file->line_num--;
-    pp_line(s1, file, 0);
-    file->line_ref = ++file->line_num;
-
-    fp = s1->ppfp;
-    v = pp_debug_symv;
-    vs = get_tok_str(v, NULL);
-    if (t == TOK_DEFINE) {
-        define_print(s1, v);
-    } else if (t == TOK_UNDEF) {
-        fprintf(fp, "#undef %s\n", vs);
-    } else if (t == TOK_push_macro) {
-        fprintf(fp, "#pragma push_macro(\"%s\")\n", vs);
-    } else if (t == TOK_pop_macro) {
-        fprintf(fp, "#pragma pop_macro(\"%s\")\n", vs);
-    }
-    pp_debug_tok = 0;
-}
-
-static void pp_debug_builtins(TCCState *s1)
-{
-    int v;
-    for (v = TOK_IDENT; v < tok_ident; ++v)
-        define_print(s1, v);
 }
 
 /* Add a space between tokens a and b to avoid unwanted textual pasting */
@@ -3113,23 +2674,6 @@ ST_FUNC int tcc_preprocess(TCCState *s1)
                 | PARSE_FLAG_SPACES
                 | PARSE_FLAG_ACCEPT_STRAYS
                 ;
-    /* Credits to Fabrice Bellard's initial revision to demonstrate its
-       capability to compile and run itself, provided all numbers are
-       given as decimals. tcc -E -P10 will do. */
-    if (s1->Pflag == LINE_MACRO_OUTPUT_FORMAT_P10)
-        parse_flags |= PARSE_FLAG_TOK_NUM, s1->Pflag = 1;
-
-    if (s1->do_bench) {
-	/* for PP benchmarks */
-	do next(); while (tok != TOK_EOF);
-	return 0;
-    }
-
-    if (s1->dflag & 1) {
-        pp_debug_builtins(s1);
-        s1->dflag &= ~1;
-    }
-
     token_seen = TOK_LINEFEED, spcs = 0, level = 0;
     if (file->prev)
         pp_line(s1, file->prev, level++);
@@ -3146,12 +2690,6 @@ ST_FUNC int tcc_preprocess(TCCState *s1)
                 pp_line(s1, *iptr, 0);
             pp_line(s1, file, level);
         }
-        if (s1->dflag & 7) {
-            pp_debug_defines(s1);
-            if (s1->dflag & 4)
-                continue;
-        }
-
         if (is_space(tok)) {
             if (spcs < sizeof white - 1)
                 white[spcs++] = tok;

@@ -349,9 +349,6 @@ static void gcall_or_jmp(int is_jmp)
     }
 }
 
-static uint8_t fastcall_regs[3] = { TREG_EAX, TREG_EDX, TREG_ECX };
-static uint8_t fastcallw_regs[2] = { TREG_ECX, TREG_EDX };
-
 /* Return the number of registers needed to return the struct, or 0 if
    returning via struct pointer. */
 ST_FUNC int gfunc_sret(CType *vt, int variadic, CType *ret, int *ret_align, int *regsize)
@@ -365,8 +362,7 @@ ST_FUNC int gfunc_sret(CType *vt, int variadic, CType *ret, int *ret_align, int 
    parameters and the function address. */
 ST_FUNC void gfunc_call(int nb_args)
 {
-    int size, align, r, args_size, i, func_call;
-    Sym *func_sym;
+    int size, align, r, args_size, i;
     
 
     args_size = 0;
@@ -417,34 +413,12 @@ ST_FUNC void gfunc_call(int nb_args)
         vtop--;
     }
     save_regs(0); /* save used temporary registers */
-    func_sym = vtop->type.ref;
-    func_call = func_sym->f.func_call;
-    /* fast call case */
-    if ((func_call >= FUNC_FASTCALL1 && func_call <= FUNC_FASTCALL3) ||
-        func_call == FUNC_FASTCALLW) {
-        int fastcall_nb_regs;
-        uint8_t *fastcall_regs_ptr;
-        if (func_call == FUNC_FASTCALLW) {
-            fastcall_regs_ptr = fastcallw_regs;
-            fastcall_nb_regs = 2;
-        } else {
-            fastcall_regs_ptr = fastcall_regs;
-            fastcall_nb_regs = func_call - FUNC_FASTCALL1 + 1;
-        }
-        for(i = 0;i < fastcall_nb_regs; i++) {
-            if (args_size <= 0)
-                break;
-            o(0x58 + fastcall_regs_ptr[i]); /* pop r */
-            /* XXX: incorrect for struct/floats */
-            args_size -= 4;
-        }
-    }
-    else if ((vtop->type.ref->type.t & VT_BTYPE) == VT_STRUCT)
+    if ((vtop->type.ref->type.t & VT_BTYPE) == VT_STRUCT)
         args_size -= 4;
 
     gcall_or_jmp(0);
 
-    if (args_size && func_call != FUNC_STDCALL && func_call != FUNC_FASTCALLW)
+    if (args_size)
         gadd_sp(args_size);
     vtop--;
 }
@@ -455,29 +429,14 @@ ST_FUNC void gfunc_call(int nb_args)
 ST_FUNC void gfunc_prolog(Sym *func_sym)
 {
     CType *func_type = &func_sym->type;
-    int addr, align, size, func_call, fastcall_nb_regs;
-    int param_index, param_addr;
-    uint8_t *fastcall_regs_ptr;
+    int addr, align, size, param_addr;
     Sym *sym;
     CType *type;
 
     sym = func_type->ref;
-    func_call = sym->f.func_call;
     addr = 8;
     loc = 0;
     func_vc = 0;
-
-    if (func_call >= FUNC_FASTCALL1 && func_call <= FUNC_FASTCALL3) {
-        fastcall_nb_regs = func_call - FUNC_FASTCALL1 + 1;
-        fastcall_regs_ptr = fastcall_regs;
-    } else if (func_call == FUNC_FASTCALLW) {
-        fastcall_nb_regs = 2;
-        fastcall_regs_ptr = fastcallw_regs;
-    } else {
-        fastcall_nb_regs = 0;
-        fastcall_regs_ptr = NULL;
-    }
-    param_index = 0;
 
     ind += FUNC_PROLOG_SIZE;
     func_sub_sp_offset = ind;
@@ -487,7 +446,6 @@ ST_FUNC void gfunc_prolog(Sym *func_sym)
         /* XXX: fastcall case ? */
         func_vc = addr;
         addr += 4;
-        param_index++;
     }
     /* define parameters */
     while ((sym = sym->next) != NULL) {
@@ -500,25 +458,13 @@ ST_FUNC void gfunc_prolog(Sym *func_sym)
             size = 4;
         }
 #endif
-        if (param_index < fastcall_nb_regs) {
-            /* save FASTCALL register */
-            loc -= 4;
-            o(0x89);     /* movl */
-            gen_modrm(fastcall_regs_ptr[param_index], VT_LOCAL, NULL, loc);
-            param_addr = loc;
-        } else {
-            param_addr = addr;
-            addr += size;
-        }
+        param_addr = addr;
+        addr += size;
         sym_push(sym->v & ~SYM_FIELD, type,
                  VT_LOCAL | VT_LVAL, param_addr);
-        param_index++;
     }
     func_ret_sub = 0;
-    /* pascal type call or fastcall ? */
-    if (func_call == FUNC_STDCALL || func_call == FUNC_FASTCALLW)
-        func_ret_sub = addr - 8;
-    else if (func_vc)
+    if (func_vc)
         func_ret_sub = 4;
 
 }
@@ -916,13 +862,6 @@ ST_FUNC void gen_cvt_csti(int t)
         | (sz << 3 | xl) << 8
         | (r << 3 | r) << 16
         );
-}
-
-/* computed goto support */
-ST_FUNC void ggoto(void)
-{
-    gcall_or_jmp(1);
-    vtop--;
 }
 
 /* Save the stack pointer onto the stack */

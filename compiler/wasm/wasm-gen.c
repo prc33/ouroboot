@@ -635,8 +635,6 @@ ST_FUNC void gfunc_prolog(Sym *func_sym)
     sym = func_type->ref;
     if (sym->f.func_type == FUNC_ELLIPSIS)
         wasm_unimp("variadic function definition");
-    if (sym->f.func_call != FUNC_CDECL)
-        wasm_unimp("non-cdecl calling convention");
     wasm_cur_func = wasm_new_func(func_sym);
     wasm_cur_func->is_static = !!(func_sym->type.t & VT_STATIC);
     wasm_cur_func->name = tcc_strdup(get_tok_str(func_sym->v, NULL));
@@ -995,10 +993,6 @@ ST_FUNC void gen_cvt_ftof(int t)
             wo->r0 = vtop->r;
     }
     wasm_last_cmp_valid = 0;
-}
-ST_FUNC void ggoto(void)
-{
-    wasm_unimp("computed goto / indirect branch");
 }
 ST_FUNC void gen_vla_sp_save(int addr)
 {

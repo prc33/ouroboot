@@ -8,7 +8,6 @@
 #define INCLUDE_STACK_SIZE 32
 #define IFDEF_STACK_SIZE   64
 #define TOKSTR_MAX_SIZE    256
-#define PACK_STACK_SIZE    8
 #define TOK_HASH_SIZE      16384
 #define TOK_ALLOC_INCR     512
 #define TOK_MAX_SIZE       4

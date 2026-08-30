@@ -168,30 +168,13 @@ ST_FUNC void gsym_addr(int t_, int a_)
 static int load_symofs(int r, SValue *sv, int forstore)
 {
     static Sym label;
-    int rr, doload = 0;
+    int rr;
     int fc = sv->c.i, v = sv->r & VT_VALMASK;
     if (sv->r & VT_SYM) {
         assert(v == VT_CONST);
-        /* Use PC-relative addressing for ALL symbols, not just static
-         * ones. Upstream routes non-static globals through the GOT,
-         * which cannot carry an addend, so `&global_array[large_index]`
-         * hit tcc_error("unimp: large addend for global address") --
-         * it broke musl's math/log.c among others. We only ever produce
-         * static non-PIE executables (see the project plan), where
-         * PC-relative reaches every symbol and does carry an addend, so
-         * the GOT path is unnecessary. A dynamic-linking build would
-         * need the GOT path restored. */
-        if (1) { // was: sv->sym->type.t & VT_STATIC
-            greloca(cur_text_section, sv->sym, ind,
-                    R_RISCV_PCREL_HI20, sv->c.i);
-            sv->c.i = 0;
-        } else {
-            if (((unsigned)fc + (1 << 11)) >> 12)
-              tcc_error("unimp: large addend for global address (0x%llx)", (long long)sv->c.i);
-            greloca(cur_text_section, sv->sym, ind,
-                    R_RISCV_GOT_HI20, 0);
-            doload = 1;
-        }
+        greloca(cur_text_section, sv->sym, ind,
+                R_RISCV_PCREL_HI20, sv->c.i);
+        sv->c.i = 0;
         if (!label.v) {
             label.v = tok_alloc(".L0 ", 4)->tok;
             label.type.t = VT_VOID | VT_STATIC;
@@ -201,11 +184,7 @@ static int load_symofs(int r, SValue *sv, int forstore)
         rr = is_ireg(r) ? ireg(r) : 5;
         o(0x17 | (rr << 7));   // auipc RR, 0 %pcrel_hi(sym)+addend
         greloca(cur_text_section, &label, ind,
-                doload || !forstore
-                  ? R_RISCV_PCREL_LO12_I : R_RISCV_PCREL_LO12_S, 0);
-        if (doload) {
-            EI(0x03, 3, rr, rr, 0); // ld RR, 0(RR)
-        }
+                !forstore ? R_RISCV_PCREL_LO12_I : R_RISCV_PCREL_LO12_S, 0);
     } else if (v == VT_LOCAL || v == VT_LLOCAL) {
         rr = 8; // s0
         if (fc != sv->c.i)
@@ -1334,12 +1313,6 @@ ST_FUNC void gen_cvt_ftof(int dt)
           EI(0x53, 7, freg(rd), freg(rs), (0x20 << 5) | 1); // fcvt.s.d RD, RS (dyn rm)
         vtop->r = rd;
     }
-}
-
-ST_FUNC void ggoto(void)
-{
-    gcall_or_jmp(0);
-    vtop--;
 }
 
 ST_FUNC void gen_vla_sp_save(int addr)

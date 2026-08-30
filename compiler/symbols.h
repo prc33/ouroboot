@@ -17,14 +17,10 @@ struct SymAttr {
 /* function attributes or temporary attributes for parsing */
 struct FuncAttr {
     unsigned
-    func_call   : 3, /* calling convention (0..5), see below */
     func_type   : 2, /* FUNC_OLD/NEW/ELLIPSIS */
     func_noreturn : 1, /* attribute((noreturn)) */
-    func_ctor   : 1, /* attribute((constructor)) */
-    func_dtor   : 1, /* attribute((destructor)) */
-    func_args   : 8, /* PE __stdcall args */
     func_alwinl : 1, /* always_inline */
-    xxxx        :15;
+    xxxx        :23;
 };
 
 /* symbol management */
@@ -44,12 +40,10 @@ typedef struct Sym {
         };
         long long enum_val; /* enum constant if IS_ENUM_VAL */
         int *d; /* define token stream */
-        struct Sym *ncl; /* next cleanup */
     };
     CType type; /* associated type */
     union {
         struct Sym *next; /* next related symbol (for fields and anoms) */
-        struct Sym *cleanupstate; /* in defined labels */
         int asm_label; /* associated asm label */
     };
     struct Sym *prev; /* prev symbol in stack */
@@ -60,9 +54,7 @@ typedef struct AttributeDef {
     struct SymAttr a;
     struct FuncAttr f;
     struct Section *section;
-    Sym *cleanup_func;
     int asm_label;
-    char attr_mode;
 } AttributeDef;
 #define SYM_STRUCT     0x40000000 /* struct/union/enum symbol space */
 #define SYM_FIELD      0x20000000 /* struct/union field symbol space */
@@ -73,14 +65,6 @@ typedef struct AttributeDef {
 #define FUNC_OLD       2 /* old function prototype */
 #define FUNC_ELLIPSIS  3 /* ansi function prototype with ... */
 
-/* stored in 'Sym->f.func_call' field */
-#define FUNC_CDECL     0 /* standard c call */
-#define FUNC_STDCALL   1 /* pascal c call */
-#define FUNC_FASTCALL1 2 /* first param in %eax */
-#define FUNC_FASTCALL2 3 /* first parameters in %eax, %edx */
-#define FUNC_FASTCALL3 4 /* first parameter in %eax, %edx, %ecx */
-#define FUNC_FASTCALLW 5 /* first parameter in %ecx, %edx */
-
 /* field 'Sym.t' for macros */
 #define MACRO_OBJ      0 /* object like macro */
 #define MACRO_FUNC     1 /* function like macro */
@@ -88,9 +72,7 @@ typedef struct AttributeDef {
 /* field 'Sym.r' for C labels */
 #define LABEL_DEFINED  0 /* label is defined */
 #define LABEL_FORWARD  1 /* label is forward defined */
-#define LABEL_DECLARED 2 /* label is declared but never used */
-#define LABEL_GONE     3 /* label isn't in scope, but not yet popped
-                            from local_label_stack (stmt exprs) */
+#define LABEL_GONE     2 /* label is out of scope but retained by a statement expression */
 ST_INLN void sym_free(Sym *sym);
 ST_FUNC Sym *sym_malloc(void);
 ST_FUNC Sym *sym_push2(Sym **ps, int v, int t, int c);

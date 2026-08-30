@@ -23,8 +23,7 @@ TARGET ?= riscv64
 
 CC      ?= gcc
 CFLAGS  ?= -O2 -Wall -Wno-unused -fno-strict-aliasing -Wno-pointer-sign
-DEFS    = -DTCC_TARGET_$(shell echo $(TARGET) | tr a-z A-Z) \
-          -DCONFIG_TRIPLET=\"$(TARGET)-linux-musl\"
+DEFS    = -DTCC_TARGET_$(shell echo $(TARGET) | tr a-z A-Z)
 
 ifeq ($(TARGET),i386)
 BACKEND_SRCS = i386/i386-gen.c i386/i386-link.c i386/i386-asm.c \

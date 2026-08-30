@@ -31,8 +31,6 @@ ST_DATA Sym *global_stack;
 ST_DATA Sym *local_stack;
 ST_DATA Sym *define_stack;
 ST_DATA Sym *global_label_stack;
-ST_DATA Sym *local_label_stack;
-static Sym *all_cleanups, *pending_gotos;
 ST_DATA int local_scope;
 ST_DATA int in_sizeof;
 ST_DATA int in_generic;
@@ -95,9 +93,8 @@ ST_DATA struct switch_t {
 static struct scope {
     struct scope *prev;
     struct { int loc, num; } vla;
-    struct { Sym *s; int n; } cl;
     int *bsym, *csym;
-    Sym *lstk, *llstk;
+    Sym *lstk;
 } *cur_scope, *loop_scope, *root_scope;
 
 
@@ -241,7 +238,6 @@ ST_FUNC void tccgen_init(TCCState *s1)
 
     func_old_type.t = VT_FUNC;
     func_old_type.ref = sym_push(SYM_FIELD, &int_type, 0, 0);
-    func_old_type.ref->f.func_call = FUNC_CDECL;
     func_old_type.ref->f.func_type = FUNC_OLD;
     init_prec();
     cstr_new(&initstr);
@@ -527,8 +523,6 @@ static void merge_attr(AttributeDef *ad, AttributeDef *ad1)
       ad->section = ad1->section;
     if (ad1->asm_label)
       ad->asm_label = ad1->asm_label;
-    if (ad1->attr_mode)
-      ad->attr_mode = ad1->attr_mode;
 }
 
 /* push a reference to global symbol v */
@@ -1352,32 +1346,6 @@ redo:
         t = tok;
         next();
         switch(t) {
-	case TOK_CLEANUP1:
-	case TOK_CLEANUP2:
-	{
-	    Sym *s;
-
-	    skip('(');
-	    s = sym_find(tok);
-	    if (!s) {
-	      tcc_warning("implicit declaration of function '%s'",
-			  get_tok_str(tok, &tokc));
-	      s = external_global_sym(tok, &func_old_type);
-            } else if ((s->type.t & VT_BTYPE) != VT_FUNC)
-                tcc_error("'%s' is not declared as function", get_tok_str(tok, &tokc));
-	    ad->cleanup_func = s;
-	    next();
-            skip(')');
-	    break;
-	}
-        case TOK_CONSTRUCTOR1:
-        case TOK_CONSTRUCTOR2:
-            ad->f.func_ctor = 1;
-            break;
-        case TOK_DESTRUCTOR1:
-        case TOK_DESTRUCTOR2:
-            ad->f.func_dtor = 1;
-            break;
         case TOK_ALWAYS_INLINE1:
         case TOK_ALWAYS_INLINE2:
             ad->f.func_alwinl = 1;
@@ -1449,61 +1417,7 @@ redo:
         case TOK_NORETURN2:
             ad->f.func_noreturn = 1;
             break;
-        case TOK_CDECL1:
-        case TOK_CDECL2:
-        case TOK_CDECL3:
-            ad->f.func_call = FUNC_CDECL;
-            break;
-        case TOK_STDCALL1:
-        case TOK_STDCALL2:
-        case TOK_STDCALL3:
-            ad->f.func_call = FUNC_STDCALL;
-            break;
-#ifdef TCC_TARGET_I386
-        case TOK_REGPARM1:
-        case TOK_REGPARM2:
-            skip('(');
-            n = expr_const();
-            if (n > 3) 
-                n = 3;
-            else if (n < 0)
-                n = 0;
-            if (n > 0)
-                ad->f.func_call = FUNC_FASTCALL1 + n - 1;
-            skip(')');
-            break;
-        case TOK_FASTCALL1:
-        case TOK_FASTCALL2:
-        case TOK_FASTCALL3:
-            ad->f.func_call = FUNC_FASTCALLW;
-            break;            
-#endif
-        case TOK_MODE:
-            skip('(');
-            switch(tok) {
-                case TOK_MODE_DI:
-                    ad->attr_mode = VT_LLONG + 1;
-                    break;
-                case TOK_MODE_QI:
-                    ad->attr_mode = VT_BYTE + 1;
-                    break;
-                case TOK_MODE_HI:
-                    ad->attr_mode = VT_SHORT + 1;
-                    break;
-                case TOK_MODE_SI:
-                case TOK_MODE_word:
-                    ad->attr_mode = VT_INT + 1;
-                    break;
-                default:
-                    tcc_warning("__mode__(%s) not supported\n", get_tok_str(tok, NULL));
-                    break;
-            }
-            next();
-            skip(')');
-            break;
         default:
-            if (tcc_state->warn_unsupported)
-                tcc_warning("'%s' attribute ignored", get_tok_str(t, NULL));
             /* skip parameters */
             if (tok == '(') {
                 int parenthesis = 0;
@@ -1549,17 +1463,13 @@ ST_FUNC Sym *find_field(CType *type, int v, int *cumofs)
 static void struct_layout(CType *type, AttributeDef *ad)
 {
     int size, align, maxalign, offset, c, bit_pos, bit_size;
-    int packed, a, bt, prevbt, prev_bit_size;
-    int pcc = !tcc_state->ms_bitfields;
-    int pragma_pack = *tcc_state->pack_stack_ptr;
+    int packed, a, bt;
     Sym *f;
 
     maxalign = 1;
     offset = 0;
     c = 0;
     bit_pos = 0;
-    prevbt = VT_STRUCT; /* make it never match */
-    prev_bit_size = 0;
 
 //#define BF_DEBUG
 
@@ -1572,50 +1482,36 @@ static void struct_layout(CType *type, AttributeDef *ad)
         a = f->a.aligned ? 1 << (f->a.aligned - 1) : 0;
         packed = 0;
 
-        if (pcc && bit_size == 0) {
+        if (bit_size == 0) {
             /* in pcc mode, packing does not affect zero-width bitfields */
 
         } else {
             /* in pcc mode, attribute packed overrides if set. */
-            if (pcc && (f->a.packed || ad->a.packed))
+            if (f->a.packed || ad->a.packed)
                 align = packed = 1;
 
-            /* pragma pack overrides align if lesser and packs bitfields always */
-            if (pragma_pack) {
-                packed = 1;
-                if (pragma_pack < align)
-                    align = pragma_pack;
-                /* in pcc mode pragma pack also overrides individual align */
-                if (pcc && pragma_pack < a)
-                    a = 0;
-            }
         }
         /* some individual align was specified */
         if (a)
             align = a;
 
         if (type->ref->type.t == VT_UNION) {
-	    if (pcc && bit_size >= 0)
+	    if (bit_size >= 0)
 	        size = (bit_size + 7) >> 3;
 	    offset = 0;
 	    if (size > c)
 	        c = size;
 
 	} else if (bit_size < 0) {
-            if (pcc)
-                c += (bit_pos + 7) >> 3;
+            c += (bit_pos + 7) >> 3;
 	    c = (c + align - 1) & -align;
 	    offset = c;
 	    if (size > 0)
 	        c += size;
 	    bit_pos = 0;
-	    prevbt = VT_STRUCT;
-	    prev_bit_size = 0;
 
 	} else {
-	    /* A bit-field.  Layout is more complicated.  There are two
-	       options: PCC (GCC) compatible and MS compatible */
-            if (pcc) {
+	    /* A bit-field using the platform ABI layout. */
 		/* In PCC layout a bit-field is placed adjacent to the
                    preceding bit-fields, except if:
                    - it has zero-width
@@ -1650,31 +1546,6 @@ static void struct_layout(CType *type, AttributeDef *ad)
                     )
 		    align = 1;
 
-	    } else {
-		bt = f->type.t & VT_BTYPE;
-		if ((bit_pos + bit_size > size * 8)
-                    || (bit_size > 0) == (bt != prevbt)
-                    ) {
-		    c = (c + align - 1) & -align;
-		    offset = c;
-		    bit_pos = 0;
-		    /* In MS bitfield mode a bit-field run always uses
-		       at least as many bits as the underlying type.
-		       To start a new run it's also required that this
-		       or the last bit-field had non-zero width.  */
-		    if (bit_size || prev_bit_size)
-		        c += size;
-		}
-		/* In MS layout the records alignment is normally
-		   influenced by the field, except for a zero-width
-		   field at the start of a run (but by further zero-width
-		   fields it is again).  */
-		if (bit_size == 0 && prevbt != bt)
-		    align = 1;
-		prevbt = bt;
-                prev_bit_size = bit_size;
-	    }
-
 	    f->type.t = (f->type.t & ~(0x3f << VT_STRUCT_SHIFT))
 		        | (bit_pos << VT_STRUCT_SHIFT);
 	    bit_pos += bit_size;
@@ -1687,21 +1558,13 @@ static void struct_layout(CType *type, AttributeDef *ad)
 	f->r = 0;
     }
 
-    if (pcc)
-        c += (bit_pos + 7) >> 3;
+    c += (bit_pos + 7) >> 3;
 
     /* store size and alignment */
-    a = bt = ad->a.aligned ? 1 << (ad->a.aligned - 1) : 1;
+    a = ad->a.aligned ? 1 << (ad->a.aligned - 1) : 1;
     if (a < maxalign)
         a = maxalign;
     type->ref->r = a;
-    if (pragma_pack && pragma_pack < maxalign && 0 == pcc) {
-        /* can happen if individual align for some member was given.  In
-           this case MSVC ignores maxalign when aligning the size */
-        a = pragma_pack;
-        if (a < bt)
-            a = bt;
-    }
     c = (c + a - 1) & -a;
     type->ref->c = c;
 
@@ -1890,8 +1753,7 @@ do_decl:
                     	    else {
 				int v = btype.ref->v;
 				if (!(v & SYM_FIELD) && (v & ~SYM_STRUCT) < SYM_FIRST_ANOM) {
-				    if (tcc_state->ms_extensions == 0)
-                        		expect("identifier");
+				    expect("identifier");
 				}
                     	    }
                         }
@@ -1971,9 +1833,6 @@ do_decl:
             }
             skip('}');
 	    parse_attribute(&ad);
-            if (ad.cleanup_func) {
-                tcc_warning("attribute '__cleanup__' ignored on type");
-            }
             struct_layout(type, &ad);
         }
     }
@@ -2178,10 +2037,6 @@ ST_FUNC int parse_btype(CType *type, AttributeDef *ad)
         case TOK_ATTRIBUTE1:
         case TOK_ATTRIBUTE2:
             parse_attribute(ad);
-            if (ad->attr_mode) {
-                u = ad->attr_mode -1;
-                t = (t & ~(VT_BTYPE|VT_LONG)) | u;
-            }
             continue;
             /* GNUC typeof */
         case TOK_TYPEOF1:
@@ -2272,7 +2127,7 @@ static int asm_label_instr(void)
 
 static int post_type(CType *type, AttributeDef *ad, int storage, int td)
 {
-    int n, l, t1, arg_size, align, unused_align;
+    int n, l, t1, align, unused_align;
     Sym **plast, *s, *first;
     AttributeDef ad1;
     CType pt;
@@ -2293,7 +2148,6 @@ static int post_type(CType *type, AttributeDef *ad, int storage, int td)
 	  l = FUNC_OLD;
         first = NULL;
         plast = &first;
-        arg_size = 0;
         if (l) {
             for(;;) {
                 /* read param name and compute offset */
@@ -2312,7 +2166,6 @@ static int post_type(CType *type, AttributeDef *ad, int storage, int td)
                     next();
                 }
                 convert_parameter_type(&pt);
-                arg_size += (type_size(&pt, &align) + PTR_SIZE - 1) / PTR_SIZE;
                 s = sym_push(n | SYM_FIELD, &pt, 0, 0);
                 *plast = s;
                 plast = &s->next;
@@ -2343,7 +2196,6 @@ static int post_type(CType *type, AttributeDef *ad, int storage, int td)
             mk_pointer(type);
         }
         /* we push a anonymous symbol which will contain the function prototype */
-        ad->f.func_args = arg_size;
         ad->f.func_type = l;
         s = sym_push(SYM_FIELD, type, 0, 0);
         s->a = ad->a;
@@ -2798,73 +2650,6 @@ static void gcase(struct case_t **base, int len, int *bsym)
 }
 
 /* ------------------------------------------------------------------------- */
-/* __attribute__((cleanup(fn))) */
-
-static void try_call_scope_cleanup(Sym *stop)
-{
-    Sym *cls = cur_scope->cl.s;
-
-    for (; cls != stop; cls = cls->ncl) {
-	Sym *fs = cls->next;
-	Sym *vs = cls->prev_tok;
-
-	vpushsym(&fs->type, fs);
-	vset(&vs->type, vs->r, vs->c);
-	vtop->sym = vs;
-        mk_pointer(&vtop->type);
-	gaddrof();
-	gfunc_call(1);
-    }
-}
-
-static void try_call_cleanup_goto(Sym *cleanupstate)
-{
-    Sym *oc, *cc;
-    int ocd, ccd;
-
-    if (!cur_scope->cl.s)
-	return;
-
-    /* search NCA of both cleanup chains given parents and initial depth */
-    ocd = cleanupstate ? cleanupstate->v & ~SYM_FIELD : 0;
-    for (ccd = cur_scope->cl.n, oc = cleanupstate; ocd > ccd; --ocd, oc = oc->ncl)
-      ;
-    for (cc = cur_scope->cl.s; ccd > ocd; --ccd, cc = cc->ncl)
-      ;
-    for (; cc != oc; cc = cc->ncl, oc = oc->ncl, --ccd)
-      ;
-
-    try_call_scope_cleanup(cc);
-}
-
-/* call 'func' for each __attribute__((cleanup(func))) */
-static void block_cleanup(struct scope *o)
-{
-    int jmp = 0;
-    Sym *g, **pg;
-    for (pg = &pending_gotos; (g = *pg) && g->c > o->cl.n;) {
-        if (g->prev_tok->r & LABEL_FORWARD) {
-            Sym *pcl = g->next;
-            if (!jmp)
-                jmp = gjmp(0);
-            gsym(pcl->jnext);
-            try_call_scope_cleanup(o->cl.s);
-            pcl->jnext = gjmp(0);
-            if (!o->cl.n)
-                goto remove_pending;
-            g->c = o->cl.n;
-            pg = &g->prev;
-        } else {
-    remove_pending:
-            *pg = g->prev;
-            sym_free(g);
-        }
-    }
-    gsym(jmp);
-    try_call_scope_cleanup(o->cl.s);
-}
-
-/* ------------------------------------------------------------------------- */
 /* VLA */
 
 static void vla_restore(int loc)
@@ -2891,7 +2676,6 @@ void new_scope(struct scope *o)
 
     /* record local declaration stack position */
     o->lstk = local_stack;
-    o->llstk = local_label_stack;
 
     ++local_scope;
 }
@@ -2899,12 +2683,6 @@ void new_scope(struct scope *o)
 void prev_scope(struct scope *o, int is_expr)
 {
     vla_leave(o->prev);
-
-    if (o->cl.s != o->prev->cl.s)
-        block_cleanup(o->prev);
-
-    /* pop locally defined labels */
-    label_pop(&local_label_stack, o->llstk, is_expr);
 
     /* In the is_expr case (a statement expression is finished here),
        vtop might refer to symbols on the local_stack.  Either via the
@@ -2925,7 +2703,6 @@ void leave_scope(struct scope *o)
 {
     if (!o)
         return;
-    try_call_scope_cleanup(o->cl.s);
     vla_leave(o);
 }
 
@@ -2995,18 +2772,6 @@ again:
 
     } else if (t == '{') {
         new_scope(&o);
-
-        /* handle local labels declarations */
-        while (tok == TOK_LABEL) {
-            do {
-                next();
-                if (tok < TOK_UIDENT)
-                    expect("label identifier");
-                label_push(&local_label_stack, tok, LABEL_DECLARED);
-                next();
-            } while (tok == ',');
-            skip(';');
-        }
 
         while (tok != '}') {
 	    decl(VT_LOCAL);
@@ -3172,7 +2937,7 @@ again:
         if (!cur_switch)
             expect("switch");
         cr->v1 = cr->v2 = expr_const64();
-        if (gnu_ext && tok == TOK_DOTS) {
+        if (tok == TOK_DOTS) {
             next();
             cr->v2 = expr_const64();
             if (cr->v2 < cr->v1)
@@ -3196,35 +2961,16 @@ again:
 
     } else if (t == TOK_GOTO) {
         vla_restore(root_scope->vla.loc);
-        if (tok == '*' && gnu_ext) {
-            /* computed goto */
-            next();
-            gexpr();
-            if ((vtop->type.t & VT_BTYPE) != VT_PTR)
-                expect("pointer");
-            ggoto();
-
-        } else if (tok >= TOK_UIDENT) {
+        if (tok >= TOK_UIDENT) {
 	    s = label_find(tok);
 	    /* put forward definition if needed */
             if (!s)
               s = label_push(&global_label_stack, tok, LABEL_FORWARD);
-            else if (s->r == LABEL_DECLARED)
-              s->r = LABEL_FORWARD;
 
-	    if (s->r & LABEL_FORWARD) {
-		/* start new goto chain for cleanups, linked via label->next */
-		if (cur_scope->cl.s && !nocode_wanted) {
-                    sym_push2(&pending_gotos, SYM_FIELD, 0, cur_scope->cl.n);
-                    pending_gotos->prev_tok = s;
-                    s = sym_push2(&s->next, SYM_FIELD, 0, 0);
-                    pending_gotos->next = s;
-                }
+	    if (s->r & LABEL_FORWARD)
 		s->jnext = gjmp(s->jnext);
-	    } else {
-		try_call_cleanup_goto(s->cleanupstate);
+	    else
 		gjmp_addr(s->jnext);
-	    }
 	    next();
 
         } else {
@@ -3244,19 +2990,11 @@ again:
                 if (s->r == LABEL_DEFINED)
                     tcc_error("duplicate label '%s'", get_tok_str(s->v, NULL));
                 s->r = LABEL_DEFINED;
-		if (s->next) {
-		    Sym *pcl; /* pending cleanup goto */
-		    for (pcl = s->next; pcl; pcl = pcl->prev)
-		      gsym(pcl->jnext);
-		    sym_pop(&s->next, NULL, 0);
-		} else
-		  gsym(s->jnext);
+		gsym(s->jnext);
             } else {
                 s = label_push(&global_label_stack, t, LABEL_DEFINED);
             }
             s->jnext = gind();
-            s->cleanupstate = cur_scope->cl.s;
-
     block_after_label:
             vla_restore(cur_scope->vla.loc);
             /* we accept this, but it is a mistake */
@@ -3385,7 +3123,7 @@ static int decl_designator(CType *type, Section *sec, unsigned long c,
     if (flags & DIF_HAVE_ELEM)
         goto no_designator;
 
-    if (gnu_ext && tok >= TOK_UIDENT) {
+    if (tok >= TOK_UIDENT) {
         l = tok, next();
         if (tok == ':')
             goto struct_field;
@@ -3399,7 +3137,7 @@ static int decl_designator(CType *type, Section *sec, unsigned long c,
                 expect("array type");
             next();
             index = index_last = expr_const();
-            if (tok == TOK_DOTS && gnu_ext) {
+            if (tok == TOK_DOTS) {
                 next();
                 index_last = expr_const();
             }
@@ -3436,8 +3174,6 @@ static int decl_designator(CType *type, Section *sec, unsigned long c,
     if (!cur_field) {
         if (tok == '=') {
             next();
-        } else if (!gnu_ext) {
-	    expect("=");
         }
     } else {
     no_designator:
@@ -3979,15 +3715,6 @@ ST_FUNC void decl_initializer_alloc(CType *type, AttributeDef *ad, int r,
 	    }
 #endif
             sym = sym_push(v, type, r, addr);
-	    if (ad->cleanup_func) {
-		Sym *cls = sym_push2(&all_cleanups,
-                    SYM_FIELD | ++cur_scope->cl.n, 0, 0);
-		cls->prev_tok = sym;
-		cls->next = ad->cleanup_func;
-		cls->ncl = cur_scope->cl.s;
-		cur_scope->cl.s = cls;
-	    }
-
             sym->a = ad->a;
         } else {
             /* push local reference */
@@ -4094,11 +3821,6 @@ static void gen_function(Sym *sym)
     }
     /* NOTE: we patch the symbol size later */
     put_extern_sym(sym, cur_text_section, ind, 0);
-    if (sym->type.ref->f.func_ctor)
-        add_array (tcc_state, ".init_array", sym->c);
-    if (sym->type.ref->f.func_dtor)
-        add_array (tcc_state, ".fini_array", sym->c);
-
     funcname = get_tok_str(sym->v, NULL);
     func_ind = ind;
     func_vt = sym->type.ref->type;
@@ -4120,7 +3842,6 @@ static void gen_function(Sym *sym)
     cur_text_section->data_offset = ind;
     local_scope = 0;
     label_pop(&global_label_stack, NULL, 0);
-    sym_pop(&all_cleanups, NULL, 0);
     /* patch symbol size */
     elfsym(sym)->st_size = ind - func_ind;
     /* end of function */
@@ -4280,7 +4001,7 @@ static int decl0(int l, int is_for_loop_init, Sym *func_sym)
                     type.t &= ~VT_INLINE;
             }
 
-            if (gnu_ext && (tok == TOK_ASM1 || tok == TOK_ASM2 || tok == TOK_ASM3)) {
+            if (tok == TOK_ASM1 || tok == TOK_ASM2 || tok == TOK_ASM3) {
                 ad.asm_label = asm_label_instr();
                 /* parse one last attribute list, after asm label */
                 parse_attribute(&ad);
@@ -4367,7 +4088,6 @@ found:
                     r = 0;
                     if ((type.t & VT_BTYPE) == VT_FUNC) {
                         /* external function definition */
-                        /* specific case for func_call attribute */
                         type.ref->f = ad.f;
                     } else if (!(type.t & VT_ARRAY)) {
                         /* not lvalue if array */

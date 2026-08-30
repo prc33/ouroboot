@@ -134,8 +134,6 @@ ST_FUNC void unary(void)
         t = (LONG_SIZE == 8 ? VT_LLONG : VT_INT) | VT_LONG | VT_UNSIGNED;
 	goto push_tokc;
     case TOK___FUNCTION__:
-        if (!gnu_ext)
-            goto tok_identifier;
         /* fall thru */
     case TOK___FUNC__:
         {
@@ -165,8 +163,6 @@ ST_FUNC void unary(void)
         if (tcc_state->char_is_unsigned)
             t = VT_BYTE | VT_UNSIGNED;
     str_init:
-        if (tcc_state->warn_write_strings)
-            t |= VT_CONSTANT;
         type.t = t;
         mk_pointer(&type);
         type.t |= VT_ARRAY;
@@ -432,29 +428,6 @@ ST_FUNC void unary(void)
 	vswap();
 	gen_op('-');
         break;
-    case TOK_LAND:
-        if (!gnu_ext)
-            goto tok_identifier;
-        next();
-        /* allow to take the address of a label */
-        if (tok < TOK_UIDENT)
-            expect("label identifier");
-        s = label_find(tok);
-        if (!s) {
-            s = label_push(&global_label_stack, tok, LABEL_FORWARD);
-        } else {
-            if (s->r == LABEL_DECLARED)
-                s->r = LABEL_FORWARD;
-        }
-        if (!s->type.t) {
-            s->type.t = VT_VOID;
-            mk_pointer(&s->type);
-            s->type.t |= VT_STATIC;
-        }
-        vpushsym(&s->type, s);
-        next();
-        break;
-
     case TOK_GENERIC:
     {
 	CType controlling_type;
@@ -865,7 +838,7 @@ static void expr_cond(void)
     if (tok == '?') {
         next();
 	c = condition_3way();
-        g = (tok == ':' && gnu_ext);
+        g = tok == ':';
         tt = 0;
         if (!g) {
             if (c < 0) {

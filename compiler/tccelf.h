@@ -83,7 +83,6 @@ ST_FUNC void *load_data(int fd, unsigned long offset, unsigned long size);
 ST_FUNC int tcc_object_type(int fd, ElfW(Ehdr) *h);
 ST_FUNC int tcc_load_object_file(TCCState *s, int fd, unsigned long offset);
 ST_FUNC int tcc_load_archive(TCCState *s, int fd, int alacarte);
-ST_FUNC void add_array(TCCState *s, const char *sec, int c);
 ST_FUNC void build_got_entries(TCCState *s);
 struct sym_attr;
 ST_FUNC struct sym_attr *get_sym_attr(TCCState *s, int index, int alloc);

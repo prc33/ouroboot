@@ -22,7 +22,6 @@
 #include "tcc.h"
 #ifdef CONFIG_TCC_ASM
 
-static Section *last_text_section; /* to handle .previous asm directive */
 
 ST_FUNC int asm_get_local_label_name(TCCState *s1, unsigned int n)
 {
@@ -34,7 +33,7 @@ ST_FUNC int asm_get_local_label_name(TCCState *s1, unsigned int n)
     return ts->tok;
 }
 
-static int tcc_assemble_internal(TCCState *s1, int do_preprocess, int global);
+static int tcc_assemble_internal(TCCState *s1, int do_preprocess);
 static Sym* asm_new_label(TCCState *s1, int label, int is_local);
 static Sym* asm_new_label1(TCCState *s1, int label, int is_local, int sh_num, int value);
 
@@ -400,23 +399,7 @@ static void use_section(TCCState *s1, const char *name)
     use_section1(s1, sec);
 }
 
-static void push_section(TCCState *s1, const char *name)
-{
-    Section *sec = find_section(s1, name);
-    sec->prev = cur_text_section;
-    use_section1(s1, sec);
-}
-
-static void pop_section(TCCState *s1)
-{
-    Section *prev = cur_text_section->prev;
-    if (!prev)
-        tcc_error(".popsection without .pushsection");
-    cur_text_section->prev = NULL;
-    use_section1(s1, prev);
-}
-
-static void asm_parse_directive(TCCState *s1, int global)
+static void asm_parse_directive(TCCState *s1)
 {
     int n, offset, v, size, tok1;
     Section *sec;
@@ -515,93 +498,6 @@ static void asm_parse_directive(TCCState *s1, int global)
             next();
         }
         break;
-    case TOK_ASMDIR_fill:
-        {
-            int repeat, size, val, i, j;
-            uint8_t repeat_buf[8];
-            next();
-            repeat = asm_int_expr(s1);
-            if (repeat < 0) {
-                tcc_error("repeat < 0; .fill ignored");
-                break;
-            }
-            size = 1;
-            val = 0;
-            if (tok == ',') {
-                next();
-                size = asm_int_expr(s1);
-                if (size < 0) {
-                    tcc_error("size < 0; .fill ignored");
-                    break;
-                }
-                if (size > 8)
-                    size = 8;
-                if (tok == ',') {
-                    next();
-                    val = asm_int_expr(s1);
-                }
-            }
-            /* XXX: endianness */
-            repeat_buf[0] = val;
-            repeat_buf[1] = val >> 8;
-            repeat_buf[2] = val >> 16;
-            repeat_buf[3] = val >> 24;
-            repeat_buf[4] = 0;
-            repeat_buf[5] = 0;
-            repeat_buf[6] = 0;
-            repeat_buf[7] = 0;
-            for(i = 0; i < repeat; i++) {
-                for(j = 0; j < size; j++) {
-                    g(repeat_buf[j]);
-                }
-            }
-        }
-        break;
-    case TOK_ASMDIR_rept:
-        {
-            int repeat;
-            TokenString *init_str;
-            next();
-            repeat = asm_int_expr(s1);
-            init_str = tok_str_alloc();
-            while (next(), tok != TOK_ASMDIR_endr) {
-                if (tok == CH_EOF)
-                    tcc_error("we at end of file, .endr not found");
-                tok_str_add_tok(init_str);
-            }
-            tok_str_add(init_str, -1);
-            tok_str_add(init_str, 0);
-            begin_macro(init_str, 1);
-            while (repeat-- > 0) {
-                tcc_assemble_internal(s1, (parse_flags & PARSE_FLAG_PREPROCESS),
-				      global);
-                macro_ptr = init_str->str;
-            }
-            end_macro();
-            next();
-            break;
-        }
-    case TOK_ASMDIR_org:
-        {
-            unsigned long n;
-	    ExprValue e;
-	    ElfSym *esym;
-            next();
-	    asm_expr(s1, &e);
-	    n = e.v;
-	    esym = elfsym(e.sym);
-	    if (esym) {
-		if (esym->st_shndx != cur_text_section->sh_num)
-		  expect("constant or same-section symbol");
-		n += esym->st_value;
-	    }
-            if (n < ind)
-                tcc_error("attempt to .org backwards");
-            v = 0;
-            size = n - ind;
-            goto zero_pad;
-        }
-        break;
     case TOK_ASMDIR_set:
 	next();
 	tok1 = tok;
@@ -612,20 +508,12 @@ static void asm_parse_directive(TCCState *s1, int global)
 	    set_symbol(s1, tok1);
 	break;
     case TOK_ASMDIR_globl:
-    case TOK_ASMDIR_global:
-    case TOK_ASMDIR_weak:
-    case TOK_ASMDIR_hidden:
 	tok1 = tok;
 	do { 
             Sym *sym;
             next();
             sym = get_asm_sym(tok, NULL);
-	    if (tok1 != TOK_ASMDIR_hidden)
-                sym->type.t &= ~VT_STATIC;
-            if (tok1 == TOK_ASMDIR_weak)
-                sym->a.weak = 1;
-	    else if (tok1 == TOK_ASMDIR_hidden)
-	        sym->a.visibility = STV_HIDDEN;
+            sym->type.t &= ~VT_STATIC;
             update_storage(sym);
             next();
 	} while (tok == ',');
@@ -674,61 +562,11 @@ static void asm_parse_directive(TCCState *s1, int global)
 	}
 	break;
     case TOK_ASMDIR_file:
-        {
-            char filename[512];
-
-            filename[0] = '\0';
-            next();
-
-            if (tok == TOK_STR)
-                pstrcat(filename, sizeof(filename), tokc.str.data);
-            else
-                pstrcat(filename, sizeof(filename), get_tok_str(tok, NULL));
-
-            if (s1->warn_unsupported)
-                tcc_warning("ignoring .file %s", filename);
-
-            next();
-        }
-        break;
     case TOK_ASMDIR_ident:
-        {
-            char ident[256];
-
-            ident[0] = '\0';
-            next();
-
-            if (tok == TOK_STR)
-                pstrcat(ident, sizeof(ident), tokc.str.data);
-            else
-                pstrcat(ident, sizeof(ident), get_tok_str(tok, NULL));
-
-            if (s1->warn_unsupported)
-                tcc_warning("ignoring .ident %s", ident);
-
-            next();
-        }
-        break;
     case TOK_ASMDIR_size:
-        { 
-            Sym *sym;
-
+        do {
             next();
-            sym = asm_label_find(tok);
-            if (!sym) {
-                tcc_error("label not found: %s", get_tok_str(tok, NULL));
-            }
-
-            /* XXX .size name,label2-label1 */
-            if (s1->warn_unsupported)
-                tcc_warning("ignoring .size %s,*", get_tok_str(tok, NULL));
-
-            next();
-            skip(',');
-            while (tok != TOK_LINEFEED && tok != ';' && tok != CH_EOF) {
-                next();
-            }
-        }
+        } while (tok != TOK_LINEFEED && tok != ';' && tok != CH_EOF);
         break;
     case TOK_ASMDIR_type:
         { 
@@ -750,20 +588,14 @@ static void asm_parse_directive(TCCState *s1, int global)
             if (!strcmp(newtype, "function") || !strcmp(newtype, "STT_FUNC")) {
                 sym->type.t = (sym->type.t & ~VT_BTYPE) | VT_FUNC;
             }
-            else if (s1->warn_unsupported)
-                tcc_warning("change type of '%s' from 0x%x to '%s' ignored", 
-                    get_tok_str(sym->v, NULL), sym->type.t, newtype);
-
             next();
         }
         break;
-    case TOK_ASMDIR_pushsection:
     case TOK_ASMDIR_section:
         {
             char sname[256];
 	    int old_nb_section = s1->nb_sections;
 
-	    tok1 = tok;
             /* XXX: support more options */
             next();
             sname[0] = '\0';
@@ -787,11 +619,7 @@ static void asm_parse_directive(TCCState *s1, int global)
                     next();
                 }
             }
-            last_text_section = cur_text_section;
-	    if (tok1 == TOK_ASMDIR_section)
-	        use_section(s1, sname);
-	    else
-	        push_section(s1, sname);
+            use_section(s1, sname);
 	    /* If we just allocated a new section reset its alignment to
 	       1.  new_section normally acts for GCC compatibility and
 	       sets alignment to PTR_SIZE.  The assembler behaves different. */
@@ -799,38 +627,9 @@ static void asm_parse_directive(TCCState *s1, int global)
 	        cur_text_section->sh_addralign = 1;
         }
         break;
-    case TOK_ASMDIR_previous:
-        { 
-            Section *sec;
-            next();
-            if (!last_text_section)
-                tcc_error("no previous section referenced");
-            sec = cur_text_section;
-            use_section1(s1, last_text_section);
-            last_text_section = sec;
-        }
-        break;
-    case TOK_ASMDIR_popsection:
-	next();
-	pop_section(s1);
-	break;
     case TOK_ASMDIR_option:
         do next(); while (tok != ';' && tok != TOK_LINEFEED);
         break;
-#ifdef TCC_TARGET_I386
-    case TOK_ASMDIR_code16:
-        {
-            next();
-            s1->seg_size = 16;
-        }
-        break;
-    case TOK_ASMDIR_code32:
-        {
-            next();
-            s1->seg_size = 32;
-        }
-        break;
-#endif
     default:
         tcc_error("unknown assembler directive '.%s'", get_tok_str(tok, NULL));
         break;
@@ -839,7 +638,7 @@ static void asm_parse_directive(TCCState *s1, int global)
 
 
 /* assemble a file */
-static int tcc_assemble_internal(TCCState *s1, int do_preprocess, int global)
+static int tcc_assemble_internal(TCCState *s1, int do_preprocess)
 {
     int opcode;
     int saved_parse_flags = parse_flags;
@@ -858,7 +657,7 @@ static int tcc_assemble_internal(TCCState *s1, int do_preprocess, int global)
             while (tok != TOK_LINEFEED)
                 next();
         } else if (tok >= TOK_ASMDIR_FIRST && tok <= TOK_ASMDIR_LAST) {
-            asm_parse_directive(s1, global);
+            asm_parse_directive(s1);
         } else if (tok == TOK_PPNUM) {
             const char *p;
             int n;
@@ -905,7 +704,7 @@ ST_FUNC int tcc_assemble(TCCState *s1, int do_preprocess)
     cur_text_section = text_section;
     ind = cur_text_section->data_offset;
     nocode_wanted = 0;
-    ret = tcc_assemble_internal(s1, do_preprocess, 1);
+    ret = tcc_assemble_internal(s1, do_preprocess);
     cur_text_section->data_offset = ind;
     return ret;
 }
@@ -916,7 +715,7 @@ ST_FUNC int tcc_assemble(TCCState *s1, int do_preprocess)
 /* assemble the string 'str' in the current C compilation unit without
    C preprocessing. NOTE: str is modified by modifying the '\0' at the
    end */
-static void tcc_assemble_inline(TCCState *s1, char *str, int len, int global)
+static void tcc_assemble_inline(TCCState *s1, char *str, int len)
 {
     const int *saved_macro_ptr = macro_ptr;
     int dotid = set_idnum('.', IS_ID);
@@ -925,7 +724,7 @@ static void tcc_assemble_inline(TCCState *s1, char *str, int len, int global)
     tcc_open_bf(s1, ":asm:", len);
     memcpy(file->buffer, str, len);
     macro_ptr = NULL;
-    tcc_assemble_internal(s1, 0, global);
+    tcc_assemble_internal(s1, 0);
     tcc_close();
 
     set_idnum('$', dolid);
@@ -1154,7 +953,7 @@ ST_FUNC void asm_instr(void)
        bleed out to surrounding code.  */
     sec = cur_text_section;
     /* assemble the string with tcc internal assembler */
-    tcc_assemble_inline(tcc_state, astr1.data, astr1.size - 1, 0);
+    tcc_assemble_inline(tcc_state, astr1.data, astr1.size - 1);
     if (sec != cur_text_section) {
         tcc_warning("inline asm tries to change current section");
         use_section1(tcc_state, sec);
@@ -1196,7 +995,7 @@ ST_FUNC void asm_global_instr(void)
     ind = cur_text_section->data_offset;
 
     /* assemble the string with tcc internal assembler */
-    tcc_assemble_inline(tcc_state, astr.data, astr.size - 1, 1);
+    tcc_assemble_inline(tcc_state, astr.data, astr.size - 1);
     
     cur_text_section->data_offset = ind;
 

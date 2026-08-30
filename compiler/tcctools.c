@@ -35,18 +35,6 @@ static unsigned long le2belong(unsigned long ul) {
         ((ul & 0xFF)<<24)+((ul & 0xFF00)<<8);
 }
 
-/* Returns 1 if s contains any of the chars of list, else 0 */
-static int contains_any(const char *s, const char *list) {
-  const char *l;
-  for (; *s; s++) {
-      for (l = list; *l; l++) {
-          if (*s == *l)
-              return 1;
-      }
-  }
-  return 0;
-}
-
 static int ar_usage(int ret) {
     fprintf(stderr, "usage: tcc -ar [rcsv] lib file...\n");
     fprintf(stderr, "create library ([abdioptxN] not supported).\n");
@@ -88,32 +76,13 @@ ST_FUNC int tcc_tool_ar(int argc, char **argv)
     char tfile[260], stmp[20];
     char *file, *name;
     int ret = 2;
-    const char *ops_conflict = "habdioptxN";  // unsupported but destructive if ignored.
-    int verbose = 0;
+    int verbose;
 
-    i_lib = 0; i_obj = 0;  // will hold the index of the lib and first obj
-    for (i = 1; i < argc; i++) {
-        const char *a = argv[i];
-        if (*a == '-' && strstr(a, "."))
-            ret = 1; // -x.y is always invalid (same as gnu ar)
-        if ((*a == '-') || (i == 1 && !strstr(a, "."))) {  // options argument
-            if (contains_any(a, ops_conflict))
-                ret = 1;
-            if (strstr(a, "v"))
-                verbose = 1;
-        } else {  // lib or obj files: don't abort - keep validating all args.
-            if (!i_lib)  // first file is the lib
-                i_lib = i;
-            else if (!i_obj)  // second file is the first obj
-                i_obj = i;
-        }
-    }
-
-    if (!i_obj)  // i_obj implies also i_lib. we require both.
-        ret = 1;
-
-    if (ret == 1)
-        return ar_usage(ret);
+    if (argc < 4 || strspn(argv[1], "rcsv") != strlen(argv[1]))
+        return ar_usage(1);
+    verbose = strchr(argv[1], 'v') != NULL;
+    i_lib = 2;
+    i_obj = 3;
 
     if ((fh = fopen(argv[i_lib], "wb")) == NULL)
     {
@@ -135,10 +104,6 @@ ST_FUNC int tcc_tool_ar(int argc, char **argv)
     // i_obj = first input object file
     while (i_obj < argc)
     {
-        if (*argv[i_obj] == '-') {  // by now, all options start with '-'
-            i_obj++;
-            continue;
-        }
         if ((fi = fopen(argv[i_obj], "rb")) == NULL) {
             fprintf(stderr, "tcc: ar: can't open file %s \n", argv[i_obj]);
             goto the_end;
@@ -190,14 +155,7 @@ ST_FUNC int tcc_tool_ar(int argc, char **argv)
             for (i = 1; i < nsym; i++)
             {
                 sym = (ElfW(Sym) *) (symtab + i * sizeof(ElfW(Sym)));
-                if (sym->st_shndx &&
-                    (sym->st_info == 0x10
-                    || sym->st_info == 0x11
-                    || sym->st_info == 0x12
-                    || sym->st_info == 0x20
-                    || sym->st_info == 0x21
-                    || sym->st_info == 0x22
-                    )) {
+                if (sym->st_shndx && ELFW(ST_BIND)(sym->st_info) != STB_LOCAL) {
                     //printf("symtab: %2Xh %4Xh %2Xh %s\n", sym->st_info, sym->st_size, sym->st_shndx, strtab + sym->st_name);
                     istrlen = strlen(strtab + sym->st_name)+1;
                     anames = tcc_realloc(anames, strpos+istrlen);

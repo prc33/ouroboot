@@ -44,26 +44,17 @@ static Sym *__sym_malloc(void)
 ST_FUNC Sym *sym_malloc(void)
 {
     Sym *sym;
-#ifndef SYM_DEBUG
     sym = sym_free_first;
     if (!sym)
         sym = __sym_malloc();
     sym_free_first = sym->next;
     return sym;
-#else
-    sym = tcc_malloc(sizeof(Sym));
-    return sym;
-#endif
 }
 
 ST_INLN void sym_free(Sym *sym)
 {
-#ifndef SYM_DEBUG
     sym->next = sym_free_first;
     sym_free_first = sym;
-#else
-    tcc_free(sym);
-#endif
 }
 
 ST_FUNC void symbols_finish(void)
@@ -231,18 +222,10 @@ ST_FUNC void merge_symattr(struct SymAttr *to, struct SymAttr *from)
 
 ST_FUNC void merge_funcattr(struct FuncAttr *to, struct FuncAttr *from)
 {
-    if (from->func_call && !to->func_call)
-        to->func_call = from->func_call;
     if (from->func_type && !to->func_type)
         to->func_type = from->func_type;
-    if (from->func_args && !to->func_args)
-        to->func_args = from->func_args;
     if (from->func_noreturn)
         to->func_noreturn = 1;
-    if (from->func_ctor)
-        to->func_ctor = 1;
-    if (from->func_dtor)
-        to->func_dtor = 1;
 }
 
 static void patch_type(Sym *sym, CType *type)

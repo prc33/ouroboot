@@ -1,36 +1,36 @@
--B/tcc-src
--I/tcc-src
--I/tcc-src/include
--I/musl/obj/include
--I/musl/include
--I/musl/arch/riscv64
--I/musl/arch/generic
--nostdinc
--DTCC_TARGET_RISCV64
--static
--nostdlib
--o
-/tcc-stage2
-/musl/lib/crt1.o
-/musl/lib/crti.o
-/tcc-src/tcc.c
-/tcc-src/utils.c
-/tcc-src/parsing.c
-/tcc-src/tccpp.c
-/tcc-src/tccgen.c
-/tcc-src/expr.c
-/tcc-src/symbols.c
-/tcc-src/types.c
-/tcc-src/vstack.c
-/tcc-src/registers.c
-/tcc-src/optimise.c
-/tcc-src/tccelf.c
-/tcc-src/tcctools.c
-/tcc-src/tccasm.c
-/tcc-src/risc/riscv64-gen.c
-/tcc-src/risc/riscv64-link.c
-/tcc-src/risc/riscv64-asm.c
-/tcc-src/risc/riscv64-softquad.c
-/musl/lib/libc.a
-/tcc-src/libtcc1.a
-/musl/lib/crtn.o
+set -- \
+    -B/tcc-src \
+    -I/tcc-src \
+    -I/tcc-src/include \
+    -I/musl/obj/include \
+    -I/musl/include \
+    -I/musl/arch/riscv64 \
+    -I/musl/arch/generic \
+    -nostdinc \
+    -DTCC_TARGET_RISCV64 \
+    -static \
+    -nostdlib \
+    -o /tcc-stage2 \
+    /musl/lib/crt1.o \
+    /musl/lib/crti.o \
+    /tcc-src/tcc.c \
+    /tcc-src/utils.c \
+    /tcc-src/parsing.c \
+    /tcc-src/tccpp.c \
+    /tcc-src/tccgen.c \
+    /tcc-src/expr.c \
+    /tcc-src/symbols.c \
+    /tcc-src/types.c \
+    /tcc-src/vstack.c \
+    /tcc-src/registers.c \
+    /tcc-src/optimise.c \
+    /tcc-src/tccelf.c \
+    /tcc-src/tcctools.c \
+    /tcc-src/tccasm.c \
+    /tcc-src/risc/riscv64-gen.c \
+    /tcc-src/risc/riscv64-link.c \
+    /tcc-src/risc/riscv64-asm.c \
+    /tcc-src/risc/riscv64-softquad.c \
+    /musl/lib/libc.a \
+    /tcc-src/libtcc1.a \
+    /musl/lib/crtn.o

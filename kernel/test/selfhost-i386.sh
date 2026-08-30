@@ -9,7 +9,8 @@
 set -e
 
 echo "SELFHOST: stage1 compiling TCC"
-/tcc @/tcc-stage2.args
+. /tcc-stage2.args
+/tcc "$@"
 
 echo "SELFHOST: stage2 runs"
 /tcc-stage2 -v

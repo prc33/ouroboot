@@ -350,8 +350,6 @@ static int is_compatible_func(CType *type1, CType *type2)
 
     s1 = type1->ref;
     s2 = type2->ref;
-    if (s1->f.func_call != s2->f.func_call)
-        return 0;
     if (s1->f.func_type != s2->f.func_type
         && s1->f.func_type != FUNC_OLD
         && s2->f.func_type != FUNC_OLD)
