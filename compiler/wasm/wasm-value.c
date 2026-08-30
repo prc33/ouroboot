@@ -1,4 +1,4 @@
-/* wasm's replacement for the register machine (regalloc.c), which this
+/* wasm's replacement for the native register machine, which this
    target never compiles -- see registers.h and the Makefile.
    The front end calls gv() to mean "materialise this value somewhere I
    can refer to". On a register machine that means picking one of a
@@ -6,7 +6,7 @@
    registers at all: it has an operand stack, and as many locals as a
    function cares to declare. Locals are free to add and calls do not
    clobber them, so nothing here ever has to spill, evict, or colour
-   anything -- the whole reason regalloc.c is 289 lines.
+   anything.
    What replaces it: a "register" is just an index into a per-function
    pool of wasm locals, handed out to whichever value stack slot needs
    one. get_reg() picks the lowest index no live vstack entry is using,
@@ -119,7 +119,7 @@ ST_FUNC void move_reg(int r, int s, int t)
     sv.sym = NULL;
     load(r, &sv);
 }
-/* Materialise vtop. Compare with regalloc.c's gv(): gone are the
+/* Materialise vtop. Compared with the native gv(), gone are the
    two-word register pairs (wasm has a native i64, so USING_TWO_WORDS is
    never true here), the spill-and-reload dance, and the second register
    class. What is left is the part that was never about registers --
@@ -190,7 +190,7 @@ ST_FUNC int gv(int rc)
     vtop->r = r;
     return r;
 }
-/* Both operands into locals. regalloc.c has to order these carefully so
+/* Put both operands into locals. Native allocation has to order these carefully so
    that materialising the second cannot evict the first; nothing can be
    evicted here, so the only ordering that matters is the front end's own
    rule that a VT_CMP must be consumed before anything else emits code. */

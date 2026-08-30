@@ -324,8 +324,3 @@ ST_FUNC void gv_dup(void)
     load(r, vtop);
     vtop->r = r;
 }
-/* Target-neutral value-stack helpers that every backend needs: turning an
-   lvalue into an address, and reading/writing bitfields. The register
-   machine these used to share a file with (get_reg/save_reg/gv/gv2) moved
-   to regalloc.c, which only the register targets compile -- see
-   registers.h. */

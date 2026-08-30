@@ -5,7 +5,7 @@
    hold a live value; on wasm that is just another local, which costs a
    byte in the function header and nothing at runtime. So the pool is
    sized for the deepest a C expression realistically nests rather than
-   for what a CPU has -- wasm/wasm-regalloc.c only spills to a frame slot
+   for what a CPU has -- wasm-value.c only spills to a frame slot
    when a caller demands a specific local be vacated, never merely
    because it ran out. The old four-per-class file ran out compiling an
    ordinary nested arithmetic expression.
