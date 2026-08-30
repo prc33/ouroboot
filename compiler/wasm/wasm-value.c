@@ -1,3 +1,29 @@
+/* wasm's replacement for the register machine (regalloc.c), which this
+   target never compiles -- see registers.h and the Makefile.
+
+   The front end calls gv() to mean "materialise this value somewhere I
+   can refer to". On a register machine that means picking one of a
+   handful of real registers and spilling whatever was in it. wasm has no
+   registers at all: it has an operand stack, and as many locals as a
+   function cares to declare. Locals are free to add and calls do not
+   clobber them, so nothing here ever has to spill, evict, or colour
+   anything -- the whole reason regalloc.c is 289 lines.
+
+   What replaces it: a "register" is just an index into a per-function
+   pool of wasm locals, handed out to whichever value stack slot needs
+   one. get_reg() picks the lowest index no live vstack entry is using,
+   which cannot fail while the pool is larger than the deepest the value
+   stack ever gets in one expression, and there is no fallback path
+   because there is nothing to fall back to. save_reg()/save_regs()
+   exist only to satisfy the shared interface and do nothing: a wasm
+   local's value survives any call, and a value that is live is never
+   handed out again.
+
+   Values still reach the actual wasm operand stack, and mostly stay
+   there -- but that happens later, in tccwasm.c's WasmVStack when the
+   buffered IR is turned into bytecode. This file only decides which
+   local a value would spill to if it needs one. */
+
 #define USING_GLOBALS
 #include "../tcc.h"
 #include "../registers.h"

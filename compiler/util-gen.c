@@ -20,6 +20,23 @@
 #else
 # define VT_PTRDIFF_T (VT_LONG | VT_LLONG)
 #endif
+
+/* Register targets lower control flow as jumps and need no additional
+   structural information. Wasm implements these hooks to recover the C
+   constructs directly. */
+ST_FUNC void gjmp_hint_loop_range(int start, int cont)
+{
+    (void)start;
+    (void)cont;
+}
+
+ST_FUNC void gjmp_hint_switch_range(int bodies, int lookup, int end)
+{
+    (void)bodies;
+    (void)lookup;
+    (void)end;
+}
+
 ST_FUNC void save_regs(int n)
 {
     SValue *p, *p1;

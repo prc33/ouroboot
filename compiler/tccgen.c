@@ -2991,6 +2991,7 @@ again:
         gjmp_addr(d);
         gsym_addr(b, d);
         gsym(a);
+        gjmp_hint_loop_range(d, d);
 
     } else if (t == '{') {
         new_scope(&o);
@@ -3098,12 +3099,14 @@ again:
         gjmp_addr(d);
         gsym_addr(b, d);
         gsym(a);
+        gjmp_hint_loop_range(c, d);
         prev_scope(&o, 0);
 
     } else if (t == TOK_DO) {
         a = b = 0;
         d = gind();
         lblock(&a, &b);
+        e = gind();
         gsym(b);
         skip(TOK_WHILE);
         skip('(');
@@ -3113,9 +3116,11 @@ again:
 	c = gvtst(0, 0);
 	gsym_addr(c, d);
         gsym(a);
+        gjmp_hint_loop_range(d, e);
 
     } else if (t == TOK_SWITCH) {
         struct switch_t *sw;
+        int sw_bodies, sw_lookup;
 
         sw = tcc_mallocz(sizeof *sw);
         sw->bsym = &a;
@@ -3130,9 +3135,11 @@ again:
 
         a = 0;
         b = gjmp(0); /* jump to first case */
+        sw_bodies = ind;
         lblock(&a, NULL);
         a = gjmp(a); /* add implicit break */
         /* case lookup */
+        sw_lookup = ind;
         gsym(b);
 
         qsort(sw->p, sw->n, sizeof(void*), case_cmp);
@@ -3154,6 +3161,7 @@ again:
             gsym(d);
         /* break label */
         gsym(a);
+        gjmp_hint_switch_range(sw_bodies, sw_lookup, ind);
 
         dynarray_reset(&sw->p, &sw->n);
         cur_switch = sw->prev;

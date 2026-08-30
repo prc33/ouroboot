@@ -73,6 +73,8 @@ ST_FUNC int gjmp(int t);
 ST_FUNC void gjmp_addr(int a);
 ST_FUNC int gjmp_cond(int op, int t);
 ST_FUNC int gjmp_append(int n, int t);
+ST_FUNC void gjmp_hint_loop_range(int start, int cont);
+ST_FUNC void gjmp_hint_switch_range(int bodies, int lookup, int end);
 ST_FUNC void gen_opi(int op);
 ST_FUNC void gen_opf(int op);
 ST_FUNC void gen_cvt_ftoi(int t);

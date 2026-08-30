@@ -76,7 +76,38 @@ enum {
 #define WASM_OP_FLAG_IMM   0x0001
 #define WASM_OP_FLAG_INVERT 0x0002
 #define WASM_OP_FLAG_UNSIGNED 0x0100
-#define WASM_OP_FLAG_PARAM 0x0200
+
+typedef struct WasmBuf {
+    unsigned char *data;
+    int len;
+    int cap;
+} WasmBuf;
+
+ST_FUNC int wasm_align_up(int v, int a);
+ST_FUNC void wb_reserve(WasmBuf *b, int add);
+ST_FUNC void wb_u8(WasmBuf *b, int v);
+ST_FUNC void wb_mem(WasmBuf *b, const void *p, int n);
+ST_FUNC void wb_uleb(WasmBuf *b, unsigned v);
+ST_FUNC void wb_sleb(WasmBuf *b, int v);
+ST_FUNC void wb_sleb64(WasmBuf *b, int64_t v);
+ST_FUNC void wb_f64(WasmBuf *b, double x);
+ST_FUNC int wasm_valtype_byte(int t);
+ST_FUNC void wb_local_get(WasmBuf *b, int idx);
+ST_FUNC void wb_local_set(WasmBuf *b, int idx);
+ST_FUNC void wb_local_tee(WasmBuf *b, int idx);
+ST_FUNC void wb_global_get(WasmBuf *b, int idx);
+ST_FUNC void wb_global_set(WasmBuf *b, int idx);
+ST_FUNC void wb_i32_const(WasmBuf *b, int v);
+ST_FUNC void wb_i64_const(WasmBuf *b, int64_t v);
+ST_FUNC void wb_f64_const(WasmBuf *b, double v);
+ST_FUNC void wb_memarg(WasmBuf *b, int align_log2);
+ST_FUNC int wasm_i32_bin_opcode(int op);
+ST_FUNC int wasm_i32_cmp_opcode(int op);
+ST_FUNC int wasm_i64_bin_opcode(int op);
+ST_FUNC int wasm_i64_cmp_opcode(int op);
+ST_FUNC int wasm_f32_cmp_opcode(int op);
+ST_FUNC int wasm_f64_cmp_opcode(int op);
+ST_FUNC int wasm_f_bin_opcode(int op, int is_f32);
 
 #define WASM_MAX_CALL_ARGS 32
 typedef struct WasmOp {
@@ -86,7 +117,6 @@ typedef struct WasmOp {
     unsigned short flags;
     int r0;
     int r1;
-    int r2;
     int imm;
     int64_t i64;
     int op;
@@ -100,8 +130,24 @@ typedef struct WasmOp {
     unsigned char call_nb_args;
     unsigned char call_arg_type[WASM_MAX_CALL_ARGS];
     int call_arg_off[WASM_MAX_CALL_ARGS];
-    int call_arg_local[WASM_MAX_CALL_ARGS];
 } WasmOp;
+
+/* One while/for/do loop's exact extent, as tccgen.c itself knows it --
+ * see gjmp_hint_loop_range()'s own comment in tcc.h. Recorded once per
+ * loop construct, not once per repeat-edge, so a for-loop's rotated
+ * layout (whose two individually-jumped-to positions -- the condition
+ * test and the increment -- both belong to the SAME loop) still yields
+ * exactly one range, not two. */
+/* One switch statement's three regions, as tccgen.c laid them out --
+   see gjmp_hint_switch_range()'s own comment in tcc.h. */
+typedef struct WasmSwitchRange {
+    int bodies_pc, lookup_pc, end_pc;
+} WasmSwitchRange;
+
+typedef struct WasmLoopRange {
+    int start_pc, end_pc;
+    int cont_pc;        /* continue target -- see the hint's own comment */
+} WasmLoopRange;
 
 typedef struct WasmFuncIR {
     int sym_tok;
@@ -119,6 +165,12 @@ typedef struct WasmFuncIR {
     WasmOp *ops;
     int nb_ops;
     int cap_ops;
+    WasmLoopRange *loops;
+    int nb_loops;
+    int cap_loops;
+    WasmSwitchRange *switches;
+    int nb_switches;
+    int cap_switches;
 } WasmFuncIR;
 
 extern WasmFuncIR *tcc_wasm_funcs;
