@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <title>Ouroboot — self-hosting RISC-V64 in your browser</title>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5/css/xterm.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@6.0.0/css/xterm.css">
 <style>
 	body { background: #101813; margin: 0; padding: 16px; font-family: system-ui, sans-serif; color: #d7e5da; }
 	header { display: flex; align-items: center; gap: 12px; max-width: 1000px; margin: 0 auto 12px; }
@@ -11,6 +11,7 @@
 	h1 { font-size: 1rem; font-weight: 600; margin: 0; }
 	p { color: #91a99a; font-size: .85rem; margin: 3px 0 0; }
 	#terminal { max-width: 1000px; margin: auto; padding: 8px; background: #000; }
+	.xterm .composition-view { display: none; }
 </style>
 </head>
 <body>
@@ -19,7 +20,7 @@
   <div><h1>Ouroboot</h1><p>self-hosting RISC-V64, running in your browser</p></div>
 </header>
 <div id="terminal"></div>
-<script src="https://cdn.jsdelivr.net/npm/xterm@5/lib/xterm.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@6.0.0/lib/xterm.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

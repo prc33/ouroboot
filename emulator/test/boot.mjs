@@ -29,7 +29,7 @@ function loadInitrd(bytes, memory, ramBase) {
 
 const kernelPath = process.argv[2] || '../kernel/kernel.elf';
 const maxInstructions = Number(process.argv[3] || 200_000_000);
-const input = (process.argv[4] || '').replaceAll('\\r', '\r').replaceAll('\\n', '\n');
+const input = (process.argv[4] || '').replaceAll('\\r', '\r').replaceAll('\\n', '\n').replaceAll('\\b', '\x7f');
 const expected = (process.argv[5] || 'P5 checkpoint 2 OK').split('\\n');
 const initrdPath = process.argv[6];
 const wasmPath = new URL('../web/rv64.wasm', import.meta.url);

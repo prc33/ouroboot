@@ -27,8 +27,8 @@ test-boot: $(RV64_WASM)
 
 test-shell: $(RV64_WASM)
 	node test/boot.mjs ../kernel/kernel.elf 200000000 \
-		'\r\recho hello ash\rls\recho writable-fs-works > wtest\rls\rexit 7\r' \
-		'process: all processes exited' ../kernel/tcc-initrd.tar
+		'\r\recho hellp\bo ash\rls\recho writable-fs-works > wtest\rls\rexit 7\r' \
+		'hello ash\nprocess: all processes exited' ../kernel/tcc-initrd.tar
 
 # Exercises the browser-hosted fetch device without relying on the public
 # network: Node's data: URL support follows the same asynchronous host path.

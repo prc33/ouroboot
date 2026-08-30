@@ -661,16 +661,52 @@ void sys_close(struct regs *r) {
 	sys_ret(r, 0);
 }
 
-/* checkpoint 8: real blocking stdin read (fd 0) -- spin-yield until a
- * byte is available, same "cooperative block" idea as
- * SYS_sched_yield/SYS_wait4's own spin loops, then a single-byte read.
- * Returning fewer bytes than requested is POSIX-legal (read() has
- * never promised to fill the buffer); one raw byte at a time, no
- * echo/line-editing (no tty/line-discipline layer exists yet -- an
- * honest, documented gap, not a bug: whatever's on the other end of
- * the UART/serial console is responsible for its own local echo for
- * now). fd>=3 reads from mm/ramfs.h via this process's own fd table
- * instead. */
+/* The UART console uses a small canonical line discipline. BusyBox is built
+ * without its larger line editor, so editing must happen before bytes are
+ * returned to it: echo accepted input, consume BS/DEL, and release a line on
+ * enter. fd>=3 reads from mm/ramfs.h via the process's fd table instead. */
+#define CONSOLE_LINE_SIZE 4096
+static unsigned char console_line[CONSOLE_LINE_SIZE];
+static unsigned int console_length, console_offset;
+static int console_ready;
+
+static unsigned long console_read(unsigned char *buf, unsigned long count) {
+	while (!console_ready) {
+		while (!serial_rx_ready())
+			process_schedule();
+		unsigned char c = serial_getc();
+		if (c == '\b' || c == 0x7f) {
+			if (console_length) {
+				console_length--;
+				serial_puts("\b \b");
+			}
+			continue;
+		}
+		if (c == 4) {
+			if (!console_length)
+				return 0;
+			console_ready = 1;
+			continue;
+		}
+		if (c == '\r')
+			c = '\n';
+		if (console_length == CONSOLE_LINE_SIZE - 1 && c != '\n')
+			continue;
+		console_line[console_length++] = c;
+		serial_putc(c);
+		if (c == '\n')
+			console_ready = 1;
+	}
+	unsigned long n = count < console_length - console_offset
+		? count : console_length - console_offset;
+	paging_ensure_writable((unsigned long)buf, n);
+	for (unsigned long i = 0; i < n; i++)
+		buf[i] = console_line[console_offset++];
+	if (console_offset == console_length)
+		console_length = console_offset = console_ready = 0;
+	return n;
+}
+
 /* checkpoint 12: shared by sys_read's redirected-fd-0 and fd>=3
  * paths -- both read from the same kind of fd_entry (a dynamic file's
  * real content lives in its own struct ramfs_dynamic_file, not
@@ -719,16 +755,7 @@ void sys_read(struct regs *r) {
 			sys_ret(r, read_from_fd_entry(ov, buf, count));
 			return;
 		}
-		while (!serial_rx_ready())
-			process_schedule();
-		paging_ensure_writable((unsigned long)buf, 1); /* see mm/paging_common.c's own comment -- real bug found here first */
-		unsigned char c = serial_getc();
-			/* Minimal tty behavior for an interactive shell. */
-			if (c == '\r')
-				c = '\n';
-			serial_putc(c);
-		buf[0] = c;
-		sys_ret(r, 1);
+		sys_ret(r, console_read(buf, count));
 		return;
 	}
 	if (fd == 1 || fd == 2) {
