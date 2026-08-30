@@ -1,6 +1,4 @@
 'use strict';
-/* Main-thread glue between xterm.js and the C/Wasm emulator worker. */
-
 const term = new Terminal({
 	cursorBlink: true,
 	convertEol: true,
@@ -9,11 +7,9 @@ const term = new Terminal({
 });
 term.open(document.getElementById('terminal'));
 term.write('Fetching kernel and initrd...\r\n');
-window.term = term; /* debugging/testability hook, e.g. reading term.buffer from outside */
-
+window.term = term;
 const worker = new Worker('worker.js');
 window.emulatorWorker = worker;
-
 worker.onmessage = function (ev) {
 	const msg = ev.data;
 	if (msg.type === 'output') {
@@ -24,8 +20,6 @@ worker.onmessage = function (ev) {
 		term.write('\r\n[cpu halted]\r\n');
 	}
 };
-
-/* Keyboard input becomes bytes in the C emulator's UART RX ring. */
 term.onData((data) => {
 	for (let i = 0; i < data.length; i++)
 		worker.postMessage({ type: 'input', byte: data.charCodeAt(i) });

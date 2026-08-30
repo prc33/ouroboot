@@ -42,6 +42,7 @@ static u64 fetch_url, fetch_destination;
 static u32 fetch_url_length, fetch_capacity, fetch_length, fetch_status;
 
 static u64 tlb_tag[512], tlb_ppage[512];
+static u64 fetch_vpage = ~0ULL, fetch_delta;
 
 /* Spell unsigned 64-bit float conversions in terms of signed ones so the
  * tiny wasm32 backend needs no compiler-rt conversion helpers. */
@@ -69,6 +70,7 @@ static void flush_tlb(void)
 {
     u32 i;
     for (i = 0; i < 512; ++i) tlb_tag[i] = 0;
+    fetch_vpage = ~0ULL;
 }
 
 static int physical_read(u64 addr, u32 size, u64 *value)
@@ -528,7 +530,7 @@ u32 rv_run(u32 count, u32 time_advance)
 {
     u32 i;
     for (i = 0; i < count; ++i) {
-        u64 raw, pa, tag, off;
+        u64 raw, tag;
         u32 context, slot;
         ticks += time_advance;
         if (timecmp && ticks >= timecmp) {
@@ -538,16 +540,20 @@ u32 rv_run(u32 count, u32 time_advance)
             }
         }
         if (halted) continue;
-        context = privilege | ((csr[SSTATUS] & STATUS_SUM) ? 2 : 0);
-        slot = (u32)(pc >> 12) & 255;
-        tag = (((pc >> 12) << 2) | context) + 1;
-        pa = tlb_ppage[slot] | (pc & 4095);
-        off = pa - RAM_BASE;
-        if (tlb_tag[slot] == tag && off < RAM_SIZE - 3)
-            raw = *(u32 *)(ram + (u32)off);
-        else if (!load(pc, 4, 0, &raw)) {
-            trap(fault == 2 ? 1 : 12, fault_addr, 0);
-            continue;
+        if ((pc ^ fetch_vpage) >> 12) {
+            if (!load(pc, 4, 0, &raw)) {
+                trap(fault == 2 ? 1 : 12, fault_addr, 0);
+                continue;
+            }
+            context = privilege | ((csr[SSTATUS] & STATUS_SUM) ? 2 : 0);
+            slot = (u32)(pc >> 12) & 255;
+            tag = (((pc >> 12) << 2) | context) + 1;
+            if (tlb_tag[slot] == tag && tlb_ppage[slot] - RAM_BASE < RAM_SIZE) {
+                fetch_vpage = pc & ~4095ULL;
+                fetch_delta = tlb_ppage[slot] - fetch_vpage;
+            }
+        } else {
+            raw = *(u32 *)(ram + (u32)(pc + fetch_delta - RAM_BASE));
         }
         execute((u32)raw);
     }
