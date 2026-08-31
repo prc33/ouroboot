@@ -24,6 +24,12 @@ static unsigned long page_round_up(unsigned long x) {
 	return (x + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1UL);
 }
 
+static int segment_valid(unsigned long size, unsigned long offset,
+		unsigned long address, unsigned long filesz, unsigned long memsz) {
+	return filesz <= memsz && offset <= size && filesz <= size - offset &&
+		address + memsz >= address;
+}
+
 static int load_segment(const unsigned char *data, unsigned long p_offset,
                          unsigned long p_vaddr, unsigned long p_filesz, unsigned long p_memsz) {
 	unsigned long seg_start = page_round_down(p_vaddr);
@@ -66,18 +72,26 @@ static unsigned long elf_load32(const unsigned char *data, unsigned long size) {
 		kprintf("elf: not ET_EXEC (e_type=%u) -- PIE not supported yet\n", eh->e_type);
 		return 0;
 	}
+	if (eh->e_phentsize != sizeof(Elf32_Phdr) || eh->e_phoff > size ||
+		 eh->e_phnum > (size - eh->e_phoff) / sizeof(Elf32_Phdr))
+		return 0;
 
 	const Elf32_Phdr *ph = (const Elf32_Phdr *)(data + eh->e_phoff);
-	int loaded_any = 0;
+	int loaded_any = 0, entry_ok = 0;
 	for (int i = 0; i < eh->e_phnum; i++) {
 		if (ph[i].p_type != PT_LOAD)
 			continue;
+		if (!segment_valid(size, ph[i].p_offset, ph[i].p_vaddr,
+				ph[i].p_filesz, ph[i].p_memsz))
+			return 0;
 		if (!load_segment(data, ph[i].p_offset, ph[i].p_vaddr, ph[i].p_filesz, ph[i].p_memsz))
 			return 0;
 		loaded_any = 1;
+		if ((ph[i].p_flags & 1) && eh->e_entry >= ph[i].p_vaddr &&
+			 eh->e_entry - ph[i].p_vaddr < ph[i].p_memsz) entry_ok = 1;
 	}
-	if (!loaded_any) {
-		kprintf("elf: no PT_LOAD segments\n");
+	if (!loaded_any || !entry_ok) {
+		kprintf("elf: no loadable executable entry\n");
 		return 0;
 	}
 
@@ -100,18 +114,26 @@ static unsigned long elf_load64(const unsigned char *data, unsigned long size) {
 		kprintf("elf: not ET_EXEC (e_type=%u) -- PIE not supported yet\n", eh->e_type);
 		return 0;
 	}
+	if (eh->e_phentsize != sizeof(Elf64_Phdr) || eh->e_phoff > size ||
+		 eh->e_phnum > (size - eh->e_phoff) / sizeof(Elf64_Phdr))
+		return 0;
 
 	const Elf64_Phdr *ph = (const Elf64_Phdr *)(data + eh->e_phoff);
-	int loaded_any = 0;
+	int loaded_any = 0, entry_ok = 0;
 	for (int i = 0; i < eh->e_phnum; i++) {
 		if (ph[i].p_type != PT_LOAD)
 			continue;
+		if (!segment_valid(size, ph[i].p_offset, ph[i].p_vaddr,
+				ph[i].p_filesz, ph[i].p_memsz))
+			return 0;
 		if (!load_segment(data, ph[i].p_offset, ph[i].p_vaddr, ph[i].p_filesz, ph[i].p_memsz))
 			return 0;
 		loaded_any = 1;
+		if ((ph[i].p_flags & 1) && eh->e_entry >= ph[i].p_vaddr &&
+			 eh->e_entry - ph[i].p_vaddr < ph[i].p_memsz) entry_ok = 1;
 	}
-	if (!loaded_any) {
-		kprintf("elf: no PT_LOAD segments\n");
+	if (!loaded_any || !entry_ok) {
+		kprintf("elf: no loadable executable entry\n");
 		return 0;
 	}
 

@@ -29,6 +29,8 @@ typedef signed long long i64;
 #define STATUS_SPP (1ULL << 8)
 #define STATUS_SUM (1ULL << 18)
 #define IP_STIP (1ULL << 5)
+#define TLB_SLOT(va, access) (((u32)((va) >> 12) & 255) + (access) * 256)
+#define TLB_TAG(va) ((((va) >> 12) << 2 | privilege | ((csr[SSTATUS] & STATUS_SUM) ? 2 : 0)) + 1)
 
 static u8 ram[RAM_SIZE];
 static u64 x[32], f[32], csr[4096];
@@ -41,7 +43,7 @@ static u32 in_read, in_write, out_read, out_write;
 static u64 fetch_url, fetch_destination;
 static u32 fetch_url_length, fetch_capacity, fetch_length, fetch_status;
 
-static u64 tlb_tag[512], tlb_ppage[512];
+static u64 tlb_tag[768], tlb_ppage[768];
 static u64 fetch_vpage = ~0ULL, fetch_delta;
 /* Spell unsigned 64-bit float conversions in terms of signed ones so the
  * tiny wasm32 backend needs no compiler-rt conversion helpers. */
@@ -64,7 +66,7 @@ u64 rv_pc(void) { return pc; }
 static void flush_tlb(void)
 {
     u32 i;
-    for (i = 0; i < 512; ++i) tlb_tag[i] = 0;
+    for (i = 0; i < 768; ++i) tlb_tag[i] = 0;
     fetch_vpage = ~0ULL;
 }
 static int physical_read(u64 addr, u32 size, u64 *value)
@@ -138,15 +140,14 @@ static int physical_write(u64 addr, u32 size, u64 value)
 }
 static int translate(u64 va, u32 access, u64 *pa)
 {
-    u64 satp = csr[SATP], table, pte = 0;
+    u64 satp = csr[SATP], table, pte = 0, pte_addr = 0;
     u64 tag;
-    u32 mode = satp >> 60, level, context, slot;
+    u32 mode = satp >> 60, level, slot;
     if (mode == 0) { *pa = va; return 1; }
     if (mode != 8) { fault_addr = va; fault = 1; return 0; }
 
-    context = privilege | ((csr[SSTATUS] & STATUS_SUM) ? 2 : 0);
-    slot = ((u32)(va >> 12) & 255) + (access == 2 ? 256 : 0);
-    tag = (((va >> 12) << 2) | context) + 1;
+    slot = TLB_SLOT(va, access);
+    tag = TLB_TAG(va);
     if (tlb_tag[slot] == tag) {
         *pa = tlb_ppage[slot] | (va & 4095);
         return 1;
@@ -155,18 +156,24 @@ static int translate(u64 va, u32 access, u64 *pa)
     table = (satp & ((1ULL << 44) - 1)) << 12;
     for (level = 3; level-- != 0;) {
         u64 idx = (va >> (12 + 9 * level)) & 511;
-        if (!physical_read(table + idx * 8, 8, &pte)) { fault_addr = va; fault = 1; return 0; }
+        pte_addr = table + idx * 8;
+        if (!physical_read(pte_addr, 8, &pte)) { fault_addr = va; fault = 1; return 0; }
         if (!(pte & 1)) { fault_addr = va; fault = 1; return 0; }
         if (pte & 14) break;
         table = (pte >> 10) << 12;
     }
     if (!(pte & 14) || (access == 0 && !(pte & 8)) ||
         (access == 1 && !(pte & 2)) || (access == 2 && !(pte & 4)) ||
-        ((pte & 16) && privilege == 0 && !(csr[SSTATUS] & STATUS_SUM)) ||
+        level || ((pte & 16) && privilege == 0 &&
+                  (access == 0 || !(csr[SSTATUS] & STATUS_SUM))) ||
         (!(pte & 16) && privilege == 1)) {
         fault_addr = va;
         fault = 1;
         return 0;
+    }
+    if (!(pte & 64) || (access == 2 && !(pte & 128))) {
+        pte |= 64 | (access == 2 ? 128 : 0);
+        if (!physical_write(pte_addr, 8, pte)) return 0;
     }
     *pa = ((pte >> 10) << 12) | (va & 4095);
     tlb_tag[slot] = tag;
@@ -176,7 +183,7 @@ static int translate(u64 va, u32 access, u64 *pa)
 static int load(u64 va, u32 size, u32 access, u64 *v)
 {
     u64 pa, off, tag;
-    u32 context, slot;
+    u32 slot;
     if ((va & 4095) + size > 4096) {
         u64 byte;
         *v = 0;
@@ -186,9 +193,8 @@ static int load(u64 va, u32 size, u32 access, u64 *v)
         }
         return 1;
     }
-    context = privilege | ((csr[SSTATUS] & STATUS_SUM) ? 2 : 0);
-    slot = ((u32)(va >> 12) & 255) + (access == 2 ? 256 : 0);
-    tag = (((va >> 12) << 2) | context) + 1;
+    slot = TLB_SLOT(va, access);
+    tag = TLB_TAG(va);
     if (tlb_tag[slot] == tag) pa = tlb_ppage[slot] | (va & 4095);
     else if (!translate(va, access, &pa)) return 0;
     off = pa - RAM_BASE;
@@ -205,16 +211,15 @@ static int load(u64 va, u32 size, u32 access, u64 *v)
 static int store(u64 va, u32 size, u64 v)
 {
     u64 pa, off, tag;
-    u32 context, slot;
+    u32 slot;
     if ((va & 4095) + size > 4096) {
         for (u32 i = 0; i < size; i++) {
             if (!translate(va + i, 2, &pa) || !physical_write(pa, 1, v >> (i * 8))) return 0;
         }
         return 1;
     }
-    context = privilege | ((csr[SSTATUS] & STATUS_SUM) ? 2 : 0);
-    slot = ((u32)(va >> 12) & 255) + 256;
-    tag = (((va >> 12) << 2) | context) + 1;
+    slot = TLB_SLOT(va, 2);
+    tag = TLB_TAG(va);
     if (tlb_tag[slot] == tag) pa = tlb_ppage[slot] | (va & 4095);
     else if (!translate(va, 2, &pa)) return 0;
     off = pa - RAM_BASE;
@@ -529,7 +534,7 @@ u32 rv_run(u32 count, u32 time_advance)
     until = timer_steps; stopped = halted;
     for (i = 0; i < count; ++i) {
         u64 raw, tag;
-        u32 context, slot;
+        u32 slot;
         now += time_advance;
         if (until && !--until) {
             csr[SIP] |= IP_STIP;
@@ -543,9 +548,8 @@ u32 rv_run(u32 count, u32 time_advance)
         if ((here ^ fetch_vpage) >> 12) {
             if (!load(here, 4, 0, &raw)) { pc = here;
                 trap(fault == 2 ? 1 : 12, fault_addr, 0); here = pc; continue; }
-            context = privilege | ((csr[SSTATUS] & STATUS_SUM) ? 2 : 0);
-            slot = (u32)(here >> 12) & 255;
-            tag = (((here >> 12) << 2) | context) + 1;
+            slot = TLB_SLOT(here, 0);
+            tag = TLB_TAG(here);
             if (tlb_tag[slot] == tag && tlb_ppage[slot] - RAM_BASE < RAM_SIZE) {
                 fetch_vpage = here & ~4095ULL;
                 fetch_delta = tlb_ppage[slot] - fetch_vpage;

@@ -1,0 +1,35 @@
+name: Bootstrap checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install emulators
+        run: sudo apt-get update && sudo apt-get install -y qemu-user-static qemu-system-misc
+      - name: Build guest libraries and tools
+        run: |
+          make -C compiler TARGET=riscv64
+          ./demo/build-musl-riscv64.sh
+          ./demo/build-busybox-riscv64.sh
+          make -C compiler clean
+          make -C compiler TARGET=i386
+          ./demo/build-musl-i386.sh
+      - name: Check both native compiler targets
+        run: |
+          make -C compiler clean
+          make -C compiler TARGET=riscv64 selfcheck
+          make -C compiler clean
+          make -C compiler TARGET=i386 selfcheck
+      - name: Check kernel, Wasm emulator, and self-hosting
+        run: |
+          make -C compiler clean
+          make -C compiler TARGET=riscv64
+          make -C kernel ARCH=riscv64 test-wasm
+          make -C kernel ARCH=riscv64 test-selfhost
+          make -C emulator test

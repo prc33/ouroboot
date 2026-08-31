@@ -8,7 +8,7 @@ const term = new Terminal({
 term.open(document.getElementById('terminal'));
 term.write('Fetching kernel and initrd...\r\n');
 window.term = term;
-const worker = new Worker('worker.js');
+const worker = new Worker('worker.js', { type: 'module' });
 window.emulatorWorker = worker;
 worker.onmessage = function (ev) {
 	const msg = ev.data;

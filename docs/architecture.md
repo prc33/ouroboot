@@ -32,6 +32,11 @@ contains BusyBox, TCC, compiler source, musl headers and libraries, `hello.c`,
 and `/selfhost.sh`. Running that script inside the guest builds TCC, then uses
 the resulting compiler to build and run the example program.
 
+User mode supplies the Linux ABI expected by musl and BusyBox; it is not a
+security boundary. Syscalls trust pointers supplied by guest programs, and all
+programs in an initrd belong to one trust domain. Paging and copy-on-write are
+process mechanisms here, not protection against malicious guest software.
+
 ## Emulator and browser frontend
 
 `emulator/rv64.c` is one C RV64IMA emulator with Sv39, supervisor mode, Sstc,
