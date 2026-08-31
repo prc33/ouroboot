@@ -36,4 +36,5 @@ jobs:
           make -C compiler TARGET=riscv64
           make -C kernel ARCH=riscv64 test-wasm
           make -C kernel ARCH=riscv64 test-selfhost
+          make -C kernel ARCH=riscv64 tcc-initrd
           make -C emulator test
