@@ -80,6 +80,7 @@ void ramfs_dynamic_truncate(struct ramfs_dynamic_file *f);
  * (see arch/risc/riscv64_syscall.c's
  * own comment on tcc_write_elf_file's unlink-before-create pattern). */
 void ramfs_dynamic_unlink(const char *path);
+int ramfs_dynamic_rename(const char *old_path, const char *new_path);
 
 /* Writes `len` bytes from `src` into `f` starting at byte `offset`,
  * growing (and zero-filling any real gap left by a write past the

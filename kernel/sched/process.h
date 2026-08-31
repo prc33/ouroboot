@@ -35,6 +35,7 @@ enum process_state {
 
 struct ramfs_dynamic_file; /* mm/ramfs.h -- forward-declared rather than
                              * #included, process.h doesn't otherwise need it */
+struct pipe;
 
 /* checkpoint 8: per-process file descriptors, fd numbers 3.. (0/1/2
  * are the UART console, handled specially in arch/risc/riscv64_syscall.c's
@@ -55,6 +56,8 @@ struct fd_entry {
 	unsigned long pos;
 	int is_dir; /* for directories, pos is the next readdir entry */
 	struct ramfs_dynamic_file *dynfile; /* checkpoint 12 -- see this struct's own comment above */
+	struct pipe *pipe;
+	int pipe_write;
 	char path[128]; /* normalized directory path when is_dir is set */
 };
 
@@ -262,6 +265,9 @@ void process_fd_set(int index, const struct fd_entry *src); /* checkpoint 12: du
  * field every caller's own semantics genuinely differ on, so it stays
  * each caller's own explicit assignment either side of this call. */
 void fd_entry_copy(struct fd_entry *dst, const struct fd_entry *src);
+int process_pipe_create(int fd[2]);
+long process_pipe_read(struct pipe *pipe, unsigned char *buf, unsigned long count);
+long process_pipe_write(struct pipe *pipe, const unsigned char *buf, unsigned long count);
 
 /* checkpoint 12: real dup2()/dup3() onto fd 0/1/2 -- see struct
  * process's own stdio_override comment for why these exist. */

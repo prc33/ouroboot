@@ -211,6 +211,60 @@ void process_schedule(void) {
  * process_halt() the first time its own top-level process exits. */
 static void (*drain_hook)(void) = 0;
 
+#define MAX_PIPES 4
+#define PIPE_SIZE 4096
+struct pipe {
+	unsigned int read, write, readers, writers;
+	unsigned char data[PIPE_SIZE];
+};
+static struct pipe pipes[MAX_PIPES];
+
+static void fd_entry_release(struct fd_entry *fd) {
+	if (fd->used && fd->pipe) {
+		unsigned int *refs = fd->pipe_write ? &fd->pipe->writers : &fd->pipe->readers;
+		if (*refs) (*refs)--;
+	}
+	fd->used = 0;
+	fd->pipe = 0;
+}
+
+int process_pipe_create(int out[2]) {
+	struct pipe *p = 0;
+	for (int i = 0; i < MAX_PIPES; i++)
+		if (!pipes[i].readers && !pipes[i].writers) { p = &pipes[i]; break; }
+	if (!p) return -1;
+	int rd = process_fd_alloc(), wr = process_fd_alloc();
+	if (rd < 0 || wr < 0) {
+		if (rd >= 0) process_fd_close(rd);
+		return -1;
+	}
+	p->read = p->write = 0; p->readers = p->writers = 1;
+	struct fd_entry *r = process_fd_get(rd), *w = process_fd_get(wr);
+	r->pipe = w->pipe = p; r->pipe_write = 0; w->pipe_write = 1;
+	out[0] = rd + 3; out[1] = wr + 3;
+	return 0;
+}
+
+long process_pipe_read(struct pipe *p, unsigned char *buf, unsigned long count) {
+	unsigned long n = 0;
+	while (n < count) {
+		while (p->read == p->write && p->writers) process_schedule();
+		if (p->read == p->write) break;
+		buf[n++] = p->data[p->read++ % PIPE_SIZE];
+	}
+	return (long)n;
+}
+
+long process_pipe_write(struct pipe *p, const unsigned char *buf, unsigned long count) {
+	unsigned long n = 0;
+	if (!count) return 0;
+	while (n < count && p->readers) {
+		while (p->write - p->read == PIPE_SIZE && p->readers) process_schedule();
+		if (p->readers) p->data[p->write++ % PIPE_SIZE] = buf[n++];
+	}
+	return n ? (long)n : -32; /* EPIPE */
+}
+
 void process_set_drain_hook(void (*hook)(void)) {
 	drain_hook = hook;
 }
@@ -231,6 +285,8 @@ void process_halt(void) {
 }
 
 void process_exit_current(int exit_code) {
+	for (int i = 0; i < MAX_FDS; i++) fd_entry_release(&current_process->fds[i]);
+	for (int i = 0; i < 3; i++) fd_entry_release(&current_process->stdio_override[i]);
 	current_process->state = PROC_ZOMBIE;
 	current_process->exit_code = exit_code;
 
@@ -436,6 +492,12 @@ void fd_entry_copy(struct fd_entry *dst, const struct fd_entry *src) {
 	dst->pos = src->pos;
 	dst->is_dir = src->is_dir;
 	dst->dynfile = src->dynfile;
+	dst->pipe = src->pipe;
+	dst->pipe_write = src->pipe_write;
+	if (src->used && src->pipe) {
+		unsigned int *refs = src->pipe_write ? &src->pipe->writers : &src->pipe->readers;
+		(*refs)++;
+	}
 	for (int i = 0; i < 128; i++) dst->path[i] = src->path[i];
 }
 
@@ -456,7 +518,7 @@ struct fd_entry *process_fd_get(int index) {
 
 void process_fd_close(int index) {
 	if (index >= 0 && index < MAX_FDS)
-		current_process->fds[index].used = 0;
+		fd_entry_release(&current_process->fds[index]);
 }
 
 /* checkpoint 12: writes into a *specific* fd slot by index -- unlike
@@ -466,6 +528,7 @@ void process_fd_close(int index) {
 void process_fd_set(int index, const struct fd_entry *src) {
 	if (index < 0 || index >= MAX_FDS)
 		return;
+	fd_entry_release(&current_process->fds[index]);
 	fd_entry_copy(&current_process->fds[index], src);
 	current_process->fds[index].used = 1;
 }
@@ -497,13 +560,14 @@ struct fd_entry *process_stdio_get(int fd) {
 void process_stdio_set(int fd, const struct fd_entry *src) {
 	if (!current_process || fd < 0 || fd > 2)
 		return;
+	fd_entry_release(&current_process->stdio_override[fd]);
 	fd_entry_copy(&current_process->stdio_override[fd], src);
 	current_process->stdio_override[fd].used = 1;
 }
 
 void process_stdio_clear(int fd) {
 	if (current_process && fd >= 0 && fd <= 2)
-		current_process->stdio_override[fd].used = 0;
+		fd_entry_release(&current_process->stdio_override[fd]);
 }
 
 /* checkpoint 8: real execve() -- see process.h's own comment for the

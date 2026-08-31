@@ -28,9 +28,9 @@ test-boot: web/rv64.wasm
 		../kernel/tcc-initrd.tar
 
 test-shell: web/rv64.wasm
-	node test/boot.mjs ../kernel/kernel.elf 200000000 \
-		'\r\recho hellp\bo ash\rls\recho writable-fs-works > wtest\rls\rexit 7\r' \
-		'hello ash\nprocess: all processes exited' ../kernel/tcc-initrd.tar
+	node test/boot.mjs ../kernel/kernel.elf 400000000 \
+		'\r\recho hellp\bo ash\rfind . -name "*.c" | wc -l\rtouch touched\rsleep 1\rtest -f touched && echo sleep-touch-ok\rls\recho writable-fs-works > wtest\rls\rexit 7\r' \
+		'hello ash\n28\n# touch touched\nelf: loaded, entry=0x100b0\n# sleep 1\nelf: loaded, entry=0x100b0\n# test -f touched && echo sleep-touch-ok\nsleep-touch-ok\n# ls\nprocess: all processes exited' ../kernel/tcc-initrd.tar
 
 # Exercises the browser-hosted fetch device without relying on the public
 # network: Node's data: URL support follows the same asynchronous host path.

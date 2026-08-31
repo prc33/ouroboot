@@ -78,12 +78,14 @@ static unsigned long take_mmap_addr(unsigned long length) {
  * fragmentation/OOM, not a bug) as a *negative errno*, not a plain
  * -1, so callers can just sys_ret() it straight through. */
 static long write_to_dynfile(struct fd_entry *entry, const char *buf, unsigned long count) {
+	if (entry->pipe)
+		return entry->pipe_write ? process_pipe_write(entry->pipe, (const unsigned char *)buf, count) : -EBADF;
 	if (!entry->dynfile)
 		return -EBADF;
 	if (ramfs_dynamic_write(entry->dynfile, entry->pos, (const unsigned char *)buf, count) < 0)
 		return -ENOMEM;
 	entry->pos += count;
-	return 0;
+	return count;
 }
 
 void sys_write(struct regs *r) {
@@ -97,7 +99,7 @@ void sys_write(struct regs *r) {
 			 * a real writable file onto this fd (see sys_dup3's own
 			 * comment); write through it exactly like any fd>=3 write. */
 			long ret = write_to_dynfile(ov, (const char *)sys_arg(r, 1), count);
-			sys_ret(r, ret < 0 ? (unsigned long)ret : count);
+			sys_ret(r, ret);
 			return;
 		}
 		if (fd == 0) {
@@ -117,7 +119,7 @@ void sys_write(struct regs *r) {
 		return;
 	}
 	long ret = write_to_dynfile(entry, (const char *)sys_arg(r, 1), count);
-	sys_ret(r, ret < 0 ? (unsigned long)ret : count);
+	sys_ret(r, ret);
 }
 
 /* struct iovec { void *iov_base; size_t iov_len; } -- one native word
@@ -146,10 +148,12 @@ void sys_writev(struct regs *r) {
 				sys_ret(r, (unsigned long)ret);
 				return;
 			}
+			total += ret;
+			if ((unsigned long)ret < len) break;
 		} else {
 			syscall_write_raw(fd, base, len);
+			total += len;
 		}
-		total += len;
 	}
 	sys_ret(r, total);
 }
@@ -200,6 +204,15 @@ void sys_exit_group(struct regs *r) {
 
 void sys_sched_yield(struct regs *r) {
 	process_schedule();
+	sys_ret(r, 0);
+}
+
+void sys_nanosleep(struct regs *r) {
+	const unsigned long *req = (const unsigned long *)sys_arg(r, 0);
+	if (!req || req[1] >= 1000000000UL) { sys_ret(r, (unsigned long)-EINVAL); return; }
+	unsigned long long delay = req[0] * ARCH_CLOCK_HZ + req[1] / (1000000000ULL / ARCH_CLOCK_HZ);
+	unsigned long long start = arch_clock_ticks();
+	while (arch_clock_ticks() - start < delay) process_schedule();
 	sys_ret(r, 0);
 }
 
@@ -714,6 +727,11 @@ static unsigned long console_read(unsigned char *buf, unsigned long count) {
  * file's lives in entry->data/size directly). Returns the number of
  * bytes actually copied. */
 static unsigned long read_from_fd_entry(struct fd_entry *entry, unsigned char *buf, unsigned long count) {
+	if (entry->pipe) {
+		if (entry->pipe_write) return (unsigned long)-EBADF;
+		paging_ensure_writable((unsigned long)buf, count);
+		return (unsigned long)process_pipe_read(entry->pipe, buf, count);
+	}
 	const unsigned char *src = entry->dynfile ? entry->dynfile->data : entry->data;
 	unsigned long src_size = entry->dynfile ? entry->dynfile->size : entry->size;
 	/* Seeking past EOF is ordinary, POSIX-legal behaviour (sys_lseek
@@ -735,6 +753,17 @@ static unsigned long read_from_fd_entry(struct fd_entry *entry, unsigned char *b
 		buf[i] = src[entry->pos + i];
 	entry->pos += n;
 	return n;
+}
+
+void sys_pipe2(struct regs *r) {
+	int *user_fds = (int *)sys_arg(r, 0), fds[2];
+	if (sys_arg(r, 1) || process_pipe_create(fds) < 0) {
+		sys_ret(r, (unsigned long)-EINVAL);
+		return;
+	}
+	paging_ensure_writable((unsigned long)user_fds, sizeof(fds));
+	user_fds[0] = fds[0]; user_fds[1] = fds[1];
+	sys_ret(r, 0);
 }
 
 void sys_read(struct regs *r) {
@@ -798,6 +827,13 @@ void sys_mkdirat(struct regs *r) {
 
 void sys_metadata_noop(struct regs *r) { sys_ret(r, 0); }
 
+void sys_utimensat(struct regs *r) {
+	char path[PATH_MAX_LOCAL];
+	resolve_user_path(path, (const char *)sys_arg(r, 1));
+	if (ramfs_is_dir(path) || ramfs_dynamic_lookup(path)) sys_ret(r, 0);
+	else sys_ret(r, ramfs_dynamic_open_or_create(path) ? 0 : (unsigned long)-ENOMEM);
+}
+
 void sys_umask(struct regs *r) {
 	static unsigned int mask = 022;
 	unsigned int old = mask;
@@ -859,6 +895,14 @@ static void unlink_user_path(struct regs *r, const char *user_path) {
 
 void sys_unlinkat(struct regs *r) {
 	unlink_user_path(r, (const char *)sys_arg(r, 1));
+}
+
+void sys_renameat2(struct regs *r) {
+	char old_path[PATH_MAX_LOCAL], new_path[PATH_MAX_LOCAL];
+	if (sys_arg(r, 4)) { sys_ret(r, (unsigned long)-EINVAL); return; }
+	resolve_user_path(old_path, (const char *)sys_arg(r, 1));
+	resolve_user_path(new_path, (const char *)sys_arg(r, 3));
+	sys_ret(r, ramfs_dynamic_rename(old_path, new_path) ? (unsigned long)-ENOENT : 0);
 }
 
 /* i386 only (arch/i386/syscall.c's dispatch) -- real Linux i386 keeps
@@ -966,7 +1010,8 @@ void sys_dup2(struct regs *r) {
 	unsigned long oldfd = sys_arg(r, 0);
 	unsigned long newfd = sys_arg(r, 1);
 	if (oldfd == newfd) {
-		dup_into(r, oldfd, oldfd); /* validates oldfd, then "copies" it onto itself -- a correct no-op */
+		sys_ret(r, oldfd <= 2 || process_fd_get((int)oldfd - 3)
+			? oldfd : (unsigned long)-EBADF);
 		return;
 	}
 	dup_into(r, oldfd, newfd);

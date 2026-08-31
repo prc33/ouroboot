@@ -165,6 +165,24 @@ void ramfs_dynamic_unlink(const char *path) {
 	f->capacity = 0;
 }
 
+int ramfs_dynamic_rename(const char *old_path, const char *new_path) {
+	struct ramfs_dynamic_file *f = ramfs_dynamic_lookup(old_path);
+	if (!f) return -1;
+	const char *norm = normalize_path(new_path);
+	int n = 0;
+	while (norm[n] && n < 127) n++;
+	if (norm[n]) return -1;
+	ramfs_dynamic_unlink(new_path);
+	unsigned int index = (unsigned int)(f - dynamic_files);
+	unsigned short *link = &dynamic_hash[name_hash(f->name)];
+	while (*link && *link - 1 != index) link = &dynamic_next[*link - 1];
+	if (*link) *link = dynamic_next[index];
+	name_copy(f->name, norm, sizeof(f->name));
+	hash_insert(index);
+	dir_cache_valid = 0;
+	return 0;
+}
+
 /* Double capacity; return -1 when no contiguous run is available. */
 static int ramfs_dynamic_grow(struct ramfs_dynamic_file *f, unsigned long needed) {
 	if (needed <= f->capacity)

@@ -172,6 +172,7 @@ void sys_writev(struct regs *r);
 void sys_exit(struct regs *r);
 void sys_exit_group(struct regs *r);
 void sys_sched_yield(struct regs *r);
+void sys_nanosleep(struct regs *r);
 void sys_clone(struct regs *r);
 void sys_fork(struct regs *r); /* i386 only -- see syscall_posix.c's own comment */
 void sys_wait4(struct regs *r);
@@ -195,11 +196,14 @@ void sys_open(struct regs *r); /* i386 only -- see syscall_posix.c's own comment
 void sys_close(struct regs *r);
 void sys_read(struct regs *r);
 void sys_readv(struct regs *r);
+void sys_pipe2(struct regs *r);
 void sys_mkdirat(struct regs *r);
 void sys_metadata_noop(struct regs *r);
+void sys_utimensat(struct regs *r);
 void sys_umask(struct regs *r);
 void sys_lseek(struct regs *r);
 void sys_unlinkat(struct regs *r);
+void sys_renameat2(struct regs *r);
 void sys_unlink(struct regs *r); /* i386 only -- see syscall_posix.c's own comment */
 void sys_faccessat(struct regs *r);
 void sys_access(struct regs *r); /* i386 only -- see syscall_posix.c's own comment */

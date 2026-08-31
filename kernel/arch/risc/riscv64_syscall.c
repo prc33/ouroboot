@@ -44,6 +44,7 @@
 
 #define SYS_ioctl             29
 #define SYS_sched_yield      124
+#define SYS_nanosleep        101
 #define SYS_write              64
 #define SYS_writev              66
 #define SYS_exit                  93
@@ -61,6 +62,7 @@
 #define SYS_close                                            57
 #define SYS_read                                                63
 #define SYS_readv                                               65
+#define SYS_pipe2                                               59
 #define SYS_execve                                                221
 #define SYS_getcwd                                                    17
 #define SYS_chdir                                                        49
@@ -80,6 +82,7 @@
 #define SYS_fchmodat                                                                                       53
 #define SYS_fchownat                                                                                         54
 #define SYS_utimensat                                                                                              88
+#define SYS_renameat2                                                                                             276
 #define SYS_umask                                                                                                              166
 #define SYS_dup3                                                                                           24
 #define SYS_faccessat                                                                                          48
@@ -201,6 +204,7 @@ static void syscall_dispatch(struct regs *r) {
 	case SYS_munmap:                 sys_munmap(r); return;
 	case SYS_ioctl:                    sys_ioctl(r); return;
 	case SYS_sched_yield:                 sys_sched_yield(r); return;
+	case SYS_nanosleep:                    sys_nanosleep(r); return;
 	case SYS_set_tid_address:            sys_set_tid_address(r); return;
 	case SYS_clone:                         sys_clone(r); return;
 	case SYS_wait4:                            sys_wait4(r); return;
@@ -210,6 +214,7 @@ static void syscall_dispatch(struct regs *r) {
 	case SYS_close:                                        sys_close(r); return;
 	case SYS_read:                                            sys_read(r); return;
 	case SYS_readv:                                           sys_readv(r); return;
+	case SYS_pipe2:                                           sys_pipe2(r); return;
 	case SYS_execve:                                              sys_execve(r); return;
 	case SYS_getcwd:                                                 sys_getcwd(r); return;
 	case SYS_chdir:                                                     sys_chdir(r); return;
@@ -228,7 +233,8 @@ static void syscall_dispatch(struct regs *r) {
 	case SYS_mkdirat:                                                                                              sys_mkdirat(r); return;
 	case SYS_fchmodat:                                                                                              sys_metadata_noop(r); return;
 	case SYS_fchownat:                                                                                              sys_metadata_noop(r); return;
-	case SYS_utimensat:                                                                                             sys_metadata_noop(r); return;
+	case SYS_utimensat:                                                                                             sys_utimensat(r); return;
+	case SYS_renameat2:                                                                                             sys_renameat2(r); return;
 	case SYS_umask:                                                                                                 sys_umask(r); return;
 	case SYS_dup3:                                                                                                  sys_dup3(r); return;
 	case SYS_faccessat:                                                                                               sys_faccessat(r); return;
@@ -242,8 +248,8 @@ static void syscall_dispatch(struct regs *r) {
 void syscall_init(void) {
 	syscall_set_handler(syscall_dispatch);
 	kprintf("syscall: dispatch installed (write, writev, exit, exit_group, "
-		"brk, mmap, mremap, munmap, ioctl, sched_yield, set_tid_address, "
-		"clone, wait4, rt_sigprocmask, gettid, openat, close, read, execve, "
+		"brk, mmap, mremap, munmap, ioctl, sched_yield, nanosleep, set_tid_address, "
+		"clone, wait4, rt_sigprocmask, gettid, openat, close, read, pipe2, execve, "
 		"getcwd, chdir, newfstatat, rt_sigaction, getppid, geteuid, "
 		"getpid, fcntl, getdents64, lseek, unlinkat, mkdirat, metadata, umask, "
 		"dup3, faccessat, ouro_fetch)\n");

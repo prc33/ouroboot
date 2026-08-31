@@ -57,6 +57,7 @@
 #define SYS__llseek                                                           140 /* real bug, found running real self-hosted TCC for the first time -- see sys_llseek's own comment: musl-i386's own lseek() always uses this instead of plain SYS_lseek above */
 #define SYS_writev                                                              146
 #define SYS_sched_yield                                                          158
+#define SYS_nanosleep                                                             162
 #define SYS_mremap                                                                  163
 #define SYS_getcwd                                                                     183
 #define SYS_mmap2                                                                         192
@@ -77,6 +78,8 @@
 #define SYS_newfstatat                                                                                               300 /* fstatat64 */
 #define SYS_faccessat                                                                                                        307
 #define SYS_dup3                                                                                                                330
+#define SYS_pipe2                                                                                                               331
+#define SYS_renameat2                                                                                                           353
 /* Not dispatched to a handler at all -- see the default case's own
  * comment on why this one specific unimplemented number is silenced
  * rather than a real gap. */
@@ -351,6 +354,7 @@ static void syscall_dispatch(struct regs *r) {
 	case SYS_set_thread_area:               sys_set_thread_area(r); return;
 	case SYS_set_tid_address:                  sys_set_tid_address(r); return;
 	case SYS_sched_yield:                         sys_sched_yield(r); return;
+	case SYS_nanosleep:                            sys_nanosleep(r); return;
 	case SYS_fork:                                   sys_fork(r); return;
 	case SYS_clone:                                     sys_clone(r); return;
 	case SYS_wait4:                                        sys_wait4(r); return;
@@ -381,6 +385,8 @@ static void syscall_dispatch(struct regs *r) {
 	case SYS_fcntl:                                                                                                         sys_fcntl(r); return;
 	case SYS_dup2:                                                                                                             sys_dup2(r); return;
 	case SYS_dup3:                                                                                                                sys_dup3(r); return;
+	case SYS_pipe2:                                                                                                               sys_pipe2(r); return;
+	case SYS_renameat2:                                                                                                           sys_renameat2(r); return;
 	case SYS_access:                                                                                                                 sys_access(r); return;
 	case SYS_faccessat:                                                                                                                 sys_faccessat(r); return;
 	/* Real bug, found running real busybox ash for the first time:
@@ -410,7 +416,7 @@ static void syscall_dispatch(struct regs *r) {
 
 void syscall_init(void) {
 	syscall_set_handler(syscall_dispatch);
-	kprintf("syscall: dispatch installed (%d syscalls: write, fork, open, "
+	kprintf("syscall: dispatch installed (write, fork, open, "
 		"execve, stat/fstat/newfstatat, dup2/dup3, access/faccessat, "
-		"clone, wait4, getdents64, and more -- see this file's own dispatch)\n", 40);
+		"clone, wait4, pipe2, nanosleep, getdents64, and more -- see this file's own dispatch)\n");
 }

@@ -25,6 +25,12 @@ void pic_send_eoi(unsigned char irq);
 void pic_set_mask(unsigned char irq);
 void pic_clear_mask(unsigned char irq);
 void pit_init(unsigned int hz);
+static inline unsigned long long arch_clock_ticks(void) {
+	unsigned int lo, hi;
+	__asm__ volatile ("rdtsc" : "=a"(lo), "=d"(hi));
+	return (unsigned long long)hi << 32 | lo;
+}
+#define ARCH_CLOCK_HZ 1000000000ULL
 int serial_rx_ready(void);   /* arch/i386/serial.c -- checkpoint 18, blocking stdin reads (shared sys_read, syscall_posix.c) */
 unsigned char serial_getc(void);
 #else
@@ -49,6 +55,8 @@ static inline void riscv_sfence_vma(void)
 RISCV_CSR_READ(riscv_read_sstatus, 0x100)
 RISCV_CSR_READ(riscv_read_sie, 0x104)
 RISCV_CSR_READ(riscv_read_time, 0xc01)
+#define arch_clock_ticks riscv_read_time
+#define ARCH_CLOCK_HZ 10000000ULL
 RISCV_CSR_WRITE(riscv_write_sstatus, 0x100)
 RISCV_CSR_WRITE(riscv_write_sie, 0x104)
 RISCV_CSR_WRITE(riscv_write_stimecmp, 0x14d)
