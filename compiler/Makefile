@@ -51,7 +51,7 @@ DEPFILES = $(COMPILER_OBJS:.o=.d)
 # Compile each subsystem separately.  Target-specific directories prevent a
 # target switch from reusing objects built with another ABI's definitions.
 
-.PHONY: all clean selfcheck stage1 tcc wasm32-tcc libtcc1.a
+.PHONY: all clean selfcheck c99-conformance stage1 tcc wasm32-tcc libtcc1.a
 
 ifeq ($(TARGET),wasm32)
 all: wasm32-tcc
@@ -107,6 +107,7 @@ MUSL     ?= ../musl-$(TARGET)
 MUSLINC  = -I$(MUSL)/obj/include -I$(MUSL)/include -I$(MUSL)/arch/$(TARGET) -I$(MUSL)/arch/generic
 MUSLLIBC = $(MUSL)/lib/libc.a
 QEMU_USER = qemu-$(TARGET)-static
+CTESTSUITE ?= /tmp/c-testsuite
 
 # Regression coverage for the riscv64-gen.c gfunc_epilog bug (fixed --
 # see docs/riscv-port-findings.md's closure section): it corrupted the
@@ -135,6 +136,9 @@ stage1: tcc libtcc1.a $(STAGE1_OBJS)
 		$(MUSL)/lib/crt1.o $(MUSL)/lib/crti.o \
 		$(STAGE1_OBJS) \
 		$(MUSLLIBC) libtcc1.a $(MUSL)/lib/crtn.o
+
+c99-conformance: tcc
+	tests/c99-conformance.sh $(CTESTSUITE) ./tcc
 
 selfcheck: stage1
 	@echo "--- stage0 (host ELF) vs stage1 ($(TARGET) ELF) ---"

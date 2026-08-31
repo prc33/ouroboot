@@ -45,6 +45,12 @@ The script rebuilds TCC inside Ouroboot, uses it to compile `hello.c`, and runs
 the result. The browser emulator is an interpreter, so this is deliberately
 slower than native execution.
 
+For a freestanding C99 conformance smoke test, clone
+[`c-testsuite`](https://github.com/c-testsuite/c-testsuite) and run
+`make -C compiler TARGET=i386 c99-conformance CTESTSUITE=/path/to/c-testsuite`.
+This runs portable C99 cases that do not require a hosted libc; libc cases are
+reported separately because Ouroboot supplies musl in the guest.
+
 ## Project map
 
 - `compiler/` — reduced TinyCC with i386, RISC-V64, and wasm32 targets.

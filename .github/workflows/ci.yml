@@ -12,6 +12,8 @@ jobs:
       - uses: actions/checkout@v5
       - name: Install emulators
         run: sudo apt-get update && sudo apt-get install -y qemu-user-static qemu-system-misc
+      - name: Fetch C99 conformance corpus
+        run: git clone --depth 1 https://github.com/c-testsuite/c-testsuite.git c-testsuite
       - name: Build guest libraries and tools
         run: |
           make -C compiler TARGET=riscv64
@@ -24,8 +26,10 @@ jobs:
         run: |
           make -C compiler clean
           make -C compiler TARGET=riscv64 selfcheck
+          make -C compiler TARGET=riscv64 c99-conformance CTESTSUITE=$GITHUB_WORKSPACE/c-testsuite
           make -C compiler clean
           make -C compiler TARGET=i386 selfcheck
+          make -C compiler TARGET=i386 c99-conformance CTESTSUITE=$GITHUB_WORKSPACE/c-testsuite
       - name: Check kernel, Wasm emulator, and self-hosting
         run: |
           make -C compiler clean
