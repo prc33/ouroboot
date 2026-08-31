@@ -18,6 +18,11 @@ The point is the complete path from C source to an interactive system that can
 rebuild itself—not a production operating system or toolchain. RISC-V64 is the
 primary system; i386 remains a second implementation and self-hosting check.
 
+## Development provenance
+
+The project was developed entirely through [Codex](https://openai.com/codex/)
+and [Claude Code](https://www.anthropic.com/claude-code), with no manual commits.
+
 ## Quick start
 
 You need a POSIX shell, host C compiler, Make, Git, Bash, Python 3, and a
